@@ -77,7 +77,9 @@ def send_request(url: str, **kwargs: Any) -> dict:
                 print(e)
                 exit()
             else:
-                print(f"Error: {e}. Retrying in 20-30 seconds...")
+                print(f"VLM Server Error Type: {type(e).__name__}")
+                print(f"VLM Server Error Detail: {str(e)}")
+                print(f"Retrying in 20-30 seconds...")
                 time.sleep(20 + random.random() * 10)
 
     return response

@@ -53,7 +53,7 @@ llm:
   llm_answer_path: llm/answers/llm_answer_hm3d.txt
   llm_response_path: llm/answers/llm_response_list.txt
   llm_client:
-    llm_client: ollama # deepseek, ollama or none
+    llm_client: deepseek # deepseek, ollama or none
     ollama: "qwen3:8b"
 
 record_file_name: "record.txt"

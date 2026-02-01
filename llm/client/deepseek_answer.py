@@ -1,21 +1,8 @@
-from llm.utils.get_sys_prompt import get_similar_answer_prompt
-from openai import OpenAI
-client = OpenAI(api_key="write your api key here", base_url="https://api.deepseek.com")
-
 def deepseek_respond(prompt):
-    system_prompts = get_similar_answer_prompt()
-    msg = {
-        "role": "user",
-        "content": prompt
-    }
-    history = system_prompts + [msg]
-
+    # 彻底删掉 try...except，让它报错就直接崩，这样我们就知道原貌了
+    client = OpenAI(api_key='...', base_url='...')
     response = client.chat.completions.create(
         model="deepseek-chat",
-        messages=history,
-        stream=False
+        messages=[{"role": "user", "content": prompt}]
     )
     return response.choices[0].message.content
-
-if __name__ == '__main__':
-    deepseek_respond('dining table')
