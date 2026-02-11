@@ -54,7 +54,7 @@ llm:
   llm_response_path: llm/answers/llm_response_list.txt
   llm_client:
     llm_client: deepseek # deepseek, ollama, or none
-    ollama: 'qwen3:8b'
+    #ollama: 'qwen3:8b'
 
 record_file_name: "record.txt"
 continue_file_name: "continue.txt"

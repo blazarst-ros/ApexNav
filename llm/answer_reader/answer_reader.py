@@ -1,5 +1,8 @@
 from llm.answer import get_answer
 import os
+"""业务解包层,
+从结构化列表中解包出ApexNav 执行层可直接使用的 3 个业务参数，是连接 LLM 与导航核心逻辑的关键
+"""
 def read_answer(llm_answer_path, llm_response_path, label, llm_client):
     label_existing = False
     llm_answer = None
@@ -39,7 +42,7 @@ def read_answer(llm_answer_path, llm_response_path, label, llm_client):
     # 目标结构: [action1, action2, ..., fusion_score(float), room(str)]
     
     room = "unknown"
-    fusion_score = 0.5 # 默认阈值
+    fusion_score = 0.4 # 默认阈值
 
     # 解包 Room (期待最后一个是 str)
     if len(llm_answer) > 0:

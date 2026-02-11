@@ -6,6 +6,8 @@
  * This file implements the ExplorationManager class that handles various
  * exploration strategies including distance-based, semantic-based, hybrid,
  * and TSP-optimized frontier selection for autonomous robot exploration.
+ * 核心目标是根据环境感知信息（语义地图、前沿点、目标物体）选择最优探索目标，并规划可行路径 / 轨迹
+ * (！！算法更改的核心区域！！)
  */
 
 #include <exploration_manager/exploration_manager.h>
@@ -24,27 +26,30 @@ ExplorationManager::~ExplorationManager() = default;
 void ExplorationManager::initialize(ros::NodeHandle& nh)
 {
   // Initialize SDF map and get object map reference
-  sdf_map_.reset(new SDFMap2D);
+  sdf_map_.reset(new SDFMap2D);  // reset是智能指针的初始化方式
   sdf_map_->initMap(nh);
-  object_map2d_ = sdf_map_->object_map2d_;
+  object_map2d_ = sdf_map_->object_map2d_;  // 2D 物体语义地图,后续语义的基础
 
   // Initialize frontier map and path finder
   frontier_map2d_.reset(new FrontierMap2D(sdf_map_, nh));
-  path_finder_.reset(new Astar2D);
+  path_finder_.reset(new Astar2D);  //	A * 路径搜索器（2D）
   path_finder_->init(nh, sdf_map_);
 
   // Initialize exploration data and parameter containers
-  ed_.reset(new ExplorationData);
-  ep_.reset(new ExplorationParam);
+  ed_.reset(
+      new ExplorationData);  // 探索数据容器，用于存储探索过程中的临时数据（如候选前沿点、路径、TSP
+                             // 序列、语义目标列表）
+  ep_.reset(new ExplorationParam);  // 探索参数容器，用于存储从 ROS 参数服务器读取的配置参数
 
   // Load exploration parameters from ROS parameter server
-  nh.param("exploration/policy", ep_->policy_mode_, 0);
-  nh.param("exploration/sigma_threshold", ep_->sigma_threshold_, 0.030);
+  nh.param("exploration/policy", ep_->policy_mode_, 0);  // 探索策略模式
+  nh.param("exploration/sigma_threshold", ep_->sigma_threshold_,
+      0.030);  // 语义值标准差阈值（混合策略判断）
   nh.param("exploration/max_to_mean_threshold", ep_->max_to_mean_threshold_, 1.2);
   nh.param("exploration/max_to_mean_percentage", ep_->max_to_mean_percentage_, 0.95);
-  nh.param("exploration/tsp_dir", ep_->tsp_dir_, string("null"));
+  nh.param("exploration/tsp_dir", ep_->tsp_dir_, string("null"));  // TSP 求解器的文件路径
 
-  // Get map parameters for ray casting initialization
+  // Get map parameters for ray casting initialization（射线检测，进行碰撞校验）
   double resolution = sdf_map_->getResolution();
   Eigen::Vector2d origin, size;
   sdf_map_->getRegion(origin, size);
@@ -52,20 +57,23 @@ void ExplorationManager::initialize(ros::NodeHandle& nh)
   // Initialize ray caster for collision checking and TSP service client
   ray_caster2d_.reset(new RayCaster2D);
   ray_caster2d_->setParams(resolution, origin);
-  tsp_client_ = nh.serviceClient<lkh_mtsp_solver::SolveMTSP>("/solve_tsp", true);
+  tsp_client_ =
+      nh.serviceClient<lkh_mtsp_solver::SolveMTSP>("/solve_tsp", true);  // TSP 求解服务客户端
 
-  // Initialize KinoAstar and GCopter for real-world trajectory planning
+  // Initialize KinoAstar and GCopter for real-world trajectory planning(动力学 A* +
+  // 轨迹优化器，生成平滑可行的 3D 轨迹)
   kinoastar_.reset(new KinoAstar(nh, sdf_map_));
   kinoastar_->init();
-  
+
   Config gcopter_config(nh);
   gcopter_.reset(new Gcopter(gcopter_config, nh, sdf_map_, kinoastar_));
-  
+
   ROS_INFO("[ExplorationManager] KinoAstar and GCopter initialized for real-world mode");
 }
 
 int ExplorationManager::planNextBestPoint(const Vector3d& pos, const double& yaw)
 {
+  // 高置信度物体导航 → 过深物体导航 → 活跃前沿探索 → 可疑物体 → 休眠前沿 → 极端搜索 → 错误返回
   Vector2d pos2d = Vector2d(pos(0), pos(1));
   ros::Time t1 = ros::Time::now();
   auto t2 = t1;
@@ -77,61 +85,67 @@ int ExplorationManager::planNextBestPoint(const Vector3d& pos, const double& yaw
   sdf_map_->object_map2d_->getTopConfidenceObjectCloud(object_clouds);
 
   // ==================== Navigation Mode: High-Confidence Objects ====================
-  if (!object_clouds.empty()) {
+
+  if (!object_clouds.empty()) {  // 存在高置信度目标物体点云
     ROS_WARN("[Navigation Mode] Get object_cloud num = %ld", object_clouds.size());
 
     // Try to find path to each detected object in order of confidence
     for (auto object_cloud : object_clouds) {
       if (searchObjectPath(pos, object_cloud, ed_->next_pos_, ed_->next_best_path_))
         return SEARCH_BEST_OBJECT;
+      // 整数码表示： Found high-confidence object
     }
   }
 
   // ==================== Navigation Mode: Over-Depth Objects ====================
+  // 高置信度物体导航失败，但存在 “过深物体”（Over-Depth Object）,尝试前往这些物体以获取更多环境信息
   if (!object_map2d_->over_depth_object_cloud_->points.empty()) {
     ROS_WARN("[Navigation Mode (Over Depth)] Get over depth object cloud");
     if (searchObjectPath(
             pos, object_map2d_->over_depth_object_cloud_, ed_->next_pos_, ed_->next_best_path_))
       return SEARCH_OVER_DEPTH_OBJECT;
+    // 整数码表示 Searching over-depth object
   }
 
   // ==================== Exploration Mode: Frontier-Based Planning ====================
-  sdf_map_->object_map2d_->getTopConfidenceObjectCloud(object_clouds, false);
+  // 前沿点探索模式(兜底作用)，尝试前往前沿点以覆盖未知区域
+  sdf_map_->object_map2d_->getTopConfidenceObjectCloud(
+      object_clouds, false);  // 重新加载物体点云（参数false：包含次高置信度物体，非仅最高）
   pcl::shared_ptr<pcl::PointCloud<pcl::PointXYZ>> top_object_cloud(
       new pcl::PointCloud<pcl::PointXYZ>);
-  if (object_clouds.size() >= 1)
+  if (object_clouds.size() >= 1)  // 取第一个次高置信度物体
     top_object_cloud = object_clouds[0];
 
-  // Apply selected exploration policy to choose next frontier
+  // Apply selected exploration policy to choose next frontier（选择最优前沿点）
   Eigen::Vector2d next_best_pos;
   std::vector<Eigen::Vector2d> next_best_path;
   chooseExplorationPolicy(pos2d, ed_->frontier_averages_, next_best_pos, next_best_path);
 
-  // Handle case when no passable frontiers are found
+  // Handle case when no passable frontiers are found(导航失败+前沿点失败-->进行容错机制)
   if (next_best_path.empty()) {
     ROS_WARN("Maybe no passable frontier.");
 
-    // Try suspicious objects as backup
+    // Try suspicious objects as backup(第一层容错：尝试可疑物体导航)
     if (!top_object_cloud->points.empty() &&
         searchObjectPath(pos, top_object_cloud, ed_->next_pos_, ed_->next_best_path_))
       return SEARCH_SUSPICIOUS_OBJECT;
     else
-      // Try dormant frontiers as last resort
+      // Try dormant frontiers as last resort(第二层容错：尝试休眠前沿点)
       chooseExplorationPolicy(
           pos2d, ed_->dormant_frontier_averages_, next_best_pos, next_best_path);
 
-    // Extreme search mode when all normal options fail
+    // Extreme search mode when all normal options fail(底层容错：极端搜索模式)
     if (next_best_path.empty()) {
       ROS_ERROR("search exterme case!!!");
 
-      // Try extreme object search with relaxed constraints
+      // Try extreme object search with relaxed constraints（放宽约束，重新尝试所有物体）
       for (auto object_cloud : object_clouds) {
         if (!object_cloud->points.empty() &&
             searchObjectPathExtreme(pos, object_cloud, ed_->next_pos_, ed_->next_best_path_))
           return SEARCH_EXTREME;
       }
 
-      // Include lower confidence objects in extreme search
+      // Include lower confidence objects in extreme search（加载更低置信度的物体，继续极端搜索）
       sdf_map_->object_map2d_->getTopConfidenceObjectCloud(object_clouds, false, true);
       for (auto object_cloud : object_clouds) {
         if (!object_cloud->points.empty() &&
@@ -139,7 +153,7 @@ int ExplorationManager::planNextBestPoint(const Vector3d& pos, const double& yaw
           return SEARCH_EXTREME;
       }
 
-      // Try cached over-depth objects as final option
+      // Try cached over-depth objects as final option（ 最后尝试缓存的过深物体）
       static auto last_over_depth_object_cloud = object_map2d_->over_depth_object_cloud_;
       if (!object_map2d_->over_depth_object_cloud_->points.empty())
         last_over_depth_object_cloud = object_map2d_->over_depth_object_cloud_;
@@ -155,11 +169,11 @@ int ExplorationManager::planNextBestPoint(const Vector3d& pos, const double& yaw
     if (next_best_path.empty()) {
       if (ed_->frontiers_.empty()) {
         ROS_ERROR("No coverable frontier!!");
-        return NO_COVERABLE_FRONTIER;
+        return NO_COVERABLE_FRONTIER;  // 无任何可覆盖的前沿点（环境已探索完毕）
       }
       else {
         ROS_ERROR("No passable frontier!!");
-        return NO_PASSABLE_FRONTIER;
+        return NO_PASSABLE_FRONTIER;  // 有前沿点但无可行路径（如被完全阻挡）
       }
     }
   }
@@ -180,6 +194,7 @@ void ExplorationManager::chooseExplorationPolicy(Vector2d cur_pos, vector<Vector
 {
   switch (ep_->policy_mode_) {
     case ExplorationParam::DISTANCE:
+    //机器人当前位置到单个前沿点的最短可达路径（局部最优）
       ROS_WARN("[Exploration Mode] Find Closest Frontier");
       findClosestFrontierPolicy(cur_pos, frontiers, next_best_pos, next_best_path);
       break;
@@ -195,6 +210,7 @@ void ExplorationManager::chooseExplorationPolicy(Vector2d cur_pos, vector<Vector
       break;
 
     case ExplorationParam::TSP_DIST:
+    //不对称旅行商问题（ATSP） 求解所有可达前沿点的 “全局最短遍历序列”
       ROS_WARN("[Exploration Mode] Working on TSP Distance Mode");
       findTSPTourPolicy(cur_pos, frontiers, next_best_pos, next_best_path);
       break;
@@ -658,10 +674,11 @@ bool ExplorationManager::planTrajectory(
     const Eigen::VectorXd& start, const Eigen::VectorXd& end, const Vector3d& ctrl)
 {
   if (!gcopter_ || !kinoastar_) {
-    ROS_WARN_THROTTLE(1.0, "[ExplorationManager] GCopter or KinoAstar not initialized for real-world mode");
+    ROS_WARN_THROTTLE(1.0, "[ExplorationManager] GCopter or KinoAstar not initialized for "
+                           "real-world mode");
     return false;
   }
-  
+
   Eigen::VectorXd goal_state, current_state;
   Vector3d control = ctrl;
   goal_state = end;
@@ -671,7 +688,7 @@ bool ExplorationManager::planTrajectory(
   kinoastar_->reset();
   kinoastar_->search(goal_state, current_state, control);
   kinoastar_->getKinoNode();
-  
+
   if (kinoastar_->has_path_) {
     kinoastar_->kinoastarFlatPathPub(kinoastar_->flat_trajs_);
     gcopter_->minco_plan();
@@ -679,7 +696,7 @@ bool ExplorationManager::planTrajectory(
     gcopter_->mincoPathPub(gcopter_->final_trajes, gcopter_->final_singuls);
     return true;
   }
-  
+
   return false;
 }
 

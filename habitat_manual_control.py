@@ -53,7 +53,7 @@ RIGHT_KEY = "d"
 LOOK_UP_KEY = "q"
 LOOK_DOWN_KEY = "e"
 FINISH = "f"
-fusion_threshold = 0.5
+fusion_threshold = 0.4
 
 def signal_handler(sig, frame):
     print("Ctrl+C detected! Shutting down...")

@@ -1,3 +1,88 @@
 
+nightstand: 
+nightstand: 
 cabinet: 
 cabinet: 
+cabinet: 
+cabinet: 
+cabinet: 
+cabinet: Thought: In the COCO classes, confidence threshold for cabinet: A cabinet is typically rectangular, with flat surfaces, often in the form of a box or with shelves inside. It's smaller than larger furniture pieces like beds or dining tables (0.60) but still sizable compared to smaller household objects. The confidence threshold for a cabinet should be around 0.50, which is in [0.25, 0.65].
+
+Misdetection possibilities:
+
+bookshelf: A bookshelf can be similar in shape and size to a cabinet, with a flat surface and storage space, which may lead to confusion.
+
+dresser: A dresser, especially one with drawers, could resemble a cabinet because of the similar rectangular shape and flat surfaces.
+
+closet: A closet, particularly a small one, can resemble a cabinet in terms of its rectangular form and purpose for storage.
+
+Room where the label may appear: A cabinet is most likely to appear in a kitchen, bathroom, or hallway for storage purposes. It could also be found in a living room, depending on the layout of the space. Since it can appear in multiple rooms with similar probability, but kitchen is a common location, I'll choose "kitchen" as it has a significantly higher probability than other rooms.
+
+Answer: [bookshelf, dresser, closet, 0.50, kitchen]
+cabinet: Thought: In the COCO classes, confidence threshold for cabinet: A cabinet is typically rectangular, with flat surfaces, often in the form of a box or with shelves inside. It's smaller than larger furniture pieces like beds or dining tables (0.60) but still sizable compared to smaller household objects. The confidence threshold for a cabinet should be around 0.50, which is in [0.25, 0.65].
+
+Misdetection possibilities:
+
+bookshelf: A bookshelf can be similar in shape and size to a cabinet, with a flat surface and storage space, which may lead to confusion.
+
+dresser: A dresser, especially one with drawers, could resemble a cabinet because of the similar rectangular shape and flat surfaces.
+
+closet: A closet, particularly a small one, can resemble a cabinet in terms of its rectangular form and purpose for storage.
+
+Room where the label may appear: A cabinet is most likely to appear in a kitchen, bathroom, or hallway for storage purposes. It could also be found in a living room, depending on the layout of the space. However, the probability is significantly higher in a kitchen or bathroom compared to other rooms. Since it's more common in specific rooms, I'll choose "kitchen" as the most likely.
+
+Answer: [bookshelf, dresser, closet, 0.50, kitchen]
+cabinet: Thought: In the COCO classes, confidence threshold for cabinet: A cabinet is typically rectangular, with flat surfaces, often in the form of a box or with shelves inside. It's smaller than larger furniture pieces like beds or dining tables (0.60) but still sizable compared to smaller household objects. The confidence threshold for a cabinet should be around 0.50, which is in [0.25, 0.65].
+
+Misdetection possibilities:
+- bookshelf: A bookshelf can be similar in shape and size to a cabinet, with a flat surface and storage space, which may lead to confusion.
+- dresser: A dresser, especially one with drawers, could resemble a cabinet because of the similar rectangular shape and flat surfaces.
+- closet: A closet, particularly a small one, can resemble a cabinet in terms of its rectangular form and purpose for storage.
+- refrigerator: A refrigerator might be misdetected as a cabinet due to its large, boxy shape and similar placement in a kitchen.
+
+Room where the label may appear: A cabinet is most likely to appear in a kitchen, bathroom, or hallway for storage purposes. It could also be found in a living room, depending on the layout of the space. However, the kitchen is a common location for cabinets, significantly higher than other rooms.
+
+Answer: [bookshelf, dresser, closet, refrigerator, 0.50, kitchen]
+counter: Thought: In the COCO classes, confidence threshold for counter: A counter is typically a flat, horizontal surface, often in kitchens or bathrooms, used for preparing food or placing items. It's similar in size to a table but often attached to walls or cabinets. The confidence threshold should be moderate, around 0.45, which is in [0.25, 0.65].
+
+Misdetection possibilities:
+
+table: A table can be misdetected as a counter because both have flat surfaces and similar shapes, especially if the table is against a wall.
+
+desk: A desk, like a counter, has a flat working surface and may be attached or freestanding, leading to potential confusion.
+
+shelf: A shelf, particularly a wide one, might resemble a counter in terms of its flat surface and placement.
+
+Room where the label may appear: A counter is most likely to appear in a kitchen or bathroom, where it's used for preparation or hygiene. It could also be in a laundry room or workshop, but kitchen is the most common.
+
+Answer: [table, desk, shelf, 0.45, kitchen]
+potted plant: Thought: In the COCO classes, confidence threshold for potted plant: A potted plant is typically a plant in a container, often with leaves or flowers. 
+
+It's smaller than furniture like a bed (0.65) but larger than very small objects like an apple (0.25). The confidence threshold should be around 0.35, which is in [0.25, 0.65].
+
+Misdetection possibilities:
+
+vase: A vase, especially one with flowers or decorative elements, can resemble a potted plant because of the plant-like appearance and container.
+
+lamp: A lamp, particularly a floor lamp with a base that might look like a pot, could be misdetected as a potted plant due to similar shapes.
+
+chair: A chair, especially one with a backrest that might resemble plant stems or leaves in certain angles, could be confused.
+
+Room where the label may appear: A potted plant can be found in various rooms, but it is most likely in a living room, bedroom, or office. 
+
+Given that it can appear in multiple rooms with similar probability, it should be "everywhere."
+
+Answer: [vase, lamp, chair, 0.35, everywhere]
+counter: Thought: In the COCO classes, confidence threshold for counter: A counter is typically a flat, horizontal surface, often found in kitchens or bathrooms, used for preparation or display. It's similar in size to a table but often attached to cabinets or walls. The confidence threshold should be moderate, around 0.45, which is in [0.25, 0.65].
+
+Misdetection possibilities:
+
+table: A table can be misdetected as a counter because both are flat surfaces used for various purposes, and they share similar shapes and sizes.
+
+desk: A desk, especially a work desk, can resemble a counter in terms of its flat surface and functional use.
+
+shelf: A shelf, particularly a wide one, might be confused with a counter due to its flat, horizontal surface.
+
+Room where the label may appear: A counter is most likely to appear in a kitchen or bathroom, where it is used for preparation and storage. It could also be in a laundry room or workshop, but the probability is significantly higher in the kitchen.
+
+Answer: [table, desk, shelf, 0.45, kitchen]

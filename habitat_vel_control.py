@@ -1,3 +1,9 @@
+"""结合了 Habitat 仿真环境 与 ROS (Robot Operating System) 的机器人速度控制程序，
+核心功能是在 Habitat 仿真环境中驱动智能体移动，
+并将环境观测数据发布到 ROS 话题，
+同时接收 ROS 的速度控制指令来操控智能体。
+是同模拟器交互的核心
+"""
 import os
 import signal
 import gzip
@@ -17,7 +23,7 @@ from std_msgs.msg import Float64, String
 from vlm.Labels import MP3D_ID_TO_NAME
 from geometry_msgs.msg import Twist
 import habitat_sim
-from habitat_sim.utils import common as utils
+from habitat_sim.utils import common as utils # type: ignore
 
 from habitat.config.default_structured_configs import (
     CollisionsMeasurementConfig,
@@ -27,17 +33,17 @@ from habitat.config.default_structured_configs import (
 from habitat.utils.visualizations.utils import observations_to_image
 
 
-def signal_handler(sig, frame):
+def signal_handler(sig, frame):#中断信号处理
     print("Ctrl+C detected! Shutting down...")
     rospy.signal_shutdown("Manual shutdown")
     os._exit(0)
 
 
-def transform_rgb_bgr(image):
+def transform_rgb_bgr(image):#图像格式转换
     return image[:, :, [2, 1, 0]]
 
 
-def publish_observations(event):
+def publish_observations(event):#ROS 数据发布
     global msg_observations, fusion_score
     global ros_pub, confidence_threshold_pub
     tmp = deepcopy(msg_observations)
@@ -47,7 +53,7 @@ def publish_observations(event):
     confidence_threshold_pub.publish(msg)
 
 
-def cmd_vel_callback(msg):
+def cmd_vel_callback(msg):#ROS 速度指令订阅
     global cmd_vel, cmd_omega
     cmd_vel = msg.linear.x
     cmd_omega = msg.angular.z
@@ -59,6 +65,7 @@ def cmd_vel_callback(msg):
     config_name="habitat_vel_control",
 )
 def main(cfg: DictConfig) -> None:
+    # 初始化配置
     global msg_observations, fusion_score
     global ros_pub, confidence_threshold_pub
     global obj_point_cloud
@@ -78,7 +85,7 @@ def main(cfg: DictConfig) -> None:
         for idx, cat in enumerate(category_to_coco)
     }
 
-
+    #仿真环境初始化
     cfg = patch_config(cfg)
     env_count = cfg.test_epi_num
     print(env_count)
@@ -152,11 +159,12 @@ def main(cfg: DictConfig) -> None:
     confidence_threshold_pub = rospy.Publisher(
         "/detector/confidence_threshold", Float64, queue_size=10
     )
-    # Publish the target label so other nodes can subscribe
+
+
+    # Publish the target label so other nodes can subscribe（发布目标标签如：cabinet）
     label_pub = rospy.Publisher("/detector/label", String, queue_size=1, latch=True)
 
     print("Agent stepping around inside environment.")
-
     label = env.current_episode.object_category
 
     if label in category_to_coco:
@@ -164,6 +172,7 @@ def main(cfg: DictConfig) -> None:
         label = id_to_name.get(coco_id, label)
 
     # Publish the selected label so external nodes (e.g. real-world node) can receive it
+    
     try:
         label_pub.publish(String(data=label))
         rospy.loginfo("Published target label: %s", label)
@@ -173,7 +182,7 @@ def main(cfg: DictConfig) -> None:
     rate = rospy.Rate(fps)
 
     tmp_cnt = 0
-    while not rospy.is_shutdown() and not env.episode_over:
+    while not rospy.is_shutdown() and not env.episode_over:#智能体运动控制主循环
         loop_begin_time = rospy.Time.now()
         object_mask = np.zeros((height, width), dtype=np.uint8)
         vel_control.linear_velocity = np.array([0.0, 0.0, 0.0])  # y+ None x-

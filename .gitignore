@@ -13,6 +13,10 @@ lockfiles
 
 .catkin_workspace
 .vscode
+*.log
+.idea/
+
+
 
 yolov7
 traced_model.pt

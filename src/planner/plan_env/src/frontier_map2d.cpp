@@ -6,7 +6,9 @@
  * for autonomous robotic exploration. The system identifies boundaries between
  * known free space and unknown regions, performs intelligent clustering using
  * PCA-based subdivision, and provides visibility-based validation for efficient
- * exploration planning.
+ * exploration planning.代码实现了一个用于自主机器人探索的2D 前沿检测系统（FrontierMap2D），
+ * 核心功能是识别地图中 “已知自由空间” 与 “未知区域” 的边界（前沿），
+ * 并对前沿进行聚类、分割、状态管理，为机器人探索规划提供目标。
  *
  * @author Zager-Zhang
  */
@@ -14,43 +16,53 @@
 #include <unordered_map>
 
 namespace apexnav_planner {
-FrontierMap2D::FrontierMap2D(const SDFMap2D::Ptr& sdf_map, ros::NodeHandle& nh)
-{
+FrontierMap2D::FrontierMap2D(const SDFMap2D::Ptr& sdf_map, ros::NodeHandle& nh){
+//功能：初始化前沿检测的核心依赖和参数（是FrontierMap2D的构造函数）
+
   // Initialize core mapping infrastructure
-  this->sdf_map_ = sdf_map;
-  int voxel_num = sdf_map_->getVoxelNum();
+  this->sdf_map_ = sdf_map;//栅格地图的智能指针
+  int voxel_num = sdf_map_->getVoxelNum();//栅格总数
 
   // Allocate and initialize frontier state flags for all grid cells
-  frontier_flag_ = vector<char>(voxel_num, NONE);
-  fill(frontier_flag_.begin(), frontier_flag_.end(), NONE);
+  frontier_flag_ = vector<char>(voxel_num, NONE);//标记每个栅格的前沿状态
+  fill(frontier_flag_.begin(), frontier_flag_.end(), NONE);//赋值为NONE
 
-  // Load exploration parameters from ROS parameter server
-  nh.param("frontier/cluster_min", cluster_min_, -1);
-  nh.param("frontier/cluster_size_xy", cluster_size_xy_, -1.0);
-  nh.param("frontier/min_contain_unknown", min_contain_unknown_, 50);
-  nh.param("frontier/min_view_finish_fraction", min_view_finish_fraction_, -1.0);
+  // Load exploration parameters from ROS parameter server从参数服务器读取指定名称的参数，赋值给类成员变量；如果参数不存在，就使用默认值()
+  nh.param("frontier/cluster_min", cluster_min_, -1);//最小尺寸阈值
+  nh.param("frontier/cluster_size_xy", cluster_size_xy_, -1.0);//最大尺寸阈值（米）(大于则会被PCA分割)
+  nh.param("frontier/min_contain_unknown", min_contain_unknown_, 50);//前沿需要包含的最小未知栅格数（低于这个数的前沿无探索价值，会被标记为休眠）
+  nh.param("frontier/min_view_finish_fraction", min_view_finish_fraction_, -1.0);//前沿的最小可视完成率
 
   // Initialize ray-casting system for visibility analysis
   raycaster_.reset(new RayCaster2D);
-  resolution_ = sdf_map_->getResolution();
-  Eigen::Vector2d origin, size;
+  resolution_ = sdf_map_->getResolution();//分辨率
+  Eigen::Vector2d origin, size;//获取地图的原点坐标（origin） 和尺寸（size）,保证不超出范围
   sdf_map_->getRegion(origin, size);
   raycaster_->setParams(resolution_, origin);
 
-  // Setup perception utilities for sensor integration
+  // Setup perception utilities for sensor integration（初始化感知工具（PerceptionUtils2D））
   percep_utils_.reset(new PerceptionUtils2D(nh));
 }
 
 void FrontierMap2D::searchFrontiers()
+/*完成 “全流程的前沿检测与更新”：
+先清理地图更新区域内失效的旧前沿，
+再在扩展后的搜索区域内扫描并识别新的前沿种子，
+通过区域生长（BFS）形成前沿聚类，对超大聚类进行 PCA 分割，
+最后将新前沿整合到活跃列表并重新分配唯一ID，为机器人探索规划提供最新的、有效的前沿目标*/
 {
+
   // Clear previous candidate frontiers from current search iteration
-  candidate_frontiers_.clear();
+
+  candidate_frontiers_.clear();//临时存储 “新检测到的前沿” 的容器
 
   // Determine spatial bounds of recently updated map regions
-  Vector2d update_min, update_max;
-  sdf_map_->getLocalUpdatedBox(update_min, update_max);
 
-  // Lambda function for efficient frontier removal and flag reset
+  Vector2d update_min, update_max;
+  sdf_map_->getLocalUpdatedBox(update_min, update_max);//获取地图更新区域的边界(更新地图)
+
+
+  // (Defination)Lambda function for efficient frontier removal and flag reset
   auto resetFlag = [&](list<Frontier2D>::iterator& iter, list<Frontier2D>& frontiers) {
     Eigen::Vector2i idx;
     // Reset frontier flags for all cells in the frontier cluster
@@ -61,6 +73,7 @@ void FrontierMap2D::searchFrontiers()
     // Remove frontier from container and return updated iterator
     iter = frontiers.erase(iter);
   };
+
 
   // Process active frontiers: remove those in updated regions if changed
   for (auto iter = frontiers_.begin(); iter != frontiers_.end();) {
@@ -79,6 +92,8 @@ void FrontierMap2D::searchFrontiers()
     else
       ++iter;
   }
+/*地图更新后，旧的前沿可能因为环境变化（如未知区域被探索、出现新障碍）而失效，清理这些前沿避免后续规划错误*/
+
 
   // Search for new frontiers within slightly expanded updated region
   Vector2d search_min = update_min - Vector2d(1, 1);
@@ -92,18 +107,18 @@ void FrontierMap2D::searchFrontiers()
     search_max[k] = min(search_max[k], box_max[k]);
   }
 
-  // Convert spatial bounds to grid indices for efficient iteration
+  // Convert spatial bounds to grid indices for efficient iteration (坐标转栅格索引)
   Eigen::Vector2i min_id, max_id;
   sdf_map_->posToIndex(search_min, min_id);
   sdf_map_->posToIndex(search_max, max_id);
 
-  // Systematic grid scanning for frontier seed identification
+  // Systematic grid scanning for frontier seed identification（双层循环遍历搜索区域所有栅格）
   for (int x = min_id(0); x <= max_id(0); ++x)
     for (int y = min_id(1); y <= max_id(1); ++y) {
       Eigen::Vector2i cur(x, y);
 
       // Check for unprocessed cells that satisfy frontier conditions
-      if (frontier_flag_[toAdr(cur)] == NONE && isSatisfyFrontier(cur)) {
+      if (frontier_flag_[toAdr(cur)] == NONE && isSatisfyFrontier(cur)) {//没有识别过且满足前沿条件
         // Initiate region growing from identified frontier seed
         expandFrontier(cur);
       }
@@ -115,12 +130,17 @@ void FrontierMap2D::searchFrontiers()
   // Integrate newly discovered frontiers into active frontier set
   for (auto& tmp_ftr : candidate_frontiers_) frontiers_.insert(frontiers_.end(), tmp_ftr);
 
-  // Reassign unique identifiers to maintain frontier tracking consistency
+  // Reassign unique identifiers to maintain frontier tracking consistency（PCA后重新分配前沿唯一 ID）
   int idx = 0;
   for (auto& ft : frontiers_) ft.id_ = idx++;
 }
 
 void FrontierMap2D::expandFrontier(const Eigen::Vector2i& first)
+/*工具，
+以一个 “前沿种子栅格” 为起点，通过广度优先搜索（BFS） 
+扩展出连通的前沿聚类，
+同时过滤掉尺寸过小的无效聚类，最终将有效聚类存入候选前沿列表，
+为后续分割和使用做准备（基于 BFS 实现 “从种子到聚类” 的前沿区域生长，保证前沿的连通性）*/
 {
   // Initialize data structures for breadth-first region growing
   queue<Eigen::Vector2i> cell_queue;
@@ -176,9 +196,10 @@ void FrontierMap2D::expandFrontier(const Eigen::Vector2i& first)
  * @brief Apply PCA-based subdivision to large frontier clusters for exploration optimization
  * @param frontiers Reference to frontier list for in-place modification
  */
-void FrontierMap2D::splitLargeFrontiers(list<Frontier2D>& frontiers)
+void FrontierMap2D::splitLargeFrontiers(list<Frontier2D>& frontiers)//遍历所有前沿聚类，对每个聚类调用真正实现 PCA 分割的 splitHorizontally 函数
 {
   list<Frontier2D> splits, tmps;
+  //split临时存储单次 PCA 分割产生的子前沿，tmps存储所有处理后的前沿（拆分后的子前沿 + 无需拆分的原前沿）
 
   // Process each frontier for potential horizontal subdivision
   for (auto it = frontiers.begin(); it != frontiers.end(); ++it) {
@@ -203,7 +224,7 @@ bool FrontierMap2D::splitHorizontally(const Frontier2D& frontier, list<Frontier2
   auto mean = frontier.average_;  // Spatial centroid for PCA analysis
   bool need_split = false;
 
-  // Check if any frontier cells exceed the spatial clustering threshold
+  // Check if any frontier cells exceed the spatial clustering threshold（提前结束聚类）
   for (auto cell : frontier.cells_) {
     if ((cell - mean).norm() > cluster_size_xy_) {
       need_split = true;
@@ -216,6 +237,7 @@ bool FrontierMap2D::splitHorizontally(const Frontier2D& frontier, list<Frontier2
     return false;
 
   // Compute covariance matrix for Principal Component Analysis
+  //(协方差矩阵描述了数据在不同维度上的 “离散程度”)
   Eigen::Matrix2d cov;
   cov.setZero();
   for (auto cell : frontier.cells_) {
@@ -263,26 +285,27 @@ bool FrontierMap2D::splitHorizontally(const Frontier2D& frontier, list<Frontier2
   return true;  // Successful subdivision completed
 }
 
-bool FrontierMap2D::dormantSeenFrontiers(Vector2d sensor_pos, double sensor_yaw)
+bool FrontierMap2D::dormantSeenFrontiers(Vector2d sensor_pos, double sensor_yaw)//前沿状态管理的核心函数，负责判断活跃前沿是否需要转为 “休眠（DORMANT）” 状态
 {
-  bool change_flag = false;
+  bool change_flag = false;//标记本次函数执行是否有前沿状态发生变化
 
   // Configure perception utilities with current sensor pose
-  percep_utils_->setPose(sensor_pos, sensor_yaw);
+  percep_utils_->setPose(sensor_pos, sensor_yaw);//后续判断 “前沿是否在传感器视野内” 需要基于这个姿态
 
-  // Evaluate all active frontiers for potential dormancy
+  // Evaluate all active frontiers for potential dormancy(逐个活跃前沿评判)
   for (auto it = frontiers_.begin(); it != frontiers_.end();) {
-    // Count connected unknown cells to validate frontier utility
+
+    // Count connected unknown cells to validate frontier utility（首先过滤掉 “几乎没有未知区域” 的前沿）
     int cnt = countConnectUnknownGrids(it->average_);
     bool too_small = cnt < min_contain_unknown_;
 
-    // Skip frontiers outside current sensor field of view
+    // Skip frontiers outside current sensor field of view（过滤传感器视野外的前沿）
     if (!percep_utils_->insideFOV(it->average_)) {
       ++it;
       continue;
     }
 
-    // Perform ray-casting visibility analysis from sensor to frontier
+    // Perform ray-casting visibility analysis from sensor to frontier（射线检测判断前沿是否可视（无遮挡））
     raycaster_->input(it->average_, sensor_pos);
     Vector2i idx;
     raycaster_->nextId(idx);
@@ -299,12 +322,12 @@ bool FrontierMap2D::dormantSeenFrontiers(Vector2d sensor_pos, double sensor_yaw)
 
       // Check for obstacle blocking line of sight to frontier
       if (sdf_map_->getOccupancy(idx) == SDFMap2D::OCCUPIED) {
-        visib = false;
+        visib = false;//前沿的 “使命” 是引导探索未知，可视则使命完成
         break;
       }
     }
 
-    // Move frontier to dormant state if visible or too small for exploration
+    // Move frontier to dormant state if visible or too small for exploration（状态转换（活跃→休眠））
     if (visib || too_small) {
       dormant_frontiers_.push_back(*it);
 
@@ -325,7 +348,7 @@ bool FrontierMap2D::dormantSeenFrontiers(Vector2d sensor_pos, double sensor_yaw)
   return change_flag;
 }
 
-bool FrontierMap2D::isFrontierChanged(const Frontier2D& ft)
+bool FrontierMap2D::isFrontierChanged(const Frontier2D& ft)//判断前沿是否变化，避免重复增删
 {
   // Check each cell in frontier cluster for continued boundary validity
   for (auto cell : ft.cells_) {
@@ -396,7 +419,7 @@ bool FrontierMap2D::isAnyFrontierChanged()
   return false;
 }
 
-int FrontierMap2D::countConnectUnknownGrids(const Eigen::Vector2d& pos)
+int FrontierMap2D::countConnectUnknownGrids(const Eigen::Vector2d& pos)//Unkonwn区域连通性统计工具函数,这个结果用于判断前沿是否 “有探索价值”（未知栅格数是否达标）
 {
   int unknown_threshold = min_contain_unknown_;
 
@@ -442,7 +465,7 @@ int FrontierMap2D::countConnectUnknownGrids(const Eigen::Vector2d& pos)
   return cnt;
 }
 
-void FrontierMap2D::setForceDormantFrontier(const Vector2d& frontier_center)
+void FrontierMap2D::setForceDormantFrontier(const Vector2d& frontier_center)//将前沿休眠
 {
   // Initialize data structures for region growing around specified center
   queue<Eigen::Vector2i> cell_queue;

@@ -2,53 +2,59 @@ from llm.client.deepseek_answer import deepseek_respond
 from llm.utils.only_answer import only_answer
 from llm.client.ollama_answer import ollama_respond
 import os
+
+
 def get_answer(client, prompt=None):
     """
-    加固后的获取答案函数：
-    确保返回的 similar_answer 永远是 list，respond 永远是 str。
+    统一处理不同 LLM 客户端（DeepSeek/Ollama）的调用逻辑，
+    并对模型返回结果做初步解析，
+    向下调用 deepseek_answer.py/ollama_answer.py，
+    向上为 answer_reader.py 提供标准化结果。
+    是LLM/VLM 结果调度与解析文件
     """
-    # 1. 预设初始值，确保在任何异常情况下都有合法的返回值
+    # 1. 初始值
     respond = ""
     similar_answer = []
 
+    # --- 调试代码：强制打印以确认函数被调用 ---
+    print(f"\n[DEBUG] get_answer 启动 | 目标模型: {getattr(client, 'llm_client', '未知')}")
+    print(f"[DEBUG] 当前 Prompt 长度: {len(prompt) if prompt else 0}")
+
     try:
-        # 2. 逻辑分支对齐：使用 if-elif-else 确保逻辑互斥
+        # 2. 逻辑分支对齐
         if client.llm_client == 'deepseek':
-            # 调用你已经充值并加固过的 deepseek_respond
+            print("🚀 [LLM] 正在向 DeepSeek 官网发起实时请求...")
             respond = deepseek_respond(prompt=prompt)
             
         elif client.llm_client == 'ollama':
+            print("🏠 [LLM] 正在调用本地 Ollama...")
             respond = ollama_respond(model=client.ollama, prompt=prompt)
             
         else:
-            print(f"Warning: Unknown llm_client type: {client.llm_client}")
+            print(f"⚠️ Warning: 未知的 llm_client 类型: {client.llm_client}")
             respond = ""
 
-        # 3. 类型强制检查：防止底层接口意外返回 None
-        if respond is None:
-            respond = ""
-        else:
-            respond = str(respond)
+        # 3. 类型强制检查
+        respond = str(respond) if respond is not None else ""
 
-        # 4. 提取动作：将字符串解析为列表
-        # 即使 only_answer 内部出错返回 None，我们也在这里兜底
-        parsed_result = only_answer(respond)
+        # 4. 提取动作
+        parsed_result = only_answer(respond)  # 核心解析：从自然语言提取结构化列表(N(string)+1(float)+1(string))
         
         if isinstance(parsed_result, list):
             similar_answer = parsed_result
         else:
-            # 如果 only_answer 返回了 None 或其他非列表对象，强制转为空列表
             similar_answer = []
 
     except Exception as e:
-        # 5. 全局异常捕获：确保即便代码逻辑出错，主程序也不会崩溃闪退
-        print(f"Critical error in get_answer: {e}")
+        print(f"❌ Critical error in get_answer: {e}")
         similar_answer = []
         respond = ""
 
-    # 最终检查：如果列表为空，可以视情况加入一个默认动作，防止主程序 subscriptable 报错
-    # 如果主程序代码里有类似 similar_answer[0] 的操作，这里加一个 "stop" 最安全
+    # 5. 最终安全性检查
     if not similar_answer:
         similar_answer = ["stop"]
+    
+    # 打印结果反馈
+    print(f"✅ [LLM 回复成功] 动作解析为: {similar_answer}")
 
     return similar_answer, respond

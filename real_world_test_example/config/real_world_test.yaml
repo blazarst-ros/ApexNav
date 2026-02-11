@@ -5,8 +5,8 @@ detector:
     agnostic_nms: True
 
   groundingDINO:
-    confidence_threshold_dino: 0.40
-    text_threshold: 0.25
+    confidence_threshold_dino: 0.3
+    text_threshold: 0.3
 
 use_llm: true
 
@@ -14,8 +14,8 @@ llm:
   llm_answer_path: llm/answers/llm_answer_mp3d.txt
   llm_response_path: llm/answers/llm_response_list.txt
   llm_client:
-    llm_client: ollama # deepseek, ollama, or none
-    ollama: 'qwen3:8b'
+    llm_client: deepseek # deepseek, ollama, or none
+    #ollama: 'qwen3:8b'
 
 habitat_sensor:
   camera_min_depth: 0.0
