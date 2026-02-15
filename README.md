@@ -2,8 +2,7 @@
 
 关键任务：
         修改 Python 脚本：改造 habitat_vel_control.py，让它支持多 Agent。你需要利用 habitat_sim.AgentConfig 实例化两个机器人。
-
-        话题隔离：使用 ROS Namespace。机器人 A 的所有话题前缀为 /robot1，机器人 B 为 /robot2。启动项配置：编写一个新的 launch 文件，同时启动两个 exploration_manager 实例，分别指向不同的命名空间。
+	话题隔离：使用 ROS Namespace。机器人 A 的所有话题前缀为 /robot1，机器人 B 为 /robot2。启动项配置：编写一个新的 launch 文件，同时启动两个 exploration_manager 实例，	分别指向不同的命名空间。
 
 具体操作：
         1.核心：修改 Python 桥接层 (real_world_test_habitat.py)
@@ -12,7 +11,7 @@
             b.引入机器人 ID 参数：用于区分不同的机器人实例。
         2.启动逻辑：修改 Launch 文件 (exploration_traj.launch)
           修改要点：
-            a.使用 <group> 标签：为每个机器人建立独立的运行空间。
+            a.使用  标签：为每个机器人建立独立的运行空间。
             b.重映射全局话题：如 /tf 和 /tf_static 是全局的，不需要动，但私有数据话题（odom, depth）必须区分。
         3.可视化逻辑： (exploration_fsm_traj.cpp)
           修改要点：
