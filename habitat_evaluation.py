@@ -10,13 +10,16 @@ evaluation metrics.
 Supports both single-agent and multi-agent configurations.
 
 Usage:
-    # Run with HM3D-v1 dataset
+    # Run with HM3D-v1 dataset (single agent)
     python habitat_evaluation.py --dataset hm3dv1
 
-    # Run with HM3D-v2 dataset (default)
+    # Run with HM3D-v2 dataset (single agent, default)
     python habitat_evaluation.py --dataset hm3dv2
 
-    # Run with MP3D dataset
+    # Run with HM3D-v2 multi-agent (2 agents per episode)
+    python habitat_evaluation.py --dataset hm3dv2_multiagent
+
+    # Run with MP3D dataset (single agent)
     python habitat_evaluation.py --dataset mp3d
 
     # Test specific episode
@@ -118,9 +121,9 @@ def transform_rgb_bgr(image):
 def ros_action_callback(msg):
     """Callback for receiving actions from ROS planner.
 
-    Multi-agent: msg.data is expected to be a string in format
-    '{agent_index}:{action_code}' where agent_index is 0,1,... and action_code
-    is one of ACTION.STOP, ACTION.MOVE_FORWARD, etc.
+    Multi-agent encoding: action = agent_idx * 100 + action_code
+    Agent 0 sending MOVE_FORWARD (1):  raw = 0*100+1 = 1
+    Agent 1 sending TURN_LEFT (2):     raw = 1*100+2 = 102
     Single-agent: msg.data is the raw action code (backward compatible).
     """
     global global_action
@@ -151,17 +154,10 @@ def _parse_multi_agent_action(raw_action: int):
     """Parse raw action data into (agent_idx, action_code).
 
     Encoding: action = agent_idx * 100 + action_code
-    agent_idx = action // 100
-    action_code = action % 100
-
-    This allows a single /habitat/plan_action topic to carry actions for all agents.
-    Agent 0 sending MOVE_FORWARD (action=1): raw = 0*100+1 = 1
-    Agent 1 sending TURN_LEFT (action=2):   raw = 1*100+2 = 102
 
     Backward compatible: if raw < 10, it's single-agent (agent_idx=0).
     """
     if raw_action < 10:
-        # Single-agent mode or agent 0 with simple action
         return 0, raw_action
     agent_idx = raw_action // 100
     action_code = raw_action % 100
@@ -189,29 +185,21 @@ def _is_multi_agent(cfg: DictConfig) -> bool:
     return cfg.get("num_agents", 1) > 1
 
 
-def _setup_multi_agent_env(env: habitat.MultiAgentEnv, cfg: DictConfig, num_agents: int):
-    """
-    Assign per-agent start positions and rotations from episode metadata.
+def _setup_multi_agent_env(env, cfg: DictConfig):
+    """Assign per-agent start positions.
 
-    Strategy: agent_0 uses the episode's start_position/rotation.
-    agent_1 is placed at an offset position on the same navigable floor.
+    Strategy: agent_0 uses episode start_position; agent_1 is offset on same floor.
     """
     offset = cfg.get("multiagent", {}).get("agent_spawn_offset", 1.0)
     episode = env.current_episode
 
-    # Extract base start position from episode (agent_0's position)
     start_pos_0 = list(episode.start_position)
     start_rot_0 = list(episode.start_rotation)
-
-    # Compute agent_1 offset (shift along x-axis, same floor y)
     start_pos_1 = [start_pos_0[0] + offset, start_pos_0[1], start_pos_0[2]]
-    start_rot_1 = list(start_rot_0)
 
     try:
-        # Validate navigability for agent_1's start position
         pathfinder = env.sim.pathfinder
         if not pathfinder.is_navigable(start_pos_1):
-            # Try to find a nearby valid position
             found = False
             for search_offset in [offset, -offset, offset * 2, -offset * 2]:
                 candidate = [start_pos_0[0] + search_offset, start_pos_0[1], start_pos_0[2]]
@@ -220,18 +208,20 @@ def _setup_multi_agent_env(env: habitat.MultiAgentEnv, cfg: DictConfig, num_agen
                     found = True
                     break
             if not found:
-                # Fall back to same position (agents spawn together)
                 start_pos_1 = start_pos_0.copy()
     except Exception:
-        # Fall back to same position if pathfinder check fails
         start_pos_1 = start_pos_0.copy()
 
-    env.sim.set_agent_state(
-        start_pos_0, start_rot_0, agent_id="agent_0"
-    )
-    env.sim.set_agent_state(
-        start_pos_1, start_rot_1, agent_id="agent_1"
-    )
+    env.sim.set_agent_state(start_pos_0, start_rot_0, agent_id="agent_0")
+    env.sim.set_agent_state(start_pos_1, start_pos_0, agent_id="agent_1")
+
+
+def _build_agent_obs_dict(observations, multi_agent: bool, agent_names: list):
+    """Normalize observations to a dict keyed by agent name."""
+    if multi_agent:
+        return {name: observations[name] for name in agent_names}
+    else:
+        return {agent_names[0]: observations}
 
 
 def main(cfg: DictConfig) -> None:
@@ -272,21 +262,18 @@ def main(cfg: DictConfig) -> None:
     success_distance = cfg.habitat.task.measurements.success.success_distance
 
     detector_cfg = cfg.detector
-
     llm_cfg = cfg.llm
     llm_client = llm_cfg.llm_client
     llm_answer_path = llm_cfg.llm_answer_path
     llm_response_path = llm_cfg.llm_response_path
 
-    # Single test parameters
-    env_num_once = cfg.test_epi_num  # Which episode to test for single run
-    flag_once = env_num_once != -1  # Whether to run single test
+    env_num_once = cfg.test_epi_num
+    flag_once = env_num_once != -1
 
-    # Create directories if they don't exist
     os.makedirs(os.path.dirname(llm_answer_path), exist_ok=True)
     os.makedirs(video_output_path, exist_ok=True)
 
-    # Add top_down_map and collisions visualization
+    # Add measurements
     with habitat.config.read_write(cfg):
         cfg.habitat.task.measurements.update(
             {
@@ -300,16 +287,14 @@ def main(cfg: DictConfig) -> None:
                     draw_goal_positions=True,
                     draw_goal_aabbs=False,
                     fog_of_war=FogOfWarConfig(
-                        draw=True,
-                        visibility_dist=5.0,
-                        fov=79,
+                        draw=True, visibility_dist=5.0, fov=79
                     ),
                 ),
                 "collisions": CollisionsMeasurementConfig(),
             }
         )
 
-    # ── Multi-agent or single-agent env creation ──
+    # ── Create environment ──
     if multi_agent:
         env = habitat.MultiAgentEnv(cfg)
         print(f"Multi-agent environment created with {num_agents} agents")
@@ -318,7 +303,7 @@ def main(cfg: DictConfig) -> None:
         print("Environment creation successful")
     number_of_episodes = env.number_of_episodes
 
-    # Read previous records and set initial values
+    # Read previous records
     (
         num_total,
         num_success,
@@ -341,16 +326,13 @@ def main(cfg: DictConfig) -> None:
         env_count -= 1
 
     # ── ROS Setup ──
-    # Multi-agent: create per-agent publishers, single-agent: use default topics
     if multi_agent:
         ros_pubs = {}
         for agent_name in agent_names:
             ros_pubs[agent_name] = habitat_publisher.ROSPublisher(agent_name)
-        # Subscribe to per-agent action callbacks
         for agent_idx in range(num_agents):
             topic = _get_agent_action_index(agent_idx)
             rospy.Subscriber(topic, Int32, ros_action_callback, queue_size=10)
-        # Use agent_0's pub as the primary for shared messages
         ros_pub = ros_pubs[agent_names[0]]
     else:
         obj_point_cloud_pub = rospy.Publisher(
@@ -373,7 +355,6 @@ def main(cfg: DictConfig) -> None:
     record_pub = rospy.Publisher("/habitat/record", Float32MultiArray, queue_size=10)
 
     for epi in range(number_of_episodes - num_total):
-        # Publish progress information
         publish_int32_array(progress_pub, [num_total, number_of_episodes])
 
         if flag_once:
@@ -388,7 +369,6 @@ def main(cfg: DictConfig) -> None:
                 "global_action": None,
                 "count_steps": 0,
                 "camera_pitch": 0.0,
-                "msg_observations": None,
                 "pass_object": 0.0,
                 "near_object": 0.0,
                 "success": 0.0,
@@ -400,7 +380,7 @@ def main(cfg: DictConfig) -> None:
                 "finished": False,
             }
 
-        # ── LLM answer (shared across agents for the same target) ──
+        # ── LLM answer (shared across agents) ──
         label = env.current_episode.object_category
         if label in category_to_coco:
             coco_id = category_to_coco[label]
@@ -413,41 +393,41 @@ def main(cfg: DictConfig) -> None:
         # ── Episode init ──
         observations = env.reset()
 
-        # Multi-agent: setup per-agent start positions
         if multi_agent:
-            _setup_multi_agent_env(env, cfg, num_agents)
-            observations = env.reset()  # Reset again after repositioning agents
+            _setup_multi_agent_env(env, cfg)
+            observations = env.reset()
 
+        # Normalize observations dict
+        agent_obs_dict = _build_agent_obs_dict(observations, multi_agent, agent_names)
         for agent_name in agent_names:
-            agent_obs = observations[agent_name] if multi_agent else observations
-            agent_obs["camera_pitch"] = 0.0
-            agent_states[agent_name]["msg_observations"] = deepcopy(agent_obs)
-
-            # Initialize video frames
-            agent_info = {}
-            if multi_agent:
-                # For multi-agent, get per-agent metrics if available
-                metrics = env.get_metrics()
-                if isinstance(metrics, dict):
-                    agent_info = metrics.get(agent_name, metrics)
-            else:
-                agent_info = env.get_metrics()
+            agent_obs_dict[agent_name]["camera_pitch"] = 0.0
+            info = {}
+            metrics = env.get_metrics()
+            if multi_agent and isinstance(metrics, dict):
+                info = metrics.get(agent_name, metrics)
+            elif not multi_agent:
+                info = metrics
             if need_video:
-                frame = observations_to_image(agent_obs, agent_info)
-                if "top_down_map" in agent_info:
-                    agent_info.pop("top_down_map")
-                frame = overlay_frame(frame, agent_info)
+                frame = observations_to_image(agent_obs_dict[agent_name], info)
+                if "top_down_map" in info:
+                    info.pop("top_down_map")
+                frame = overlay_frame(frame, info)
                 agent_states[agent_name]["vis_frames"].append(frame)
 
-        # Start publishing basic information and trigger messages
-        pub_timer = rospy.Timer(rospy.Duration(0.25), publish_observations)
+        # Trigger publishing timer
+        trigger_pub_timer = rospy.Timer(
+            rospy.Duration(0.25),
+            lambda event: (
+                publish_float64(confidence_threshold_pub, fusion_threshold),
+                trigger_pub.publish(PoseStamped()),
+            ),
+        )
 
         print(f"Agents are waiting in the environment! Target: [{label}]")
         if multi_agent:
             print(f"  Agents: {', '.join(agent_names)}")
             print(f"  Termination policy: {termination_policy}")
 
-        # Wait for ROS system to be ready
         rate = rospy.Rate(10)
         ros_state = ROS_STATE.INIT
         while ros_state == ROS_STATE.INIT or ros_state == ROS_STATE.WAIT_TRIGGER:
@@ -457,7 +437,7 @@ def main(cfg: DictConfig) -> None:
                 print("Waiting for ROS trigger...")
             rate.sleep()
 
-        pub_timer.shutdown()
+        trigger_pub_timer.shutdown()
         print("Agents are ready to go!!!!")
 
         # ── Main episode loop ──
@@ -465,18 +445,16 @@ def main(cfg: DictConfig) -> None:
         global_action = None
 
         while not rospy.is_shutdown():
-            # Check episode termination
+            # ── Termination check ──
             if multi_agent:
                 if termination_policy == "cooperative":
-                    # Episode ends when ANY agent succeeds or ALL time out
                     any_finished = any(
                         agent_states[a]["finished"] or agent_states[a]["count_steps"] >= max_episode_steps
                         for a in agent_names
                     )
                     if any_finished:
                         break
-                else:  # independent
-                    # Episode ends when ALL agents are done
+                else:
                     all_done = all(
                         agent_states[a]["finished"] or agent_states[a]["count_steps"] >= max_episode_steps
                         for a in agent_names
@@ -484,7 +462,6 @@ def main(cfg: DictConfig) -> None:
                     if all_done:
                         break
             else:
-                # Skip episode if target is not on the same floor
                 is_feasible = 0
                 for goal in env.current_episode.goals:
                     height = goal.position[1]
@@ -493,26 +470,23 @@ def main(cfg: DictConfig) -> None:
                     )
                 if not is_feasible:
                     break
-                # Single agent: check if episode is already marked done
-                # (episode_over is set after an env.step call)
 
-            # ── Parse actions from planner ──
+            # ── Parse actions ──
             if global_action is not None:
                 if multi_agent:
                     agent_idx, action_code = _parse_multi_agent_action(global_action)
                     if agent_idx < num_agents:
-                        agent_name = f"agent_{agent_idx}"
-                        if agent_states[agent_name]["count_steps"] == max_episode_steps - 1:
+                        aname = f"agent_{agent_idx}"
+                        if agent_states[aname]["count_steps"] == max_episode_steps - 1:
                             action_code = ACTION.STOP
-                        agent_states[agent_name]["global_action"] = action_code
+                        agent_states[aname]["global_action"] = action_code
                 else:
-                    # Single-agent mode
                     if agent_states[agent_names[0]]["count_steps"] == max_episode_steps - 1:
                         global_action = ACTION.STOP
                     agent_states[agent_names[0]]["global_action"] = global_action
                 global_action = None
 
-            # ── Build action dict and execute steps ──
+            # ── Build action dict / single action ──
             action_dict = {} if multi_agent else None
             single_action = None
             any_agent_acting = False
@@ -520,10 +494,7 @@ def main(cfg: DictConfig) -> None:
             for agent_name in agent_names:
                 ast = agent_states[agent_name]
                 g_action = ast.pop("global_action", None)
-
                 if g_action is None:
-                    if multi_agent:
-                        pass  # This agent won't act this cycle
                     continue
 
                 any_agent_acting = True
@@ -537,10 +508,10 @@ def main(cfg: DictConfig) -> None:
                     action = HabitatSimActions.turn_right
                 elif g_action == ACTION.TURN_DOWN:
                     action = HabitatSimActions.look_down
-                    ast["camera_pitch"] = ast["camera_pitch"] - np.pi / 6.0
+                    ast["camera_pitch"] -= np.pi / 6.0
                 elif g_action == ACTION.TURN_UP:
                     action = HabitatSimActions.look_up
-                    ast["camera_pitch"] = ast["camera_pitch"] + np.pi / 6.0
+                    ast["camera_pitch"] += np.pi / 6.0
                 elif g_action == ACTION.STOP:
                     action = HabitatSimActions.stop
                     ast["finished"] = True
@@ -554,11 +525,10 @@ def main(cfg: DictConfig) -> None:
                 rate.sleep()
                 continue
 
-            # ── Execute step(s) ──
+            # ── Execute step ──
             publish_int32(state_pub, HABITAT_STATE.ACTION_EXEC)
 
             if multi_agent:
-                # Filter out agents that have already finished
                 active_actions = {
                     k: v for k, v in action_dict.items()
                     if not agent_states[k]["finished"]
@@ -566,114 +536,100 @@ def main(cfg: DictConfig) -> None:
                 observations = env.step(active_actions) if active_actions else observations
             else:
                 observations = env.step(single_action)
+                if env.episode_over:
+                    break
 
-            # ── Process results for all agents ──
-            ast_main = agent_states[agent_names[0]]
-            ast_main["count_steps"] += 1
-            print(f"\n--------------Step: {ast_main['count_steps']}--------------")
-
-            # Multi-agent info
+            # ── Process per-agent results ──
             if multi_agent:
-                agt_metrics = env.get_metrics()
-                if isinstance(agt_metrics, dict):
-                    best_agent = None
-                    best_dist = float("inf")
-                    for agent_name in agent_names:
-                        ast = agent_states[agent_name]
-                        ast["count_steps"] += 1
-                        agent_obs = observations.get(agent_name, {})
+                metrics = env.get_metrics()
+                best_agent = None
+                best_dist = float("inf")
 
-                        agent_info = agt_metrics.get(agent_name, {})
-                        dtg = agent_info.get("distance_to_goal", 999.0)
-                        ast["distance_to_goal"] = min(ast["distance_to_goal"], dtg)
+                for agent_name in agent_names:
+                    ast = agent_states[agent_name]
+                    ast["count_steps"] += 1
+                    agent_obs = observations.get(agent_name, {})
 
-                        if dtg <= success_distance:
-                            ast["near_object"] = 1
-                            ast["pass_object"] = max(ast["pass_object"], 1)
-                            if agent_info.get("success", 0) == 1:
-                                ast["success"] = 1
-                                ast["finished"] = True
+                    agent_info = metrics.get(agent_name, {}) if isinstance(metrics, dict) else metrics
+                    dtg = agent_info.get("distance_to_goal", 999.0)
+                    ast["distance_to_goal"] = min(ast["distance_to_goal"], dtg)
 
-                        ast["spl"] = agent_info.get("spl", 0.0)
-                        ast["soft_spl"] = agent_info.get("soft_spl", 0.0)
-                        ast["distance_to_goal_reward"] = agent_info.get(
-                            "distance_to_goal_reward", 0.0
-                        )
+                    if dtg <= success_distance:
+                        ast["near_object"] = 1
+                        ast["pass_object"] = max(ast["pass_object"], 1)
+                        if agent_info.get("success", 0) == 1:
+                            ast["success"] = 1
+                            ast["finished"] = True
 
-                        if dtg < best_dist:
-                            best_dist = dtg
-                            best_agent = agent_name
+                    ast["spl"] = agent_info.get("spl", 0.0)
+                    ast["soft_spl"] = agent_info.get("soft_spl", 0.0)
+                    ast["distance_to_goal_reward"] = agent_info.get(
+                        "distance_to_goal_reward", 0.0
+                    )
 
-                        # ITM (computed for the best agent only to save bandwidth)
-                        cosine = get_itm_message_cosine(
-                            agent_obs.get("rgb", np.zeros((480, 640, 3), dtype=np.uint8)),
-                            label, room
-                        )
-                        publish_float64(itm_score_pub, cosine)
+                    if dtg < best_dist:
+                        best_dist = dtg
+                        best_agent = agent_name
 
-                        # Object detection
-                        img_np = agent_obs.get("rgb", np.zeros((480, 640, 3), dtype=np.uint8))
-                        det_img, score_list, object_masks_list, label_list = get_object(
-                            label, img_np, detector_cfg, llm_answer
-                        )
-                        agent_obs["camera_pitch"] = ast["camera_pitch"]
-                        ros_pubs[agent_name].habitat_publish_ros_topic(agent_obs)
+                    # ITM score
+                    img_np = agent_obs.get("rgb", np.zeros((480, 640, 3), dtype=np.uint8))
+                    cosine = get_itm_message_cosine(img_np, label, room)
+                    publish_float64(itm_score_pub, cosine)
 
-                        # Point clouds
-                        obj_point_cloud_list = get_object_point_cloud(
-                            cfg, agent_obs, object_masks_list
-                        )
-                        cld_with_score_msg = MultipleMasksWithConfidence()
-                        cld_with_score_msg.point_clouds = obj_point_cloud_list
-                        cld_with_score_msg.confidence_scores = score_list
-                        cld_with_score_msg.label_indices = label_list
-                        cld_with_score_pub.publish(cld_with_score_msg)
+                    # Object detection
+                    det_img, score_list, object_masks_list, label_list = get_object(
+                        label, img_np, detector_cfg, llm_answer
+                    )
+                    agent_obs["camera_pitch"] = ast["camera_pitch"]
+                    ros_pubs[agent_name].habitat_publish_ros_topic(agent_obs)
 
-                        # Video frames
-                        if need_video:
-                            frame = observations_to_image(agent_obs, agent_info)
-                            if "top_down_map" in agent_info:
-                                agent_info.pop("top_down_map")
-                            frame = overlay_frame(frame, agent_info)
-                            ast["vis_frames"].append(frame)
+                    # Point clouds
+                    obj_point_cloud_list = get_object_point_cloud(
+                        cfg, agent_obs, object_masks_list
+                    )
+                    cld_msg = MultipleMasksWithConfidence()
+                    cld_msg.point_clouds = obj_point_cloud_list
+                    cld_msg.confidence_scores = score_list
+                    cld_msg.label_indices = label_list
+                    cld_with_score_pub.publish(cld_msg)
 
-                    print(f"  Best agent: {best_agent} (dist={best_dist:.3f})")
-                else:
-                    # Metrics not per-agent (fallback)
-                    pass
+                    # Video
+                    if need_video:
+                        frame = observations_to_image(agent_obs, agent_info)
+                        if isinstance(agent_info, dict) and "top_down_map" in agent_info:
+                            agent_info.pop("top_down_map")
+                        frame = overlay_frame(frame, agent_info)
+                        ast["vis_frames"].append(frame)
 
+                print(f"\n--------------Step: {agent_states[agent_names[0]]['count_steps']}--------------")
+                print(f"  Best agent: {best_agent} (dist={best_dist:.3f})")
                 publish_int32(state_pub, HABITAT_STATE.ACTION_FINISH)
             else:
-                # ── Single-agent processing (original logic) ──
-                ast = ast_main
+                # ── Single-agent processing ──
+                ast = agent_states[agent_names[0]]
+                ast["count_steps"] += 1
                 info = env.get_metrics()
 
-                # ITM cosine similarity
                 cosine = get_itm_message_cosine(observations["rgb"], label, room)
                 print(f"Target related room: {room}")
                 print(f"ITM cosine similarity: {cosine:.3f}")
                 publish_float64(itm_score_pub, cosine)
 
-                # Object detection
                 observations["rgb"], score_list, object_masks_list, label_list = get_object(
                     label, observations["rgb"], detector_cfg, llm_answer
                 )
 
-                # Publish habitat observations
                 observations["camera_pitch"] = ast["camera_pitch"]
-                ast["msg_observations"] = deepcopy(observations)
-                ros_pub.habitat_publish_ros_topic(ast["msg_observations"])
+                ros_pub.habitat_publish_ros_topic(observations)
 
-                # Point clouds
-                cld_with_score_msg = MultipleMasksWithConfidence()
-                cld_with_score_msg.point_clouds = get_object_point_cloud(
+                cld_msg = MultipleMasksWithConfidence()
+                cld_msg.point_clouds = get_object_point_cloud(
                     cfg, observations, object_masks_list
                 )
-                cld_with_score_msg.confidence_scores = score_list
-                cld_with_score_msg.label_indices = label_list
-                cld_with_score_pub.publish(cld_with_score_msg)
+                cld_msg.confidence_scores = score_list
+                cld_msg.label_indices = label_list
+                cld_with_score_pub.publish(cld_msg)
 
-                # Metrics
                 ast["distance_to_goal"] = info["distance_to_goal"]
                 if ast["distance_to_goal"] <= success_distance and ast["pass_object"] == 0:
                     ast["pass_object"] = 1
@@ -682,16 +638,11 @@ def main(cfg: DictConfig) -> None:
                 ast["soft_spl"] = info["soft_spl"]
                 ast["distance_to_goal_reward"] = info["distance_to_goal_reward"]
 
-                # Video
                 if need_video:
                     frame = observations_to_image(observations, info)
                     info.pop("top_down_map")
                     frame = overlay_frame(frame, info)
                     ast["vis_frames"].append(frame)
-
-                # Check for episode_over (set by env.step)
-                if env.episode_over:
-                    break
 
                 print(f"Finding [{label}]; Action: {single_action};")
                 publish_int32(state_pub, HABITAT_STATE.ACTION_FINISH)
@@ -703,7 +654,6 @@ def main(cfg: DictConfig) -> None:
 
         # Aggregate metrics
         if multi_agent:
-            # Cooperative: success if any agent succeeded
             any_success = any(agent_states[a]["success"] == 1 for a in agent_names)
             best_agent = min(agent_names, key=lambda a: agent_states[a]["distance_to_goal"])
             spl = agent_states[best_agent]["spl"]
@@ -711,9 +661,13 @@ def main(cfg: DictConfig) -> None:
             distance_to_goal = agent_states[best_agent]["distance_to_goal"]
             distance_to_goal_reward = agent_states[best_agent]["distance_to_goal_reward"]
             success = 1 if any_success else 0
-
-            # Choose frames from best agent for video
             best_ast = agent_states[best_agent]
+
+            print(f"\n------ Episode End ------")
+            for agent_name in agent_names:
+                ast = agent_states[agent_name]
+                print(f"  {agent_name}: steps={ast['count_steps']}, "
+                      f"dist={ast['distance_to_goal']:.3f}, success={ast['success']}")
         else:
             ast = agent_states[agent_names[0]]
             spl = ast["spl"]
@@ -746,7 +700,6 @@ def main(cfg: DictConfig) -> None:
         distance_to_goal_all += distance_to_goal
         distance_to_goal_reward_all += distance_to_goal_reward
 
-        # Video generation
         scene_id = env.current_episode.scene_id
         episode_id = env.current_episode.episode_id
         video_name = f"{os.path.basename(scene_id)}_{episode_id}"
@@ -761,9 +714,8 @@ def main(cfg: DictConfig) -> None:
             images_to_video(
                 best_ast["vis_frames"], img2video_output_path, video_name, fps=6, quality=9
             )
-        vis_frames = []
 
-        # Display average performance metrics
+        # Display metrics
         table1 = PrettyTable(["Metric", "Average"])
         table1.add_row(["Average Success", f"{num_success/num_total * 100:.2f}%"])
         table1.add_row(["Average SPL", f"{spl_all/num_total * 100:.2f}%"])
@@ -775,17 +727,12 @@ def main(cfg: DictConfig) -> None:
             table1.add_row(["Termination Policy", termination_policy])
             for agent_name in agent_names:
                 ast = agent_states[agent_name]
-                table1.add_row(
-                    [f"{agent_name} steps", ast["count_steps"]]
-                )
-                table1.add_row(
-                    [f"{agent_name} success", "Yes" if ast["success"] == 1 else "No"]
-                )
+                table1.add_row([f"{agent_name} steps", ast["count_steps"]])
+                table1.add_row([f"{agent_name} success", "Yes" if ast["success"] == 1 else "No"])
         print(table1)
         print(f"Episode {num_total} data written to {record_file_path}")
         print(f"Result: {result_text}")
 
-        # Display total performance metrics
         table2 = PrettyTable(["Metric", "Total"])
         table2.add_row(["Total Success", f"{num_success}"])
         table2.add_row(["Total SPL", f"{spl_all:.2f}"])
@@ -795,38 +742,20 @@ def main(cfg: DictConfig) -> None:
         if flag_once:
             break
 
-        # Write results to record file
         write_record(
-            scene_id,
-            episode_id,
-            table1,
-            result_text,
-            label,
-            num_total,
-            time_spend,
-            record_file_path,
+            scene_id, episode_id, table1, result_text, label, num_total,
+            time_spend, record_file_path,
+        )
+        write_record(
+            scene_id, episode_id, table2, result_text, label, num_total,
+            time_spend, continue_path,
         )
 
-        # Write results to continue file
-        write_record(
-            scene_id,
-            episode_id,
-            table2,
-            result_text,
-            label,
-            num_total,
-            time_spend,
-            continue_path,
-        )
-
-        # Count files in each result category folder
         for i in range(len(RESULT_TYPES)):
             folder = RESULT_TYPES[i]
             folder_path = os.path.join(video_output_path, folder)
-            file_count = count_files_in_directory(folder_path)
-            result_list[i] = file_count
+            result_list[i] = count_files_in_directory(folder_path)
 
-        # Publish comprehensive record data
         record_data = [
             num_success / num_total * 100,
             spl_all / num_total * 100,

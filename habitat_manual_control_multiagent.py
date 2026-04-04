@@ -88,7 +88,7 @@ def publish_observations(event):
 
 def _parse_dataset_arg():
     parser = argparse.ArgumentParser(description="Habitat Multi-Agent Manual Runner", add_help=True)
-    parser.add_argument("--dataset", type=str, choices=["hm3dv1", "hm3dv2", "mp3d", "hm3dv2_multiagent"], default="hm3dv2_multiagent")
+    parser.add_argument("--dataset", type=str, choices=["hm3dv1", "hm3dv2", "mp3d", "hm3dv2_multiagent", "mp3d_multiagent"], default="hm3dv2_multiagent")
     parser.add_argument("--num_agents", type=int, default=2, help="Number of agents")
     args, unknown = parser.parse_known_args()
     return args.dataset, unknown
