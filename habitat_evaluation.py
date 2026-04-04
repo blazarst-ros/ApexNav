@@ -7,6 +7,8 @@ real-time planning and decision making, incorporates vision-language models
 for object detection and image-text matching, and generates comprehensive
 evaluation metrics.
 
+Supports both single-agent and multi-agent configurations.
+
 Usage:
     # Run with HM3D-v1 dataset
     python habitat_evaluation.py --dataset hm3dv1
@@ -113,18 +115,14 @@ def transform_rgb_bgr(image):
     return image[:, :, [2, 1, 0]]
 
 
-def publish_observations(event):
-    """Timer callback to publish habitat observations and trigger messages"""
-    global msg_observations, fusion_threshold
-    global ros_pub, trigger_pub, confidence_threshold_pub
-    tmp = deepcopy(msg_observations)
-    ros_pub.habitat_publish_ros_topic(tmp)
-    publish_float64(confidence_threshold_pub, fusion_threshold)
-    trigger = PoseStamped()
-    trigger_pub.publish(trigger)
-
-
 def ros_action_callback(msg):
+    """Callback for receiving actions from ROS planner.
+
+    Multi-agent: msg.data is expected to be a string in format
+    '{agent_index}:{action_code}' where agent_index is 0,1,... and action_code
+    is one of ACTION.STOP, ACTION.MOVE_FORWARD, etc.
+    Single-agent: msg.data is the raw action code (backward compatible).
+    """
     global global_action
     global_action = msg.data
 
@@ -144,6 +142,32 @@ def ros_expl_result_callback(msg):
     expl_result = msg.data
 
 
+def _get_agent_action_index(agent_idx: int) -> str:
+    """Generate the ROS topic suffix for a specific agent's action input."""
+    return f"/habitat/plan_action_agent_{agent_idx}"
+
+
+def _parse_multi_agent_action(raw_action: int):
+    """Parse raw action data into (agent_idx, action_code).
+
+    Encoding: action = agent_idx * 100 + action_code
+    agent_idx = action // 100
+    action_code = action % 100
+
+    This allows a single /habitat/plan_action topic to carry actions for all agents.
+    Agent 0 sending MOVE_FORWARD (action=1): raw = 0*100+1 = 1
+    Agent 1 sending TURN_LEFT (action=2):   raw = 1*100+2 = 102
+
+    Backward compatible: if raw < 10, it's single-agent (agent_idx=0).
+    """
+    if raw_action < 10:
+        # Single-agent mode or agent 0 with simple action
+        return 0, raw_action
+    agent_idx = raw_action // 100
+    action_code = raw_action % 100
+    return agent_idx, action_code
+
+
 def _parse_dataset_arg():
     """Parse CLI to choose dataset and capture remaining Hydra overrides."""
     parser = argparse.ArgumentParser(
@@ -152,19 +176,73 @@ def _parse_dataset_arg():
     parser.add_argument(
         "--dataset",
         type=str,
-        choices=["hm3dv1", "hm3dv2", "mp3d"],
+        choices=["hm3dv1", "hm3dv2", "mp3d", "hm3dv2_multiagent"],
         default="hm3dv2",
-        help="Choose dataset: hm3dv1, hm3dv2 or mp3d (default: hm3dv2)",
+        help="Choose dataset: hm3dv1, hm3dv2, hm3dv2_multiagent or mp3d (default: hm3dv2)",
     )
-    # Keep unknown so users can still pass Hydra-style overrides (e.g., key=value)
     args, unknown = parser.parse_known_args()
     return args.dataset, unknown
+
+
+def _is_multi_agent(cfg: DictConfig) -> bool:
+    """Check if the configuration is for multi-agent mode."""
+    return cfg.get("num_agents", 1) > 1
+
+
+def _setup_multi_agent_env(env: habitat.MultiAgentEnv, cfg: DictConfig, num_agents: int):
+    """
+    Assign per-agent start positions and rotations from episode metadata.
+
+    Strategy: agent_0 uses the episode's start_position/rotation.
+    agent_1 is placed at an offset position on the same navigable floor.
+    """
+    offset = cfg.get("multiagent", {}).get("agent_spawn_offset", 1.0)
+    episode = env.current_episode
+
+    # Extract base start position from episode (agent_0's position)
+    start_pos_0 = list(episode.start_position)
+    start_rot_0 = list(episode.start_rotation)
+
+    # Compute agent_1 offset (shift along x-axis, same floor y)
+    start_pos_1 = [start_pos_0[0] + offset, start_pos_0[1], start_pos_0[2]]
+    start_rot_1 = list(start_rot_0)
+
+    try:
+        # Validate navigability for agent_1's start position
+        pathfinder = env.sim.pathfinder
+        if not pathfinder.is_navigable(start_pos_1):
+            # Try to find a nearby valid position
+            found = False
+            for search_offset in [offset, -offset, offset * 2, -offset * 2]:
+                candidate = [start_pos_0[0] + search_offset, start_pos_0[1], start_pos_0[2]]
+                if pathfinder.is_navigable(candidate):
+                    start_pos_1 = candidate
+                    found = True
+                    break
+            if not found:
+                # Fall back to same position (agents spawn together)
+                start_pos_1 = start_pos_0.copy()
+    except Exception:
+        # Fall back to same position if pathfinder check fails
+        start_pos_1 = start_pos_0.copy()
+
+    env.sim.set_agent_state(
+        start_pos_0, start_rot_0, agent_id="agent_0"
+    )
+    env.sim.set_agent_state(
+        start_pos_1, start_rot_1, agent_id="agent_1"
+    )
 
 
 def main(cfg: DictConfig) -> None:
     global msg_observations, global_action, ros_state, fusion_threshold
     global ros_pub, trigger_pub, obj_point_cloud_pub, confidence_threshold_pub
     global final_state, expl_result
+
+    multi_agent = _is_multi_agent(cfg)
+    num_agents = cfg.get("num_agents", 1)
+    agent_names = [f"agent_{i}" for i in range(num_agents)]
+    termination_policy = cfg.get("multiagent", {}).get("episode_termination", "cooperative")
 
     # Load MP3D validation data for object category mapping
     with gzip.open(
@@ -231,8 +309,13 @@ def main(cfg: DictConfig) -> None:
             }
         )
 
-    env = habitat.Env(cfg)
-    print("Environment creation successful")
+    # ── Multi-agent or single-agent env creation ──
+    if multi_agent:
+        env = habitat.MultiAgentEnv(cfg)
+        print(f"Multi-agent environment created with {num_agents} agents")
+    else:
+        env = habitat.Env(cfg)
+        print("Environment creation successful")
     number_of_episodes = env.number_of_episodes
 
     # Read previous records and set initial values
@@ -257,12 +340,23 @@ def main(cfg: DictConfig) -> None:
         env.current_episode = next(env.episode_iterator)
         env_count -= 1
 
-    # Initialize ROS publishers, subscribers, and timers
-    obj_point_cloud_pub = rospy.Publisher(
-        "habitat/object_point_cloud", PointCloud2, queue_size=10
-    )
-    ros_pub = habitat_publisher.ROSPublisher()
-    rospy.Subscriber("/habitat/plan_action", Int32, ros_action_callback, queue_size=10)
+    # ── ROS Setup ──
+    # Multi-agent: create per-agent publishers, single-agent: use default topics
+    if multi_agent:
+        ros_pubs = {}
+        for agent_name in agent_names:
+            ros_pubs[agent_name] = habitat_publisher.ROSPublisher(agent_name)
+        # Subscribe to per-agent action callbacks
+        for agent_idx in range(num_agents):
+            topic = _get_agent_action_index(agent_idx)
+            rospy.Subscriber(topic, Int32, ros_action_callback, queue_size=10)
+        # Use agent_0's pub as the primary for shared messages
+        ros_pub = ros_pubs[agent_names[0]]
+    else:
+        obj_point_cloud_pub = rospy.Publisher(
+            "habitat/object_point_cloud", PointCloud2, queue_size=10
+        )
+        ros_pub = habitat_publisher.ROSPublisher()
     rospy.Subscriber("/ros/state", Int32, ros_state_callback, queue_size=10)
     rospy.Subscriber("/ros/expl_state", Int32, ros_final_state_callback, queue_size=10)
     rospy.Subscriber("/ros/expl_result", Int32, ros_expl_result_callback, queue_size=10)
@@ -287,43 +381,71 @@ def main(cfg: DictConfig) -> None:
                 env.current_episode = next(env.episode_iterator)
                 env_count -= 1
 
-        # Initialize episode variables
-        pass_object = 0.0
-        near_object = 0.0
-        global_action = None
-        cld_with_score_msg = MultipleMasksWithConfidence()
-        count_steps = 0
+        # ── Per-agent state ──
+        agent_states = {}
+        for agent_name in agent_names:
+            agent_states[agent_name] = {
+                "global_action": None,
+                "count_steps": 0,
+                "camera_pitch": 0.0,
+                "msg_observations": None,
+                "pass_object": 0.0,
+                "near_object": 0.0,
+                "success": 0.0,
+                "spl": 0.0,
+                "soft_spl": 0.0,
+                "distance_to_goal": 999.0,
+                "distance_to_goal_reward": 0.0,
+                "vis_frames": [],
+                "finished": False,
+            }
 
-        camera_pitch = 0.0
-        observations = env.reset()
-        observations["camera_pitch"] = camera_pitch
-        msg_observations = deepcopy(observations)
-        del observations["camera_pitch"]
+        # ── LLM answer (shared across agents for the same target) ──
         label = env.current_episode.object_category
-
-        # Convert object category to coco name format
         if label in category_to_coco:
             coco_id = category_to_coco[label]
             label = id_to_name.get(coco_id, label)
 
-        # Get LLM answer and fusion threshold for the target object
         llm_answer, room, fusion_threshold = read_answer(
             llm_answer_path, llm_response_path, label, llm_client
         )
 
-        # Initialize video frame collection
-        vis_frames = []
-        info = env.get_metrics()
-        if need_video:
-            frame = observations_to_image(observations, info)
-            info.pop("top_down_map")
-            frame = overlay_frame(frame, info)
-            vis_frames = [frame]
+        # ── Episode init ──
+        observations = env.reset()
+
+        # Multi-agent: setup per-agent start positions
+        if multi_agent:
+            _setup_multi_agent_env(env, cfg, num_agents)
+            observations = env.reset()  # Reset again after repositioning agents
+
+        for agent_name in agent_names:
+            agent_obs = observations[agent_name] if multi_agent else observations
+            agent_obs["camera_pitch"] = 0.0
+            agent_states[agent_name]["msg_observations"] = deepcopy(agent_obs)
+
+            # Initialize video frames
+            agent_info = {}
+            if multi_agent:
+                # For multi-agent, get per-agent metrics if available
+                metrics = env.get_metrics()
+                if isinstance(metrics, dict):
+                    agent_info = metrics.get(agent_name, metrics)
+            else:
+                agent_info = env.get_metrics()
+            if need_video:
+                frame = observations_to_image(agent_obs, agent_info)
+                if "top_down_map" in agent_info:
+                    agent_info.pop("top_down_map")
+                frame = overlay_frame(frame, agent_info)
+                agent_states[agent_name]["vis_frames"].append(frame)
 
         # Start publishing basic information and trigger messages
         pub_timer = rospy.Timer(rospy.Duration(0.25), publish_observations)
 
-        print("Agent is waiting in the environment!!!")
+        print(f"Agents are waiting in the environment! Target: [{label}]")
+        if multi_agent:
+            print(f"  Agents: {', '.join(agent_names)}")
+            print(f"  Termination policy: {termination_policy}")
 
         # Wait for ROS system to be ready
         rate = rospy.Rate(10)
@@ -335,158 +457,311 @@ def main(cfg: DictConfig) -> None:
                 print("Waiting for ROS trigger...")
             rate.sleep()
 
-        # Stop timer publishing when starting action execution
         pub_timer.shutdown()
+        print("Agents are ready to go!!!!")
 
-        print("Agent is ready to go!!!!")
-
+        # ── Main episode loop ──
         rate = rospy.Rate(10)
-        while not rospy.is_shutdown() and not env.episode_over:
-            # Skip episode if target is not on the same floor
-            is_feasible = 0
-            for goal in env.current_episode.goals:
-                height = goal.position[1]
-                is_feasible += is_on_same_floor(
-                    height=height, episode=env.current_episode
-                )
-            if not is_feasible:
-                break
+        global_action = None
 
-            # Parse action from decision system
-            action = None
+        while not rospy.is_shutdown():
+            # Check episode termination
+            if multi_agent:
+                if termination_policy == "cooperative":
+                    # Episode ends when ANY agent succeeds or ALL time out
+                    any_finished = any(
+                        agent_states[a]["finished"] or agent_states[a]["count_steps"] >= max_episode_steps
+                        for a in agent_names
+                    )
+                    if any_finished:
+                        break
+                else:  # independent
+                    # Episode ends when ALL agents are done
+                    all_done = all(
+                        agent_states[a]["finished"] or agent_states[a]["count_steps"] >= max_episode_steps
+                        for a in agent_names
+                    )
+                    if all_done:
+                        break
+            else:
+                # Skip episode if target is not on the same floor
+                is_feasible = 0
+                for goal in env.current_episode.goals:
+                    height = goal.position[1]
+                    is_feasible += is_on_same_floor(
+                        height=height, episode=env.current_episode
+                    )
+                if not is_feasible:
+                    break
+                # Single agent: check if episode is already marked done
+                # (episode_over is set after an env.step call)
+
+            # ── Parse actions from planner ──
             if global_action is not None:
-                if count_steps == max_episode_steps - 1:
-                    global_action = ACTION.STOP
-
-                if global_action == ACTION.MOVE_FORWARD:
-                    action = HabitatSimActions.move_forward
-                elif global_action == ACTION.TURN_LEFT:
-                    action = HabitatSimActions.turn_left
-                elif global_action == ACTION.TURN_RIGHT:
-                    action = HabitatSimActions.turn_right
-                elif global_action == ACTION.TURN_DOWN:
-                    action = HabitatSimActions.look_down
-                    camera_pitch = camera_pitch - np.pi / 6.0
-                elif global_action == ACTION.TURN_UP:
-                    action = HabitatSimActions.look_up
-                    camera_pitch = camera_pitch + np.pi / 6.0
-                elif global_action == ACTION.STOP:
-                    action = HabitatSimActions.stop
-
+                if multi_agent:
+                    agent_idx, action_code = _parse_multi_agent_action(global_action)
+                    if agent_idx < num_agents:
+                        agent_name = f"agent_{agent_idx}"
+                        if agent_states[agent_name]["count_steps"] == max_episode_steps - 1:
+                            action_code = ACTION.STOP
+                        agent_states[agent_name]["global_action"] = action_code
+                else:
+                    # Single-agent mode
+                    if agent_states[agent_names[0]]["count_steps"] == max_episode_steps - 1:
+                        global_action = ACTION.STOP
+                    agent_states[agent_names[0]]["global_action"] = global_action
                 global_action = None
 
-            if action is None:
+            # ── Build action dict and execute steps ──
+            action_dict = {} if multi_agent else None
+            single_action = None
+            any_agent_acting = False
+
+            for agent_name in agent_names:
+                ast = agent_states[agent_name]
+                g_action = ast.pop("global_action", None)
+
+                if g_action is None:
+                    if multi_agent:
+                        pass  # This agent won't act this cycle
+                    continue
+
+                any_agent_acting = True
+                action = None
+
+                if g_action == ACTION.MOVE_FORWARD:
+                    action = HabitatSimActions.move_forward
+                elif g_action == ACTION.TURN_LEFT:
+                    action = HabitatSimActions.turn_left
+                elif g_action == ACTION.TURN_RIGHT:
+                    action = HabitatSimActions.turn_right
+                elif g_action == ACTION.TURN_DOWN:
+                    action = HabitatSimActions.look_down
+                    ast["camera_pitch"] = ast["camera_pitch"] - np.pi / 6.0
+                elif g_action == ACTION.TURN_UP:
+                    action = HabitatSimActions.look_up
+                    ast["camera_pitch"] = ast["camera_pitch"] + np.pi / 6.0
+                elif g_action == ACTION.STOP:
+                    action = HabitatSimActions.stop
+                    ast["finished"] = True
+
+                if multi_agent:
+                    action_dict[agent_name] = action
+                else:
+                    single_action = action
+
+            if not any_agent_acting:
+                rate.sleep()
                 continue
 
-            count_steps += 1
-            print(f"\n--------------Step: {count_steps}--------------")
-            print(f"Finding [{label}]; Action: {action};")
-
-            # Notify ROS system that action execution is starting
+            # ── Execute step(s) ──
             publish_int32(state_pub, HABITAT_STATE.ACTION_EXEC)
 
-            observations = env.step(action)
+            if multi_agent:
+                # Filter out agents that have already finished
+                active_actions = {
+                    k: v for k, v in action_dict.items()
+                    if not agent_states[k]["finished"]
+                }
+                observations = env.step(active_actions) if active_actions else observations
+            else:
+                observations = env.step(single_action)
 
-            # Calculate ITM cosine similarity score
-            cosine = get_itm_message_cosine(observations["rgb"], label, room)
-            print(f"Target related room: {room}")
-            print(f"ITM cosine similarity: {cosine:.3f}")
+            # ── Process results for all agents ──
+            ast_main = agent_states[agent_names[0]]
+            ast_main["count_steps"] += 1
+            print(f"\n--------------Step: {ast_main['count_steps']}--------------")
 
-            publish_float64(itm_score_pub, cosine)
+            # Multi-agent info
+            if multi_agent:
+                agt_metrics = env.get_metrics()
+                if isinstance(agt_metrics, dict):
+                    best_agent = None
+                    best_dist = float("inf")
+                    for agent_name in agent_names:
+                        ast = agent_states[agent_name]
+                        ast["count_steps"] += 1
+                        agent_obs = observations.get(agent_name, {})
 
-            # Detect objects in the current observation
-            observations["rgb"], score_list, object_masks_list, label_list = get_object(
-                label, observations["rgb"], detector_cfg, llm_answer
-            )
+                        agent_info = agt_metrics.get(agent_name, {})
+                        dtg = agent_info.get("distance_to_goal", 999.0)
+                        ast["distance_to_goal"] = min(ast["distance_to_goal"], dtg)
 
-            # Publish habitat observations to ROS
-            observations["camera_pitch"] = camera_pitch
-            msg_observations = deepcopy(observations)
-            del observations["camera_pitch"]
-            ros_pub.habitat_publish_ros_topic(msg_observations)
+                        if dtg <= success_distance:
+                            ast["near_object"] = 1
+                            ast["pass_object"] = max(ast["pass_object"], 1)
+                            if agent_info.get("success", 0) == 1:
+                                ast["success"] = 1
+                                ast["finished"] = True
 
-            # Generate and publish object point clouds
-            obj_point_cloud_list = get_object_point_cloud(
-                cfg, observations, object_masks_list
-            )
+                        ast["spl"] = agent_info.get("spl", 0.0)
+                        ast["soft_spl"] = agent_info.get("soft_spl", 0.0)
+                        ast["distance_to_goal_reward"] = agent_info.get(
+                            "distance_to_goal_reward", 0.0
+                        )
 
-            # Publish detection-related information
-            cld_with_score_msg.point_clouds = obj_point_cloud_list
-            cld_with_score_msg.confidence_scores = score_list
-            cld_with_score_msg.label_indices = label_list
-            cld_with_score_pub.publish(cld_with_score_msg)
+                        if dtg < best_dist:
+                            best_dist = dtg
+                            best_agent = agent_name
 
-            # Generate video frame
-            info = env.get_metrics()
-            if need_video:
-                frame = observations_to_image(observations, info)
-                info.pop("top_down_map")
-                frame = overlay_frame(frame, info)
-                vis_frames.append(frame)
+                        # ITM (computed for the best agent only to save bandwidth)
+                        cosine = get_itm_message_cosine(
+                            agent_obs.get("rgb", np.zeros((480, 640, 3), dtype=np.uint8)),
+                            label, room
+                        )
+                        publish_float64(itm_score_pub, cosine)
 
-            # Track if agent has passed close to the target
-            distance_to_goal = info["distance_to_goal"]
-            if distance_to_goal <= success_distance and pass_object == 0:
-                pass_object = 1
+                        # Object detection
+                        img_np = agent_obs.get("rgb", np.zeros((480, 640, 3), dtype=np.uint8))
+                        det_img, score_list, object_masks_list, label_list = get_object(
+                            label, img_np, detector_cfg, llm_answer
+                        )
+                        agent_obs["camera_pitch"] = ast["camera_pitch"]
+                        ros_pubs[agent_name].habitat_publish_ros_topic(agent_obs)
 
-            # Notify ROS system that action execution is complete
-            publish_int32(state_pub, HABITAT_STATE.ACTION_FINISH)
+                        # Point clouds
+                        obj_point_cloud_list = get_object_point_cloud(
+                            cfg, agent_obs, object_masks_list
+                        )
+                        cld_with_score_msg = MultipleMasksWithConfidence()
+                        cld_with_score_msg.point_clouds = obj_point_cloud_list
+                        cld_with_score_msg.confidence_scores = score_list
+                        cld_with_score_msg.label_indices = label_list
+                        cld_with_score_pub.publish(cld_with_score_msg)
+
+                        # Video frames
+                        if need_video:
+                            frame = observations_to_image(agent_obs, agent_info)
+                            if "top_down_map" in agent_info:
+                                agent_info.pop("top_down_map")
+                            frame = overlay_frame(frame, agent_info)
+                            ast["vis_frames"].append(frame)
+
+                    print(f"  Best agent: {best_agent} (dist={best_dist:.3f})")
+                else:
+                    # Metrics not per-agent (fallback)
+                    pass
+
+                publish_int32(state_pub, HABITAT_STATE.ACTION_FINISH)
+            else:
+                # ── Single-agent processing (original logic) ──
+                ast = ast_main
+                info = env.get_metrics()
+
+                # ITM cosine similarity
+                cosine = get_itm_message_cosine(observations["rgb"], label, room)
+                print(f"Target related room: {room}")
+                print(f"ITM cosine similarity: {cosine:.3f}")
+                publish_float64(itm_score_pub, cosine)
+
+                # Object detection
+                observations["rgb"], score_list, object_masks_list, label_list = get_object(
+                    label, observations["rgb"], detector_cfg, llm_answer
+                )
+
+                # Publish habitat observations
+                observations["camera_pitch"] = ast["camera_pitch"]
+                ast["msg_observations"] = deepcopy(observations)
+                ros_pub.habitat_publish_ros_topic(ast["msg_observations"])
+
+                # Point clouds
+                cld_with_score_msg = MultipleMasksWithConfidence()
+                cld_with_score_msg.point_clouds = get_object_point_cloud(
+                    cfg, observations, object_masks_list
+                )
+                cld_with_score_msg.confidence_scores = score_list
+                cld_with_score_msg.label_indices = label_list
+                cld_with_score_pub.publish(cld_with_score_msg)
+
+                # Metrics
+                ast["distance_to_goal"] = info["distance_to_goal"]
+                if ast["distance_to_goal"] <= success_distance and ast["pass_object"] == 0:
+                    ast["pass_object"] = 1
+                ast["success"] = info["success"]
+                ast["spl"] = info["spl"]
+                ast["soft_spl"] = info["soft_spl"]
+                ast["distance_to_goal_reward"] = info["distance_to_goal_reward"]
+
+                # Video
+                if need_video:
+                    frame = observations_to_image(observations, info)
+                    info.pop("top_down_map")
+                    frame = overlay_frame(frame, info)
+                    ast["vis_frames"].append(frame)
+
+                # Check for episode_over (set by env.step)
+                if env.episode_over:
+                    break
+
+                print(f"Finding [{label}]; Action: {single_action};")
+                publish_int32(state_pub, HABITAT_STATE.ACTION_FINISH)
+
             rate.sleep()
 
-        # Notify ROS system that current episode evaluation is complete
+        # ── Episode-end processing ──
         publish_int32(state_pub, HABITAT_STATE.EPISODE_FINISH)
 
-        # Collect evaluation metrics
-        info = env.get_metrics()
-        spl = info["spl"]
-        soft_spl = info["soft_spl"]
-        distance_to_goal = info["distance_to_goal"]
-        distance_to_goal_reward = info["distance_to_goal_reward"]
-        success = info["success"]
+        # Aggregate metrics
+        if multi_agent:
+            # Cooperative: success if any agent succeeded
+            any_success = any(agent_states[a]["success"] == 1 for a in agent_names)
+            best_agent = min(agent_names, key=lambda a: agent_states[a]["distance_to_goal"])
+            spl = agent_states[best_agent]["spl"]
+            soft_spl = agent_states[best_agent]["soft_spl"]
+            distance_to_goal = agent_states[best_agent]["distance_to_goal"]
+            distance_to_goal_reward = agent_states[best_agent]["distance_to_goal_reward"]
+            success = 1 if any_success else 0
 
-        # Check if agent got close to the target object
-        if distance_to_goal <= success_distance:
-            near_object = 1
+            # Choose frames from best agent for video
+            best_ast = agent_states[best_agent]
+        else:
+            ast = agent_states[agent_names[0]]
+            spl = ast["spl"]
+            soft_spl = ast["soft_spl"]
+            distance_to_goal = ast["distance_to_goal"]
+            distance_to_goal_reward = ast["distance_to_goal_reward"]
+            success = ast["success"]
+            best_ast = ast
 
-        # Determine episode result
+        near_object = 1 if distance_to_goal <= success_distance else 0
+
         if success == 1:
             num_success += 1
             result_text = "success"
+            best_ast["near_object"] = 1
         else:
             result_text = check_failure(
                 env.current_episode,
                 final_state,
                 expl_result,
-                count_steps,
+                best_ast["count_steps"],
                 max_episode_steps,
-                pass_object,
-                near_object,
+                best_ast.get("pass_object", 0),
+                best_ast.get("near_object", 0),
             )
 
-        # Update cumulative statistics
         num_total += 1
         spl_all += spl
         soft_spl_all += soft_spl
         distance_to_goal_all += distance_to_goal
         distance_to_goal_reward_all += distance_to_goal_reward
 
-        # Generate video file
+        # Video generation
         scene_id = env.current_episode.scene_id
         episode_id = env.current_episode.episode_id
         video_name = f"{os.path.basename(scene_id)}_{episode_id}"
         time_spend = time.time() - start_time + last_time
 
         img2video_output_path = os.path.join(video_output_path, result_text)
-
         if flag_once:
             img2video_output_path = "videos"
             video_name = "video_once"
 
         if need_video:
             images_to_video(
-                vis_frames, img2video_output_path, video_name, fps=6, quality=9
+                best_ast["vis_frames"], img2video_output_path, video_name, fps=6, quality=9
             )
-        vis_frames.clear()
+        vis_frames = []
 
         # Display average performance metrics
         table1 = PrettyTable(["Metric", "Average"])
@@ -496,6 +771,16 @@ def main(cfg: DictConfig) -> None:
         table1.add_row(
             ["Average Distance to Goal", f"{distance_to_goal_all/num_total:.4f}"]
         )
+        if multi_agent:
+            table1.add_row(["Termination Policy", termination_policy])
+            for agent_name in agent_names:
+                ast = agent_states[agent_name]
+                table1.add_row(
+                    [f"{agent_name} steps", ast["count_steps"]]
+                )
+                table1.add_row(
+                    [f"{agent_name} success", "Yes" if ast["success"] == 1 else "No"]
+                )
         print(table1)
         print(f"Episode {num_total} data written to {record_file_path}")
         print(f"Result: {result_text}")
@@ -536,9 +821,9 @@ def main(cfg: DictConfig) -> None:
 
         # Count files in each result category folder
         for i in range(len(RESULT_TYPES)):
-            folder = RESULT_TYPES[i]  # Get current category (folder name)
-            folder_path = os.path.join(video_output_path, folder)  # Build folder path
-            file_count = count_files_in_directory(folder_path)  # Count files in folder
+            folder = RESULT_TYPES[i]
+            folder_path = os.path.join(video_output_path, folder)
+            file_count = count_files_in_directory(folder_path)
             result_list[i] = file_count
 
         # Publish comprehensive record data
@@ -553,7 +838,8 @@ def main(cfg: DictConfig) -> None:
 
         pbar.update()
         env.current_episode = next(env.episode_iterator)
-        rospy.sleep(0.1)  # wait a moment
+        if not multi_agent:
+            rospy.sleep(0.1)
 
     env.close()
     pbar.close()
@@ -566,7 +852,6 @@ if __name__ == "__main__":
     try:
         dataset, overrides = _parse_dataset_arg()
         cfg_name = f"habitat_eval_{dataset}"
-        # Compose the chosen config and pass through extra Hydra overrides
         with initialize(version_base=None, config_path="config"):
             cfg = compose(config_name=cfg_name, overrides=overrides)
         main(cfg)

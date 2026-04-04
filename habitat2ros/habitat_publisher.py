@@ -10,14 +10,23 @@ from copy import deepcopy
 
 
 class ROSPublisher:
-    def __init__(self):
-        # Create ROS publishers
-        self.depth_pub = rospy.Publisher("/habitat/camera_depth", Image, queue_size=10)
-        self.rgb_pub = rospy.Publisher("/habitat/camera_rgb", Image, queue_size=10)
-        self.odom_pub = rospy.Publisher("/habitat/odom", Odometry, queue_size=10)
-        self.pose_pub = rospy.Publisher("/habitat/sensor_pose", Odometry, queue_size=10)
+    def __init__(self, agent_name: str = "main_agent"):
+        """
+        Create ROS publishers with namespaced topics for a specific agent.
+
+        Args:
+            agent_name: Name of the agent (e.g., "agent_0", "agent_1", "main_agent").
+                        This becomes the namespace between /habitat/ and the topic name.
+        """
+        ns = agent_name
+        # Create ROS publishers (namespaced by agent)
+        self.depth_pub = rospy.Publisher(f"/habitat/{ns}/camera_depth", Image, queue_size=10)
+        self.rgb_pub = rospy.Publisher(f"/habitat/{ns}/camera_rgb", Image, queue_size=10)
+        self.odom_pub = rospy.Publisher(f"/habitat/{ns}/odom", Odometry, queue_size=10)
+        self.pose_pub = rospy.Publisher(f"/habitat/{ns}/sensor_pose", Odometry, queue_size=10)
         # Create cv_bridge object
         self.bridge = CvBridge()
+        self.agent_name = ns
 
     def publish_depth(self, ros_time, depth_image):
         depth_msg = self.bridge.cv2_to_imgmsg(depth_image, encoding="passthrough")
@@ -61,6 +70,14 @@ class ROSPublisher:
         self.pose_pub.publish(sensor_pose)
 
     def habitat_publish_ros_topic(self, observations):
+        """
+        Publish all habitat observations to namespaced ROS topics.
+
+        Args:
+            observations: Dictionary containing "depth", "rgb", "gps", "compass", "camera_pitch".
+                          For multi-agent, call this method once per agent with that agent's
+                          observations dict.
+        """
         depth_image = observations["depth"]
         rgb_image = observations["rgb"]
         gps = observations["gps"]
