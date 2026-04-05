@@ -69,7 +69,6 @@ constexpr double ROBOT_HEIGHT = 0.15;
 constexpr double ROBOT_RADIUS = 0.18;
 }  // namespace FSMConstantsReal
 
-class FastPlannerManager;
 class ExplorationManager;
 class PlanningVisualization;
 struct FSMParam;
@@ -108,7 +107,6 @@ class ExplorationFSMReal {
 private:
   /* Planning Utils */
   ros::NodeHandle nh_;
-  std::shared_ptr<FastPlannerManager> planner_manager_;
   std::shared_ptr<ExplorationManager> expl_manager_;
   std::shared_ptr<PlanningVisualization> visualization_;
 

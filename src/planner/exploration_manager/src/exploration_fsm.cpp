@@ -108,7 +108,7 @@ void ExplorationFSM::FSMCallback(const ros::TimerEvent& e)
         else {
           // Main planning phase
           ad.start_pt_ = ad.odom_pos_;
-          ad.start_yaw_(0) = ad.odom_yaw_;
+          ad.start_yaw_ = ad.odom_yaw_;
 
           auto t1 = ros::Time::now();
           ad.final_result_ = callActionPlanner(agent_idx);
@@ -164,7 +164,7 @@ int ExplorationFSM::callActionPlanner(int agent_idx)
   auto& ad = fd_->agent_[agent_idx];
   Eigen::Vector2d current_pos = Eigen::Vector2d(ad.start_pt_(0), ad.start_pt_(1));
   Eigen::Vector2d last_pos = Eigen::Vector2d(ad.last_start_pos_(0), ad.last_start_pos_(1));
-  double current_yaw = ad.start_yaw_(0);
+  double current_yaw = ad.start_yaw_;
   ad.last_start_pos_ = ad.start_pt_;
 
   // Reach the object - check if close enough to target object
@@ -267,7 +267,7 @@ int ExplorationFSM::callActionPlanner(int agent_idx)
   else if (ad.final_result_ == FINAL_RESULT::EXPLORE && !frontier_change_flag)
     ad.replan_flag_ = false;
 
-  expl_res = expl_manager_->planNextBestPoint(ad.start_pt_, ad.start_yaw_(0));
+  expl_res = expl_manager_->planNextBestPoint(ad.start_pt_, ad.start_yaw_);
 
   if (expl_res != EXPL_RESULT::EXPLORATION) {
     ad.replan_flag_ = true;
@@ -601,7 +601,7 @@ bool ExplorationFSM::updateFrontierAndObject()
   for (int i = 0; i < NUM_AGENTS; ++i) {
     Eigen::Vector2d agent_pos2d = Eigen::Vector2d(
         fd_->agent_[i].start_pt_(0), fd_->agent_[i].start_pt_(1));
-    change_flag |= frt_map->dormantSeenFrontiers(agent_pos2d, fd_->agent_[i].start_yaw_(0));
+    change_flag |= frt_map->dormantSeenFrontiers(agent_pos2d, fd_->agent_[i].start_yaw_);
   }
   frt_map->getFrontiers(ed->frontiers_, ed->frontier_averages_);
   frt_map->getDormantFrontiers(ed->dormant_frontiers_, ed->dormant_frontier_averages_);

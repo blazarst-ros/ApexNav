@@ -29,7 +29,6 @@ using std::unique_ptr;
 using std::vector;
 
 namespace apexnav_planner {
-// Centralized constants for ExplorationFSM (mirrors the style of FSMConstants in fsm2.h)
 namespace FSMConstants {
 // Timers (s)
 constexpr double EXEC_TIMER_DURATION = 0.01;
@@ -65,7 +64,6 @@ constexpr double ROBOT_HEIGHT = 0.15;
 constexpr double ROBOT_RADIUS = 0.18;
 }  // namespace FSMConstants
 
-class FastPlannerManager;
 class ExplorationManager;
 class PlanningVisualization;
 struct FSMParam;
@@ -78,7 +76,6 @@ class ExplorationFSM {
 private:
   /* Planning Utils */
   ros::NodeHandle nh_;
-  shared_ptr<FastPlannerManager> planner_manager_;
   shared_ptr<ExplorationManager> expl_manager_;
   vector<shared_ptr<PlanningVisualization>> visualization_;
 

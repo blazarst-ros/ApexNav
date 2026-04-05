@@ -26,7 +26,8 @@ struct AgentFSMData {
     odom_orient_ = Eigen::Quaterniond::Identity();
     odom_yaw_ = 0.0;
     start_pt_ = Eigen::Vector3d::Zero();
-    start_yaw_ = Eigen::Vector3d::Zero();
+    start_yaw_ = 0.0;
+    start_yaw_rate_ = 0.0;
     last_start_pos_ = Eigen::Vector3d(-100, -100, -100);
     last_next_pos_ = Eigen::Vector2d(-100, -100);
     newest_action_ = -1;
@@ -48,7 +49,9 @@ struct AgentFSMData {
   Eigen::Vector3d odom_pos_;
   Eigen::Quaterniond odom_orient_;
   double odom_yaw_;
-  Eigen::Vector3d start_pt_, start_yaw_;
+  Eigen::Vector3d start_pt_;
+  double start_yaw_;
+  double start_yaw_rate_;
   Eigen::Vector3d last_start_pos_;
   Eigen::Vector2d last_next_pos_;
   int newest_action_;

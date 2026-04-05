@@ -119,8 +119,8 @@ void ExplorationFSMReal::FSMCallback(
         // Robot is static, use current odometry
         fd_->start_pt_ = fd_->odom_pos_;
         fd_->start_vel_ = fd_->odom_vel_;
-        fd_->start_yaw_(0) = fd_->odom_yaw_;
-        fd_->start_yaw_(1) = fd_->start_yaw_(2) = 0.0;
+        fd_->start_yaw_ = fd_->odom_yaw_;
+        fd_->start_yaw_rate_ = 0.0;
       }
       else {
         // Robot is moving, predict future state for smooth replanning（保证轨迹平滑性）
@@ -149,8 +149,8 @@ void ExplorationFSMReal::FSMCallback(
         //将预测结果存入 FSM 运行时数据容器，作为新轨迹的起始状态
         fd_->start_pt_ = cur_pos;
         fd_->start_vel_ = cur_vel;
-        fd_->start_yaw_(0) = cur_yaw;
-        fd_->start_yaw_(1) = omega;
+        fd_->start_yaw_ = cur_yaw;
+        fd_->start_yaw_rate_ = omega;
       }
 
       TrajPlannerResult res = callTrajectoryPlanner();  
@@ -236,7 +236,7 @@ TrajPlannerResult ExplorationFSMReal::callTrajectoryPlanner()
   updateFrontierAndObject();
 
   // Call exploration manager to find next best point
-  int expl_res = expl_manager_->planNextBestPoint(fd_->start_pt_, fd_->start_yaw_(0));
+  int expl_res = expl_manager_->planNextBestPoint(fd_->start_pt_, fd_->start_yaw_);
 
 
 
@@ -281,7 +281,7 @@ TrajPlannerResult ExplorationFSMReal::callTrajectoryPlanner()
   Eigen::VectorXd goal_state(5), current_state(5);// 定义5维的起始/目标状态（GCopter算法要求的输入格式）
   Eigen::Vector3d current_control(0.0, 0.0, 0.0); // 初始控制量（无额外约束）
   double start_vel = Eigen::Vector2d(fd_->start_vel_(0), fd_->start_vel_(1)).norm();// 计算起始速度的大小（只取平面速度，忽略z轴）
-  current_state << fd_->start_pt_(0), fd_->start_pt_(1), fd_->start_yaw_(0), 0.0, start_vel;// 填充起始状态：x坐标、y坐标、航向角、航向角速度（设0）、速度大小
+  current_state << fd_->start_pt_(0), fd_->start_pt_(1), fd_->start_yaw_, 0.0, start_vel;// 填充起始状态：x坐标、y坐标、航向角、航向角速度（设0）、速度大小
   goal_state << goal_pos(0), goal_pos(1), goal_yaw, 0.0, 0.0;
   // 填充目标状态：x坐标、y坐标、目标航向角、航向角速度（设0）、目标速度（设0，到点就停）
   
