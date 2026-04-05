@@ -25,7 +25,9 @@ int main(int argc, char** argv)
     ExplorationFSMReal expl_fsm;
     expl_fsm.init(nh);
     ros::Duration(1.0).sleep();
-    ros::spin();
+    ros::AsyncSpinner spinner(4);  // Multi-threaded: agents' callbacks can run concurrently
+    spinner.start();
+    ros::waitForShutdown();
   }
   else {
     ROS_INFO("========================================");
@@ -34,7 +36,9 @@ int main(int argc, char** argv)
     ExplorationFSM expl_fsm;
     expl_fsm.init(nh);
     ros::Duration(1.0).sleep();
-    ros::spin();
+    ros::AsyncSpinner spinner(4);  // Multi-threaded: agents' callbacks can run concurrently
+    spinner.start();
+    ros::waitForShutdown();
   }
 
   return 0;

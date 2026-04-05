@@ -36,7 +36,7 @@ habitat:
     forward_step_size: 0
     turn_angle: 0
     agents:
-      main_agent:
+      agent_0:
         sim_sensors:
           depth_sensor:
             min_depth: 0.0

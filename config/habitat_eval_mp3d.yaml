@@ -1,6 +1,6 @@
 defaults:
   - /benchmark/nav/objectnav:
-    - objectnav_mp3d
+      - objectnav_mp3d
   - _self_
 
 habitat_baselines:
@@ -10,7 +10,7 @@ habitat_baselines:
 habitat:
   dataset:
     split: val
-    data_path: data/datasets/objectnav/mp3d/v1/{split}/{split}.json.gz
+    data_path: data/datasets/objectnav/mp3d/v1/{split}/{split}.json.gz # MP3D dataset
   environment:
     max_episode_steps: 500
     iterator_options:
@@ -30,14 +30,66 @@ habitat:
       allow_sliding: false
     forward_step_size: 0.25
     turn_angle: 30
+    # Multi-agent configuration
     agents:
-      main_agent:
+      agent_0:
         radius: 0.18
+        start_position: [0, 0, 0]
+        start_rotation: [0, 0, 0, 1]
         sim_sensors:
+          rgb_sensor:
+            width: 640
+            height: 480
+            hfov: 79
+            position: [0, 0.88, 0]
+            orientation: [0, 0, 0]
+            type: RGBSensor
           depth_sensor:
+            width: 640
+            height: 480
+            hfov: 79
             min_depth: 0.0
             max_depth: 5.0
             normalize_depth: true
+            position: [0, 0.88, 0]
+            orientation: [0, 0, 0]
+            type: DepthSensor
+          gps_sensor:
+            type: GPSSensor
+            dimensionality: 3
+          compass_sensor:
+            type: CompassSensor
+            dimensionality: 1
+      agent_1:
+        radius: 0.18
+        start_position: [0, 0, 0]
+        start_rotation: [0, 0, 0, 1]
+        sim_sensors:
+          rgb_sensor:
+            width: 640
+            height: 480
+            hfov: 79
+            position: [0, 0.88, 0]
+            orientation: [0, 0, 0]
+            type: RGBSensor
+          depth_sensor:
+            width: 640
+            height: 480
+            hfov: 79
+            min_depth: 0.0
+            max_depth: 5.0
+            normalize_depth: true
+            position: [0, 0.88, 0]
+            orientation: [0, 0, 0]
+            type: DepthSensor
+          gps_sensor:
+            type: GPSSensor
+            dimensionality: 3
+          compass_sensor:
+            type: CompassSensor
+            dimensionality: 1
+
+num_agents: 2
 
 detector:
   yolo:
@@ -53,11 +105,16 @@ llm:
   llm_answer_path: llm/answers/llm_answer_mp3d.txt
   llm_response_path: llm/answers/llm_response_list.txt
   llm_client:
-    llm_client: deepseek # deepseek, ollama, or none
-    #ollama: 'qwen3:8b'
+    llm_client: deepseek
+    ollama: "qwen3:8b"
+
+multiagent:
+  episode_termination: cooperative
+  inter_agent_avoidance: false
+  agent_spawn_offset: 1.0
 
 record_file_name: "record.txt"
 continue_file_name: "continue.txt"
 need_video: false
-video_output_path: "videos/test_mp3d_{split}"
+video_output_path: "videos/test_mp3d_multiagent_{split}"
 test_epi_num: -1

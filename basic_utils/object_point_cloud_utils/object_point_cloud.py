@@ -13,18 +13,19 @@ from basic_utils.object_point_cloud_utils.geometry_utils import (
 )
 
 
-def get_object_point_cloud(cfg, observations, object_masks_list):
+def get_object_point_cloud(cfg, observations, object_masks_list, agent_name="agent_0"):
     """
     Extract 3D point clouds for detected objects from sensor observations
-    
+
     This function processes depth images and object masks to generate 3D point clouds
     for each detected object, transforming them from camera coordinates to world coordinates.
-    
+
     Args:
         cfg: Configuration object containing sensor parameters
         observations: Dictionary containing sensor data (depth, gps, compass)
         object_masks_list: List of binary masks for detected objects
-        
+        agent_name: Agent identifier for locating sensor config (default "agent_0")
+
     Returns:
         list: List of ROS PointCloud2 messages for each object
     """
@@ -33,13 +34,14 @@ def get_object_point_cloud(cfg, observations, object_masks_list):
     y = observations["gps"][0]
     x = observations["gps"][2]
     camera_yaw = observations["compass"][0].item()
-    cfg_depth_sensor = cfg.habitat.simulator.agents.main_agent.sim_sensors.depth_sensor
-    camera_height = cfg_depth_sensor.position[1]
-    camera_min_depth = cfg_depth_sensor.min_depth
-    camera_max_depth = cfg_depth_sensor.max_depth
-    hfov = cfg_depth_sensor["hfov"]
-    height = cfg_depth_sensor["height"]
-    width = cfg_depth_sensor["width"]
+    agents_cfg = cfg.habitat.simulator.agents
+    sensor_cfg = getattr(agents_cfg, agent_name, agents_cfg.agent_0).sim_sensors.depth_sensor
+    camera_height = sensor_cfg.position[1]
+    camera_min_depth = sensor_cfg.min_depth
+    camera_max_depth = sensor_cfg.max_depth
+    hfov = sensor_cfg["hfov"]
+    height = sensor_cfg["height"]
+    width = sensor_cfg["width"]
     fx = width / (2 * math.tan(hfov * np.pi / 360.0))
     fy = height / (2 * math.tan(hfov / width * height * np.pi / 360.0))
     for object_mask in object_masks_list:

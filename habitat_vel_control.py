@@ -89,7 +89,7 @@ def main(cfg: DictConfig) -> None:
     cfg = patch_config(cfg)
     env_count = cfg.test_epi_num
     print(env_count)
-    cfg_rgb_sensor = cfg.habitat.simulator.agents.main_agent.sim_sensors.rgb_sensor
+    cfg_rgb_sensor = cfg.habitat.simulator.agents.agent_0.sim_sensors.rgb_sensor
 
     height = cfg_rgb_sensor["height"]
     width = cfg_rgb_sensor["width"]

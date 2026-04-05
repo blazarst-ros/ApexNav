@@ -3,31 +3,36 @@
 using std::cout;
 using std::endl;
 namespace apexnav_planner {
-PlanningVisualization::PlanningVisualization(ros::NodeHandle& nh)
+PlanningVisualization::PlanningVisualization(ros::NodeHandle& nh, int agent_id)
+  : agent_id_(agent_id), agent_prefix_("agent_" + std::to_string(agent_id) + "_")
 {
   node = nh;
 
-  traj_pub_ = node.advertise<visualization_msgs::Marker>("/planning_vis/trajectory", 100);
+  std::string agent_path = "agent_" + std::to_string(agent_id) + "/";
+
+  auto make_topic = [&](const std::string& base) -> std::string {
+    return "/" + agent_path + base;
+  };
+
+  traj_pub_ = node.advertise<visualization_msgs::Marker>(make_topic("planning_vis/trajectory"), 100);
   pubs_.push_back(traj_pub_);
 
-  topo_pub_ = node.advertise<visualization_msgs::Marker>("/planning_vis/topo_path", 100);
+  topo_pub_ = node.advertise<visualization_msgs::Marker>(make_topic("planning_vis/topo_path"), 100);
   pubs_.push_back(topo_pub_);
 
-  predict_pub_ = node.advertise<visualization_msgs::Marker>("/planning_vis/prediction", 100);
+  predict_pub_ = node.advertise<visualization_msgs::Marker>(make_topic("planning_vis/prediction"), 100);
   pubs_.push_back(predict_pub_);
 
-  visib_pub_ = node.advertise<visualization_msgs::Marker>("/planning_vis/"
-                                                          "visib_constraint",
-      100);
+  visib_pub_ = node.advertise<visualization_msgs::Marker>(make_topic("planning_vis/visib_constraint"), 100);
   pubs_.push_back(visib_pub_);
 
-  frontier_pub_ = node.advertise<visualization_msgs::Marker>("/planning_vis/frontier", 10000);
+  frontier_pub_ = node.advertise<visualization_msgs::Marker>(make_topic("planning_vis/frontier"), 10000);
   pubs_.push_back(frontier_pub_);
 
-  yaw_pub_ = node.advertise<visualization_msgs::Marker>("/planning_vis/yaw", 100);
+  yaw_pub_ = node.advertise<visualization_msgs::Marker>(make_topic("planning_vis/yaw"), 100);
   pubs_.push_back(yaw_pub_);
 
-  viewpoint_pub_ = node.advertise<visualization_msgs::Marker>("/planning_vis/viewpoints", 1000);
+  viewpoint_pub_ = node.advertise<visualization_msgs::Marker>(make_topic("planning_vis/viewpoints"), 1000);
   pubs_.push_back(viewpoint_pub_);
 
   last_topo_path1_num_ = 0;
@@ -44,7 +49,7 @@ void PlanningVisualization::fillBasicInfo(visualization_msgs::Marker& mk,
   mk.header.frame_id = "world";
   mk.header.stamp = ros::Time::now();
   mk.id = id;
-  mk.ns = ns;
+  mk.ns = agent_prefix_ + ns;
   mk.type = shape;
 
   mk.pose.orientation.x = 0.0;
@@ -200,6 +205,7 @@ void PlanningVisualization::displaySphereList(const vector<Eigen::Vector3d>& lis
   visualization_msgs::Marker mk;
   mk.header.frame_id = "world";
   mk.header.stamp = ros::Time::now();
+  mk.ns = agent_prefix_ + "deprecated";
   mk.type = visualization_msgs::Marker::SPHERE_LIST;
   mk.action = visualization_msgs::Marker::DELETE;
   mk.id = id;
@@ -237,6 +243,7 @@ void PlanningVisualization::displayCubeList(const vector<Eigen::Vector3d>& list,
   visualization_msgs::Marker mk;
   mk.header.frame_id = "world";
   mk.header.stamp = ros::Time::now();
+  mk.ns = agent_prefix_ + "deprecated";
   mk.type = visualization_msgs::Marker::CUBE_LIST;
   mk.action = visualization_msgs::Marker::DELETE;
   mk.id = id;
@@ -276,6 +283,7 @@ void PlanningVisualization::displayLineList(const vector<Eigen::Vector3d>& list1
   visualization_msgs::Marker mk;
   mk.header.frame_id = "world";
   mk.header.stamp = ros::Time::now();
+  mk.ns = agent_prefix_ + "deprecated";
   mk.type = visualization_msgs::Marker::LINE_LIST;
   mk.action = visualization_msgs::Marker::DELETE;
   mk.id = id;

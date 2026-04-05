@@ -39,94 +39,181 @@ Visualization Manager:
   Displays:
     - Class: rviz/Group
       Displays:
-        - Angle Tolerance: 0.10000000149011612
-          Class: rviz/Odometry
-          Covariance:
-            Orientation:
-              Alpha: 0.5
-              Color: 255; 255; 127
-              Color Style: Unique
-              Frame: Local
-              Offset: 1
-              Scale: 1
+        - Class: rviz/Group
+          Displays:
+            - Angle Tolerance: 0.10000000149011612
+              Class: rviz/Odometry
+              Covariance:
+                Orientation:
+                  Alpha: 0.5
+                  Color: 255; 255; 127
+                  Color Style: Unique
+                  Frame: Local
+                  Offset: 1
+                  Scale: 1
+                  Value: true
+                Position:
+                  Alpha: 0.30000001192092896
+                  Color: 204; 51; 204
+                  Scale: 1
+                  Value: true
+                Value: true
+              Enabled: false
+              Keep: 1
+              Name: Odometry
+              Position Tolerance: 0.10000000149011612
+              Queue Size: 10
+              Shape:
+                Alpha: 1
+                Axes Length: 0.30000001192092896
+                Axes Radius: 0.15000000596046448
+                Color: 0; 255; 0
+                Head Length: 0.30000001192092896
+                Head Radius: 0.10000000149011612
+                Shaft Length: 1
+                Shaft Radius: 0.05000000074505806
+                Value: Axes
+              Topic: /habitat/agent_0/odom
+              Unreliable: false
               Value: true
-            Position:
-              Alpha: 0.30000001192092896
-              Color: 204; 51; 204
-              Scale: 1
+            - Angle Tolerance: 0.10000000149011612
+              Class: rviz/Odometry
+              Covariance:
+                Orientation:
+                  Alpha: 0.5
+                  Color: 255; 255; 127
+                  Color Style: Unique
+                  Frame: Local
+                  Offset: 1
+                  Scale: 1
+                  Value: true
+                Position:
+                  Alpha: 0.30000001192092896
+                  Color: 204; 51; 204
+                  Scale: 1
+                  Value: true
+                Value: true
+              Enabled: false
+              Keep: 1
+              Name: Sensor_pose
+              Position Tolerance: 0.10000000149011612
+              Queue Size: 10
+              Shape:
+                Alpha: 1
+                Axes Length: 2
+                Axes Radius: 0.05000000074505806
+                Color: 0; 255; 0
+                Head Length: 0.30000001192092896
+                Head Radius: 0.10000000149011612
+                Shaft Length: 1
+                Shaft Radius: 0.05000000074505806
+                Value: Axes
+              Topic: /habitat/agent_0/sensor_pose
+              Unreliable: false
               Value: true
-            Value: true
-          Enabled: false
-          Keep: 1
-          Name: Odometry
-          Position Tolerance: 0.10000000149011612
-          Queue Size: 10
-          Shape:
-            Alpha: 1
-            Axes Length: 0.30000001192092896
-            Axes Radius: 0.15000000596046448
-            Color: 255; 25; 0
-            Head Length: 0.30000001192092896
-            Head Radius: 0.10000000149011612
-            Shaft Length: 1
-            Shaft Radius: 0.05000000074505806
-            Value: Axes
-          Topic: /habitat/odom
-          Unreliable: false
-          Value: false
-        - Angle Tolerance: 0.10000000149011612
-          Class: rviz/Odometry
-          Covariance:
-            Orientation:
-              Alpha: 0.5
-              Color: 255; 255; 127
-              Color Style: Unique
-              Frame: Local
-              Offset: 1
-              Scale: 1
+            - Class: rviz/Marker
+              Enabled: true
+              Marker Topic: /robot_agent_0
+              Name: robot_marker
+              Namespaces:
+                robot_direction: true
+                robot_position: true
+              Queue Size: 100
               Value: true
-            Position:
-              Alpha: 0.30000001192092896
-              Color: 204; 51; 204
-              Scale: 1
-              Value: true
-            Value: true
-          Enabled: false
-          Keep: 1
-          Name: Sensor_pose
-          Position Tolerance: 0.10000000149011612
-          Queue Size: 10
-          Shape:
-            Alpha: 1
-            Axes Length: 2
-            Axes Radius: 0.05000000074505806
-            Color: 46; 52; 54
-            Head Length: 0.30000001192092896
-            Head Radius: 0.10000000149011612
-            Shaft Length: 1
-            Shaft Radius: 0.05000000074505806
-            Value: Axes
-          Topic: /habitat/sensor_pose
-          Unreliable: false
-          Value: false
-        - Class: rviz/Marker
           Enabled: true
-          Marker Topic: /robot
-          Name: robot
-          Namespaces:
-            robot_direction: true
-            robot_position: true
-          Queue Size: 100
-          Value: true
+          Name: Agent_0
+        - Class: rviz/Group
+          Displays:
+            - Angle Tolerance: 0.10000000149011612
+              Class: rviz/Odometry
+              Covariance:
+                Orientation:
+                  Alpha: 0.5
+                  Color: 255; 255; 127
+                  Color Style: Unique
+                  Frame: Local
+                  Offset: 1
+                  Scale: 1
+                  Value: true
+                Position:
+                  Alpha: 0.30000001192092896
+                  Color: 204; 51; 204
+                  Scale: 1
+                  Value: true
+                Value: true
+              Enabled: false
+              Keep: 1
+              Name: Odometry
+              Position Tolerance: 0.10000000149011612
+              Queue Size: 10
+              Shape:
+                Alpha: 1
+                Axes Length: 0.30000001192092896
+                Axes Radius: 0.15000000596046448
+                Color: 0; 128; 255
+                Head Length: 0.30000001192092896
+                Head Radius: 0.10000000149011612
+                Shaft Length: 1
+                Shaft Radius: 0.05000000074505806
+                Value: Axes
+              Topic: /habitat/agent_1/odom
+              Unreliable: false
+              Value: true
+            - Angle Tolerance: 0.10000000149011612
+              Class: rviz/Odometry
+              Covariance:
+                Orientation:
+                  Alpha: 0.5
+                  Color: 255; 255; 127
+                  Color Style: Unique
+                  Frame: Local
+                  Offset: 1
+                  Scale: 1
+                  Value: true
+                Position:
+                  Alpha: 0.30000001192092896
+                  Color: 204; 51; 204
+                  Scale: 1
+                  Value: true
+                Value: true
+              Enabled: false
+              Keep: 1
+              Name: Sensor_pose
+              Position Tolerance: 0.10000000149011612
+              Queue Size: 10
+              Shape:
+                Alpha: 1
+                Axes Length: 2
+                Axes Radius: 0.05000000074505806
+                Color: 0; 128; 255
+                Head Length: 0.30000001192092896
+                Head Radius: 0.10000000149011612
+                Shaft Length: 1
+                Shaft Radius: 0.05000000074505806
+                Value: Axes
+              Topic: /habitat/agent_1/sensor_pose
+              Unreliable: false
+              Value: true
+            - Class: rviz/Marker
+              Enabled: true
+              Marker Topic: /robot_agent_1
+              Name: robot_marker
+              Namespaces:
+                robot_direction: true
+                robot_position: true
+              Queue Size: 100
+              Value: true
+          Enabled: true
+          Name: Agent_1
         - Class: rviz/Group
           Displays:
             - Class: rviz/Image
               Enabled: true
-              Image Topic: /habitat/camera_depth
+              Image Topic: /habitat/agent_0/camera_depth
               Max Value: 1
               Median window: 5
               Min Value: 0
-              Name: depth
+              Name: agent0_depth
               Normalize Range: true
               Queue Size: 2
               Transport Hint: raw
@@ -134,41 +221,90 @@ Visualization Manager:
               Value: true
             - Class: rviz/Image
               Enabled: true
-              Image Topic: /habitat/camera_rgb
+              Image Topic: /habitat/agent_0/camera_rgb
               Max Value: 1
               Median window: 5
               Min Value: 0
-              Name: image
+              Name: agent0_image
               Normalize Range: true
               Queue Size: 2
               Transport Hint: raw
               Unreliable: false
               Value: true
           Enabled: true
-          Name: imgs
+          Name: Agent_0_Cam
+        - Class: rviz/Group
+          Displays:
+            - Class: rviz/Image
+              Enabled: true
+              Image Topic: /habitat/agent_1/camera_depth
+              Max Value: 1
+              Median window: 5
+              Min Value: 0
+              Name: agent1_depth
+              Normalize Range: true
+              Queue Size: 2
+              Transport Hint: raw
+              Unreliable: false
+              Value: true
+            - Class: rviz/Image
+              Enabled: true
+              Image Topic: /habitat/agent_1/camera_rgb
+              Max Value: 1
+              Median window: 5
+              Min Value: 0
+              Name: agent1_image
+              Normalize Range: true
+              Queue Size: 2
+              Transport Hint: raw
+              Unreliable: false
+              Value: true
+          Enabled: true
+          Name: Agent_1_Cam
       Enabled: true
       Name: Simulation
     - Class: rviz/Group
       Displays:
         - Class: rviz/Marker
           Enabled: true
-          Marker Topic: /planning_vis/frontier
-          Name: frontier
+          Marker Topic: /agent_0/planning_vis/frontier
+          Name: Agent0_frontier
           Namespaces:
-            dormant_frontier: true
-            frontier: true
-            object: true
+            agent_0_dormant_frontier: true
+            agent_0_frontier: true
+            agent_0_object: true
           Queue Size: 10000
           Value: true
         - Class: rviz/Marker
           Enabled: true
-          Marker Topic: /planning_vis/viewpoints
-          Name: path
+          Marker Topic: /agent_1/planning_vis/frontier
+          Name: Agent1_frontier
           Namespaces:
-            local_point: true
-            next_path: true
-            traveled_path: true
-            tsp_tour: true
+            agent_1_dormant_frontier: true
+            agent_1_frontier: true
+            agent_1_object: true
+          Queue Size: 10000
+          Value: true
+        - Class: rviz/Marker
+          Enabled: true
+          Marker Topic: /agent_0/planning_vis/viewpoints
+          Name: Agent0_path
+          Namespaces:
+            agent_0_local_point: true
+            agent_0_next_path: true
+            agent_0_traveled_path: true
+            agent_0_tsp_tour: true
+          Queue Size: 100
+          Value: true
+        - Class: rviz/Marker
+          Enabled: true
+          Marker Topic: /agent_1/planning_vis/viewpoints
+          Name: Agent1_path
+          Namespaces:
+            agent_1_local_point: true
+            agent_1_next_path: true
+            agent_1_traveled_path: true
+            agent_1_tsp_tour: true
           Queue Size: 100
           Value: true
       Enabled: true

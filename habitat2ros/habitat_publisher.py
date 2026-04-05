@@ -10,12 +10,12 @@ from copy import deepcopy
 
 
 class ROSPublisher:
-    def __init__(self, agent_name: str = "main_agent"):
+    def __init__(self, agent_name: str = "agent_0"):
         """
         Create ROS publishers with namespaced topics for a specific agent.
 
         Args:
-            agent_name: Name of the agent (e.g., "agent_0", "agent_1", "main_agent").
+            agent_name: Name of the agent (e.g., "agent_0", "agent_1").
                         This becomes the namespace between /habitat/ and the topic name.
         """
         ns = agent_name

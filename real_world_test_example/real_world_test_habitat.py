@@ -16,7 +16,7 @@ from omegaconf import DictConfig
 from sensor_msgs.msg import Image
 from nav_msgs.msg import Odometry
 from std_msgs.msg import Float64, String
-from plan_env.msg import MultipleMasksWithConfidence  
+from plan_env.msg import MultipleMasksWithConfidence
 #自定义 ROS 消息MultipleMasksWithConfidence（包含点云、置信度、标签索引），/detector/clouds_with_scores
 current_dir = os.path.dirname(os.path.realpath(__file__))
 parent_dir = os.path.dirname(current_dir)
@@ -29,14 +29,13 @@ from basic_utils.object_point_cloud_utils.object_point_cloud import (
     get_object_point_cloud,
 )
 """
-real_world_node 节点
+real_world_node 节点（Multi-agent 双版本）
 核心任务：
-初始化 Habitat 仿真环境 / 真实机器人的视觉、位姿输入；
-订阅目标标签 ROS 话题，触发 LLM 语义信息提取；
-调用目标检测模型（GroundingDINO/YOLOv7），结合 LLM 语义优化检测结果；
-发布带语义信息的检测结果 ROS 话题，供 C++ 执行层读取；
-处理轨迹跟踪、MPC 控制等运动指令，完成 “感知→决策→执行” 的闭环。
+为每个 agent 并行运行独立的感知流水线（检测 + ITM + 点云），
+将结果发布到各自代理命名空间的话题，供 C++ planner 消费。
 """
+
+NUM_AGENTS = 2
 
 def inverse_habitat_publisher_transform(sensor_pose_msg):
     """
@@ -57,172 +56,111 @@ def inverse_habitat_publisher_transform(sensor_pose_msg):
     return gps, compass
 
 
-class RealWorldNode:
-    def __init__(self, cfg):
+class AgentPerceptionPipeline:
+    """Per-agent perception pipeline: sync RGB/depth/pose → detect + ITM → publish."""
+
+    def __init__(self, cfg, agent_name, shared_state):
         self.config = cfg
-
-        rospy.init_node("real_world_node", anonymous=False)
-
+        self.agent_name = agent_name
+        self.shared = shared_state
         self.bridge = CvBridge()
 
-        # Configure subscribers（传感器订阅（RGB/深度/位姿））
-        self.rgb_sub_ = message_filters.Subscriber("/habitat/camera_rgb", Image)
-        self.depth_sub_ = message_filters.Subscriber("/habitat/camera_depth", Image)
+        # Agent-namespaced subscribers
+        self.rgb_sub_ = message_filters.Subscriber(f"/habitat/{agent_name}/camera_rgb", Image)
+        self.depth_sub_ = message_filters.Subscriber(f"/habitat/{agent_name}/camera_depth", Image)
         self.sensor_pose_sub_ = message_filters.Subscriber(
-            "/habitat/sensor_pose", Odometry
+            f"/habitat/{agent_name}/sensor_pose", Odometry
         )
 
-        rospy.Subscriber("/habitat/odom", Odometry, self.odom_callback, queue_size=10)
+        rospy.Subscriber(f"/habitat/{agent_name}/odom", Odometry, self.odom_callback, queue_size=10)
 
-
-        # Configure publishers-----LLM相关ROS发布器（传递到执行层的核心通道）
-
-        self.confidence_threshold_pub_ = rospy.Publisher(
-            "/detector/confidence_threshold", Float64, queue_size=10
-        )# 1. 发布LLM关联的置信度阈值（执行层目标检测过滤用）
+        # Per-agent publishers (namespace matches convention used by map_ros.cpp)
         self.itm_score_pub_ = rospy.Publisher(
-            "/blip2/cosine_score", Float64, queue_size=10
-        )# 2. 发布LLM语义匹配的ITM余弦分数（执行层语义价值计算用）
+            f"/blip2/{agent_name}/cosine_score", Float64, queue_size=10
+        )
         self.cld_with_score_pub_ = rospy.Publisher(
-            "/detector/clouds_with_scores", MultipleMasksWithConfidence, queue_size=10
-        )# 3. 发布带LLM语义的目标点云+置信度（执行层路径规划用）
-        self.detect_img_pub_ = rospy.Publisher(
-            "/detector/detect_img", Image, queue_size=10
-        )# 4. 发布检测可视化图（含LLM语义过滤结果）
+            f"/detector/{agent_name}/clouds_with_scores", MultipleMasksWithConfidence, queue_size=10
+        )
 
-
-        # Initialize detector---传感器消息同步器
-        # Synchronize RGB, depth and sensor_pose topics
+        # Synchronized callbacks: detection + value
         self.sync_detect = message_filters.ApproximateTimeSynchronizer(
             [self.rgb_sub_, self.depth_sub_, self.sensor_pose_sub_],
-            queue_size=5,
-            slop=0.01,
+            queue_size=5, slop=0.01,
         )
         self.sync_detect.registerCallback(self.sync_detect_callback)
 
-        # Initialize value module
-        # (uses synchronized RGB/depth/sensor_pose messages)
         self.sync_value = message_filters.ApproximateTimeSynchronizer(
             [self.rgb_sub_, self.depth_sub_, self.sensor_pose_sub_],
-            queue_size=5,
-            slop=0.01,
+            queue_size=5, slop=0.01,
         )
         self.sync_value.registerCallback(self.sync_value_callback)
 
-        # Initialize odometry handling-----里程计初始化
+        # Per-agent state
         self.robot_odom = None
-        self.T_base_camera = None
-        self.odom_stamp = None
-        # Processing flags: ensure we don't start a new processing run
-        # until the previous one finished (rate adapts to available compute)
         self.processing_detect = False
         self.processing_value = False
 
-        # LLM config (used when label is provided via topic)
-        # ========== 核心：LLM配置初始化（从Hydra配置读取） ==========
-        llm_cfg = self.config.llm
-        self.llm_answer_path = llm_cfg.llm_answer_path# LLM答案缓存文件路径（如llm_answer_hm3d.txt）
-        self.llm_response_path = llm_cfg.llm_response_path #LLM原始响应文件路径
-        self.llm_client_cfg = llm_cfg.llm_client # LLM客户端（deepseek/ollama）
+        # Shared LLM config (read once by owner)
+        self.llm_answer_path = self.shared.llm_answer_path
+        self.llm_response_path = self.shared.llm_response_path
+        self.llm_client_cfg = self.shared.llm_client_cfg
 
-        # Label will be provided via ROS topic `/detector/label` (std_msgs/String)
-        # Initialize empty/defaults; actual values will be set in `label_callback`.
-
-        self.label = None   # 目标物体标签（如"chair"，从/detector/label话题接收）
-        self.llm_answer = [] # LLM解析后的结构化列表（[误检测标签, 置信度, 房间]）
-        self.room = None     # LLM提取的目标所属房间（如"living room"）
-        self.fusion_score = 0.0   # LLM提取的融合置信度
-
-        # 订阅目标标签话题，触发LLM内容提取（如：cabinet）
-        rospy.Subscriber("/detector/label", String, self.label_callback, queue_size=1)
-
-        rospy.Timer(rospy.Duration(1.0), self.publish_confidence_threshold)#周期性发布置信度阈值（LLM关联的检测阈值）
-
-
-    def sync_detect_callback(self, rgb_msg, depth_msg, sensor_pose_msg):#LLM 信息融入目标检测，传递到执行层
-        """
-        校验传感器数据时间同步性；
-        转换 ROS 图像格式为 OpenCV 可处理格式；
-
-        结合 LLM 语义信息（llm_answer）执行目标检测；-----/home/blazarst/ApexNav/vlm/utils/get_object_utils.py 进行
-        提取目标点云并封装为 ROS 消息；
-        
-        发布检测结果（可视化图 + 带置信度的点云）到执行层；
-"""
-        # If a detect run is already in progress, skip this invocation.
+    def sync_detect_callback(self, rgb_msg, depth_msg, sensor_pose_msg):
         if self.processing_detect:
             return
         self.processing_detect = True
         try:
-            # rospy.loginfo("detect: Received synchronized RGB and depth images")
             stamp = rgb_msg.header.stamp
             time_diff = abs((stamp - sensor_pose_msg.header.stamp).to_sec())
             if time_diff > 0.1:
-                # If timestamps differ significantly, skip this pair
-                # and allow the next synchronized callback to run.
                 return
 
             rgb_cv = self.bridge.imgmsg_to_cv2(rgb_msg, desired_encoding="rgb8")
-            depth_img = self.bridge.imgmsg_to_cv2(
-                depth_msg, desired_encoding="passthrough"
-            )
+            depth_img = self.bridge.imgmsg_to_cv2(depth_msg, desired_encoding="passthrough")
             transform_depth_img = depth_img.astype(np.float32)
             depth_cv = np.expand_dims(transform_depth_img, axis=-1)
+
+            # Read label/LLM from shared state
+            self.label = self.shared.label
+            self.llm_answer = self.shared.llm_answer
+            self.room = self.shared.room
 
             cld_with_score_msg = MultipleMasksWithConfidence()
             cld_with_score_msg.point_clouds = []
             cld_with_score_msg.confidence_scores = []
             cld_with_score_msg.label_indices = []
-            rospy.loginfo("detect: label: %s", self.label)
-            # rospy.loginfo("detect: room: %s", self.room)
+            rospy.loginfo("detect: [%s] label: %s", self.agent_name, self.label)
 
-            # If label not yet received, skip detection until available
             if self.label is None:
-                rospy.logwarn_throttle(5.0, "Waiting for target label on /detector/label")
+                rospy.logwarn_throttle(5.0, "[%s] Waiting for target label", self.agent_name)
                 return
 
-            # ========== 核心LLM关联逻辑：LLM语义融入目标检测 ==========
-            #基于LLM的llm_answer（误检测标签）过滤相似物体，提升目标检测精度
             detect_img, score_list, object_masks_list, label_list = get_object(
                 self.label, rgb_cv, self.config.detector, self.llm_answer
             )
 
-            # Use inverse transform to recover original Habitat observations format
             gps, compass = inverse_habitat_publisher_transform(sensor_pose_msg)
 
             observations = {
                 "depth": depth_cv,
                 "gps": gps,
-                "compass": compass,  # Already a numpy array from inverse function
+                "compass": compass,
             }
 
             obj_point_cloud_list = get_object_point_cloud(
-                self.config, observations, object_masks_list
+                self.config, observations, object_masks_list, self.agent_name
             )
             cld_with_score_msg.point_clouds = obj_point_cloud_list
             cld_with_score_msg.confidence_scores = score_list
             cld_with_score_msg.label_indices = label_list
-            # Publish the detection image for visualization
-            self.detect_img_pub_.publish(
-                self.bridge.cv2_to_imgmsg(detect_img, encoding="rgb8")
-            )
 
-            # Also publish the detected object clouds with scores so other nodes / RViz can use them
             self.cld_with_score_pub_.publish(cld_with_score_msg)
         except Exception as e:
-            rospy.logerr("detect: Error in synchronized processing: %s", e)
+            rospy.logerr("[%s] detect: Error in synchronized processing: %s", self.agent_name, e)
         finally:
-            # mark processing complete so next invocation can proceed
             self.processing_detect = False
 
     def sync_value_callback(self, rgb_msg, depth_msg, sensor_pose_msg):
-        """
-        语义价值计算回调函数，
-        核心作用是结合 LLM 提取的 “目标标签 + 所属房间” 语义信息，
-        计算当前场景与目标语义的匹配度（余弦分数），并将该分数发布到 ROS 话题
-        """
-
-        # If a value run is already in progress, skip this invocation.
         if self.processing_value:
             return
         self.processing_value = True
@@ -230,56 +168,41 @@ class RealWorldNode:
             stamp = rgb_msg.header.stamp
             time_diff = abs((stamp - sensor_pose_msg.header.stamp).to_sec())
             if time_diff > 0.1:
-                # If timestamps differ significantly, skip this pair
                 return
 
             rgb_cv = self.bridge.imgmsg_to_cv2(rgb_msg, desired_encoding="rgb8")
-            # rospy.loginfo("value: room: %s", self.room)
 
-            # ========== 核心LLM关联逻辑：计算语义匹配分数 ==========
-            # 函数作用：计算当前场景与“目标标签+所属房间”的语义匹配度（余弦相似度，0~1）
-            # 输出：cosine值越高，当前场景越可能包含目标物体
+            self.label = self.shared.label
+            self.room = self.shared.room
+
             cosine = get_itm_message_cosine(rgb_cv, self.label, self.room)
-            rospy.loginfo("value: Computed cosine score: %.3f", cosine)
+            rospy.loginfo("value: [%s] cosine score: %.3f", self.agent_name, cosine)
 
-             # ========== 核心LLM关联逻辑：发布语义匹配分数到执行层 ==========
             itm_score_msg = Float64()
             itm_score_msg.data = cosine
             self.itm_score_pub_.publish(itm_score_msg)
 
         except Exception as e:
-            rospy.logerr("value: Error in synchronized processing: %s", e)
+            rospy.logerr("[%s] value: Error in synchronized processing: %s", self.agent_name, e)
         finally:
             self.processing_value = False
 
     def label_callback(self, msg):
-        """
-        ApexNav 感知层中LLM 语义信息提取的唯一触发函数，
-        核心作用是接收外部发布的目标物体标签，
-        触发 LLM 内容提取流程，
-        并将提取到的 LLM 语义信息（误检测标签、目标房间、融合置信度）保存为类变量，
-        供后续检测 / 语义匹配函数使用。
-        """
+        """Delegate to shared state."""
         try:
             new_label = str(msg.data)
-            if new_label == self.label:
+            if new_label == self.shared.label:
                 return
-            self.label = new_label
-            rospy.loginfo("Received target label: %s", self.label)
-            # If LLM is configured, fetch LLM answer for the new label
-            # ========== 核心LLM逻辑：提取LLM语义信息 ==========
-            # 调用read_answer函数，根据新标签获取LLM内容：
-            #   输入：LLM缓存文件路径、原始响应路径、目标标签、LLM客户端类型（deepseek/ollama）
-            #   输出：llm_answer（误检测标签列表）、room（目标所属房间）、fusion_score（融合置信度）
+            self.shared.label = new_label
+            rospy.loginfo("Received target label: %s", self.shared.label)
             try:
-                self.llm_answer, self.room, self.fusion_score = read_answer(
-                  self.llm_answer_path, self.llm_response_path, self.label, self.llm_client_cfg # 现在传配置对象
+                self.shared.llm_answer, self.shared.room, self.shared.fusion_score = read_answer(
+                    self.llm_answer_path, self.llm_response_path, self.shared.label, self.llm_client_cfg
                 )
             except Exception:
-                # Non-fatal: proceed without LLM answer
-                self.llm_answer = []
-                self.room = None
-                self.fusion_score = 0.0
+                self.shared.llm_answer = []
+                self.shared.room = None
+                self.shared.fusion_score = 0.0
         except Exception as e:
             rospy.logerr("label_callback: Error processing label message: %s", e)
 
@@ -288,25 +211,71 @@ class RealWorldNode:
             self.robot_odom = msg
             self.odom_stamp = msg.header.stamp
             if self.odom_stamp is not None:
-                # self.publish_sensor_pose()
                 self.odom_stamp = None
-            # rospy.loginfo("odom: Received Odometry")
         except Exception as e:
-            rospy.logerr("odom: Error processing Odometry: %s", e)
+            rospy.logerr("[%s] odom: Error processing Odometry: %s", self.agent_name, e)
+
+
+class SharedLLMState:
+    """Shared LLM configuration and label state across all agent pipelines."""
+
+    def __init__(self, cfg):
+        llm_cfg = cfg.llm
+        self.llm_answer_path = llm_cfg.llm_answer_path
+        self.llm_response_path = llm_cfg.llm_response_path
+        self.llm_client_cfg = llm_cfg.llm_client
+
+        self.label = None
+        self.llm_answer = []
+        self.room = None
+        self.fusion_score = 0.0
+
+
+class MultiAgentNode:
+    def __init__(self, cfg):
+        self.config = cfg
+
+        rospy.init_node("habitat_multiagent_perception", anonymous=False)
+
+        # Shared state: LLM config + label
+        self.shared = SharedLLMState(cfg)
+
+        # Shared confidence threshold publisher (one for all agents)
+        self.confidence_threshold_pub_ = rospy.Publisher(
+            "/detector/confidence_threshold", Float64, queue_size=10
+        )
+        rospy.Timer(rospy.Duration(1.0), self.publish_confidence_threshold)
+
+        # Subscribe to label topic (single source of truth — shared across agents)
+        rospy.Subscriber("/detector/label", String, self._on_label, queue_size=1)
+
+        # Create per-agent pipelines
+        agent_names = [f"agent_{i}" for i in range(NUM_AGENTS)]
+        self.pipelines = {}
+        for name in agent_names:
+            pipeline = AgentPerceptionPipeline(cfg, name, self.shared)
+            self.pipelines[name] = pipeline
+
+        rospy.loginfo(f"Multi-agent perception node created with {NUM_AGENTS} agents")
+
+    def _on_label(self, msg):
+        """Forward label to all pipelines."""
+        for p in self.pipelines.values():
+            p.label_callback(msg)
 
     def publish_confidence_threshold(self, event):
-        confidence_threshold_msg = Float64()
-        confidence_threshold_msg.data = 0.4
-        self.confidence_threshold_pub_.publish(confidence_threshold_msg)
+        msg = Float64()
+        msg.data = 0.4
+        self.confidence_threshold_pub_.publish(msg)
 
     def run(self):
-        rospy.loginfo("RealWorldNode running. Waiting for sensor messages...")
+        rospy.loginfo(f"Multi-agent perception node running with {NUM_AGENTS} agents.")
         rospy.spin()
 
 
 @hydra.main(version_base=None, config_path="config", config_name="real_world_test")
 def main(cfg: DictConfig):
-    node = RealWorldNode(cfg)
+    node = MultiAgentNode(cfg)
     node.run()
 
 

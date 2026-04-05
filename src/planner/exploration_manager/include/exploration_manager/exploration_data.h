@@ -13,26 +13,19 @@
 
 namespace apexnav_planner {
 
+static constexpr int NUM_AGENTS = 2;
+
 enum FINAL_RESULT { EXPLORE, SEARCH_OBJECT, STUCKING, NO_FRONTIER, REACH_OBJECT };
 
-struct FSMData {
-  FSMData()
+struct AgentFSMData {
+  AgentFSMData()
   {
-    trigger_ = false;
     have_odom_ = false;
-    have_confidence_ = false;
     have_finished_ = false;
-    static_state_ = true;
-    state_str_ = { "INIT", "WAIT_TRIGGER", "PLAN_ACTION", "WAIT_ACTION_FINISH", "PUB_ACTION",
-      "FINISH" };
-
     odom_pos_ = Eigen::Vector3d::Zero();
-    odom_vel_ = Eigen::Vector3d::Zero();
-    odom_omega_ = Eigen::Vector3d::Zero();
     odom_orient_ = Eigen::Quaterniond::Identity();
     odom_yaw_ = 0.0;
     start_pt_ = Eigen::Vector3d::Zero();
-    start_vel_ = Eigen::Vector3d::Zero();
     start_yaw_ = Eigen::Vector3d::Zero();
     last_start_pos_ = Eigen::Vector3d(-100, -100, -100);
     last_next_pos_ = Eigen::Vector2d(-100, -100);
@@ -51,26 +44,17 @@ struct FSMData {
 
     local_pos_ = Eigen::Vector2d(0, 0);
   }
-  // FSM data
-  bool trigger_, have_odom_, have_confidence_;
-  bool have_finished_;
-  std::vector<string> state_str_;
-  std::vector<Eigen::Vector2d> traveled_path_;
-
-  // odometry state
-  Eigen::Vector3d odom_pos_, odom_vel_, odom_omega_;
+  bool have_odom_, have_finished_;
+  Eigen::Vector3d odom_pos_;
   Eigen::Quaterniond odom_orient_;
   double odom_yaw_;
-  bool static_state_;  // Track if robot is static or moving
-
-  Eigen::Vector3d start_pt_, start_vel_, start_yaw_;
+  Eigen::Vector3d start_pt_, start_yaw_;
   Eigen::Vector3d last_start_pos_;
   Eigen::Vector2d last_next_pos_;
   int newest_action_;
   int init_action_count_;
   int stucking_action_count_;
   int stucking_next_pos_count_;
-
   int final_result_;
   bool replan_flag_, dormant_frontier_flag_;
   bool escape_stucking_flag_;
@@ -78,9 +62,26 @@ struct FSMData {
   Eigen::Vector2d escape_stucking_pos_;
   double escape_stucking_yaw_;
   std::vector<Eigen::Vector3d> stucking_points_;
-
   Eigen::Vector2d local_pos_;
-  LocalTrajectory newest_traj_;  // Store latest planned trajectory
+  std::vector<Eigen::Vector2d> traveled_path_;
+  LocalTrajectory newest_traj_;
+};
+
+struct FSMData {
+  FSMData()
+  {
+    agent_.assign(NUM_AGENTS, AgentFSMData());
+    trigger_ = false;
+    have_confidence_ = false;
+    static_state_ = true;
+    state_str_ = { "INIT", "WAIT_TRIGGER", "PLAN_ACTION", "WAIT_ACTION_FINISH", "PUB_ACTION",
+      "FINISH" };
+  }
+  // FSM data
+  bool trigger_, have_confidence_;
+  std::vector<string> state_str_;
+  bool static_state_;
+  std::vector<AgentFSMData> agent_;  // per-agent data [0] and [1]
 };
 
 struct FSMParam {

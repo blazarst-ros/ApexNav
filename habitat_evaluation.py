@@ -10,16 +10,13 @@ evaluation metrics.
 Supports both single-agent and multi-agent configurations.
 
 Usage:
-    # Run with HM3D-v1 dataset (single agent)
+    # Run with HM3D-v1 dataset
     python habitat_evaluation.py --dataset hm3dv1
 
-    # Run with HM3D-v2 dataset (single agent, default)
+    # Run with HM3D-v2 dataset (default)
     python habitat_evaluation.py --dataset hm3dv2
 
-    # Run with HM3D-v2 multi-agent (2 agents per episode)
-    python habitat_evaluation.py --dataset hm3dv2_multiagent
-
-    # Run with MP3D dataset (single agent)
+    # Run with MP3D dataset
     python habitat_evaluation.py --dataset mp3d
 
     # Test specific episode
@@ -172,9 +169,9 @@ def _parse_dataset_arg():
     parser.add_argument(
         "--dataset",
         type=str,
-        choices=["hm3dv1", "hm3dv2", "mp3d", "hm3dv2_multiagent"],
+        choices=["hm3dv1", "hm3dv2", "mp3d"],
         default="hm3dv2",
-        help="Choose dataset: hm3dv1, hm3dv2, hm3dv2_multiagent or mp3d (default: hm3dv2)",
+        help="Choose dataset: hm3dv1, hm3dv2, or mp3d (default: hm3dv2)",
     )
     args, unknown = parser.parse_known_args()
     return args.dataset, unknown
@@ -202,10 +199,18 @@ def _setup_multi_agent_env(env, cfg: DictConfig):
         if not pathfinder.is_navigable(start_pos_1):
             found = False
             for search_offset in [offset, -offset, offset * 2, -offset * 2]:
-                candidate = [start_pos_0[0] + search_offset, start_pos_0[1], start_pos_0[2]]
-                if pathfinder.is_navigable(candidate):
-                    start_pos_1 = candidate
-                    found = True
+                candidates = [
+                    [start_pos_0[0] + search_offset, start_pos_0[1], start_pos_0[2]],
+                    [start_pos_0[0] - search_offset, start_pos_0[1], start_pos_0[2]],
+                    [start_pos_0[0], start_pos_0[1], start_pos_0[2] + search_offset],
+                    [start_pos_0[0], start_pos_0[1], start_pos_0[2] - search_offset],
+                ]
+                for candidate in candidates:
+                    if pathfinder.is_navigable(candidate):
+                        start_pos_1 = candidate
+                        found = True
+                        break
+                if found:
                     break
             if not found:
                 start_pos_1 = start_pos_0.copy()
@@ -213,7 +218,7 @@ def _setup_multi_agent_env(env, cfg: DictConfig):
         start_pos_1 = start_pos_0.copy()
 
     env.sim.set_agent_state(start_pos_0, start_rot_0, agent_id="agent_0")
-    env.sim.set_agent_state(start_pos_1, start_pos_0, agent_id="agent_1")
+    env.sim.set_agent_state(start_pos_1, start_rot_0, agent_id="agent_1")
 
 
 def _build_agent_obs_dict(observations, multi_agent: bool, agent_names: list):
@@ -233,6 +238,8 @@ def main(cfg: DictConfig) -> None:
     num_agents = cfg.get("num_agents", 1)
     agent_names = [f"agent_{i}" for i in range(num_agents)]
     termination_policy = cfg.get("multiagent", {}).get("episode_termination", "cooperative")
+    _itm_pubs = {}
+    _cld_pubs = {}
 
     # Load MP3D validation data for object category mapping
     with gzip.open(
@@ -387,7 +394,7 @@ def main(cfg: DictConfig) -> None:
             label = id_to_name.get(coco_id, label)
 
         llm_answer, room, fusion_threshold = read_answer(
-            llm_answer_path, llm_response_path, label, llm_client
+            llm_answer_path, llm_response_path, label, agent_{agent_name}llm_client
         )
 
         # ── Episode init ──
@@ -395,7 +402,7 @@ def main(cfg: DictConfig) -> None:
 
         if multi_agent:
             _setup_multi_agent_env(env, cfg)
-            observations = env.reset()
+            observations = {name: env.sim.get_agent_observations(name) for name in agent_names}
 
         # Normalize observations dict
         agent_obs_dict = _build_agent_obs_dict(observations, multi_agent, agent_names)
@@ -574,12 +581,16 @@ def main(cfg: DictConfig) -> None:
                     # ITM score
                     img_np = agent_obs.get("rgb", np.zeros((480, 640, 3), dtype=np.uint8))
                     cosine = get_itm_message_cosine(img_np, label, room)
-                    publish_float64(itm_score_pub, cosine)
+                    itm_score_pub_name = f"/blip2/agent_{agent_name}/cosine_score"
+                    if itm_score_pub_name not in globals().get("_itm_pubs", {}):
+                        _itm_pubs[itm_score_pub_name] = rospy.Publisher(itm_score_pub_name, Float64, queue_size=10)
+                    _itm_pubs[itm_score_pub_name].publish(Float64(cosine))
 
                     # Object detection
                     det_img, score_list, object_masks_list, label_list = get_object(
                         label, img_np, detector_cfg, llm_answer
                     )
+                    agent_obs["rgb"] = det_img
                     agent_obs["camera_pitch"] = ast["camera_pitch"]
                     ros_pubs[agent_name].habitat_publish_ros_topic(agent_obs)
 
@@ -591,7 +602,12 @@ def main(cfg: DictConfig) -> None:
                     cld_msg.point_clouds = obj_point_cloud_list
                     cld_msg.confidence_scores = score_list
                     cld_msg.label_indices = label_list
-                    cld_with_score_pub.publish(cld_msg)
+                    cld_pub_name = f"/detector/agent_{agent_name}/clouds_with_scores"
+                    if cld_pub_name not in _cld_pubs:
+                        _cld_pubs[cld_pub_name] = rospy.Publisher(
+                            cld_pub_name, MultipleMasksWithConfidence, queue_size=10
+                        )
+                    _cld_pubs[cld_pub_name].publish(cld_msg)
 
                     # Video
                     if need_video:

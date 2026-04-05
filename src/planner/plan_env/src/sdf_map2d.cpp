@@ -61,9 +61,9 @@ void SDFMap2D::initMap(ros::NodeHandle& nh)
 
   if (!is_real_world) {
     double habitat_max_depth, agent_radius;
-    nh.param("/habitat/simulator/agents/main_agent/sim_sensors/depth_sensor/max_depth",
+    nh.param("/habitat/simulator/agents/agent_0/sim_sensors/depth_sensor/max_depth",
         habitat_max_depth, -1.0);
-    nh.param("/habitat/simulator/agents/main_agent/radius", agent_radius, -1.0);
+    nh.param("/habitat/simulator/agents/agent_0/radius", agent_radius, -1.0);
     if (habitat_max_depth != -1.0) {
       mp_->max_ray_length_ = habitat_max_depth - 1e-3;
       ROS_WARN(

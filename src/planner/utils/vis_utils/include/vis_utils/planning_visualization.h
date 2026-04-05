@@ -41,6 +41,9 @@ private:
   ros::Publisher viewpoint_pub_;  // 6, viewpoint planning
   vector<ros::Publisher> pubs_;   //
 
+  int          agent_id_;
+  std::string  agent_prefix_;
+
   int last_topo_path1_num_;
   int last_topo_path2_num_;
   int last_bspline_phase1_num_;
@@ -54,7 +57,7 @@ public:
   ~PlanningVisualization()
   {
   }
-  PlanningVisualization(ros::NodeHandle& nh);
+  PlanningVisualization(ros::NodeHandle& nh, int agent_id = 0);
 
   // new interface
   void fillBasicInfo(visualization_msgs::Marker& mk, const Eigen::Vector3d& scale,

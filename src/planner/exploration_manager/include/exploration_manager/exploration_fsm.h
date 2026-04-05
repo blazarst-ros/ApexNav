@@ -6,6 +6,7 @@
 
 // Standard C++ libraries
 #include <memory>
+#include <mutex>
 #include <string>
 #include <vector>
 
@@ -79,23 +80,24 @@ private:
   ros::NodeHandle nh_;
   shared_ptr<FastPlannerManager> planner_manager_;
   shared_ptr<ExplorationManager> expl_manager_;
-  shared_ptr<PlanningVisualization> visualization_;
+  vector<shared_ptr<PlanningVisualization>> visualization_;
 
   shared_ptr<FSMParam> fp_;
   shared_ptr<FSMData> fd_;
-  ROS_STATE state_;
+  ROS_STATE state_[NUM_AGENTS];
+  std::mutex data_mutex_;  // Protect fd_ and state_ array
 
   /* ROS Utils */
   ros::NodeHandle node_;
-  ros::Timer exec_timer_, vis_timer_, frontier_timer_;
-  ros::Subscriber trigger_sub_, odom_sub_, habitat_state_sub_, confidence_threshold_sub_;
-  ros::Publisher action_pub_, ros_state_pub_, expl_state_pub_, expl_result_pub_;
-  ros::Publisher robot_marker_pub_;
+  ros::Timer exec_timer_, frontier_timer_;
+  ros::Subscriber trigger_sub_, odom_sub_[NUM_AGENTS], habitat_state_sub_, confidence_threshold_sub_;
+  ros::Publisher action_pub_[NUM_AGENTS], ros_state_pub_, expl_state_pub_, expl_result_pub_;
+  ros::Publisher robot_marker_pub_[NUM_AGENTS];
 
   /* Action Planner */
-  int callActionPlanner();
+  int callActionPlanner(int agent_idx);
   int planNextBestAction(Vector2d current_pos, double current_yaw, const vector<Vector2d>& path,
-      bool need_safety = true);
+      bool need_safety = true, int agent_idx = 0);
   Vector2d selectLocalTarget(
       const Vector2d& current_pos, const vector<Vector2d>& path, const double& local_distance);
   int decideNextAction(double current_yaw, double target_yaw);
@@ -107,9 +109,9 @@ private:
 
   /* Helper functions */
   bool updateFrontierAndObject();
-  void transitState(ROS_STATE new_state, string pos_call);
+  void transitState(int agent_idx, ROS_STATE new_state, string pos_call);
   void wrapAngle(double& angle);
-  void publishRobotMarker();
+  void publishRobotMarker(int agent_idx);
   void visualize();
   void clearVisMarker();
 
@@ -117,7 +119,9 @@ private:
   void FSMCallback(const ros::TimerEvent& e);
   void frontierCallback(const ros::TimerEvent& e);
   void triggerCallback(const geometry_msgs::PoseStampedConstPtr& msg);
-  void odometryCallback(const nav_msgs::OdometryConstPtr& msg);
+  void odometryCallback(const nav_msgs::OdometryConstPtr& msg, int agent_idx);
+  void odometryCallback0(const nav_msgs::OdometryConstPtr& msg) { odometryCallback(msg, 0); }
+  void odometryCallback1(const nav_msgs::OdometryConstPtr& msg) { odometryCallback(msg, 1); }
   void habitatStateCallback(const std_msgs::Int32ConstPtr& msg);
   void confidenceThresholdCallback(const std_msgs::Float64ConstPtr& msg);
 

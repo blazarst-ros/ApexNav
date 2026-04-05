@@ -161,9 +161,11 @@ def main(cfg: DictConfig) -> None:
     # Use agent_0 as primary for shared messages
     ros_pub = ros_pubs[agent_names[0]]
     timer = rospy.Timer(rospy.Duration(0.1), publish_observations)
-    itm_score_pub = rospy.Publisher("/blip2/cosine_score", Float64, queue_size=10)
-    cld_with_score_pub = rospy.Publisher("/detector/clouds_with_scores", MultipleMasksWithConfidence, queue_size=10)
     confidence_threshold_pub = rospy.Publisher("/detector/confidence_threshold", Float64, queue_size=10)
+
+    # Per-agent ITM and cloud publishers
+    _itm_pubs = {}
+    _cld_pubs = {}
 
     print("Multi-agent stepping inside environment.")
     print_manual_controls()
@@ -232,7 +234,12 @@ def main(cfg: DictConfig) -> None:
 
         agent_obs = observations[agent_name]
         cosine = get_itm_message_cosine(agent_obs["rgb"], label, room)
-        publish_float64(itm_score_pub, cosine)
+
+        # Per-agent ITM score publisher
+        itm_topic = f"/blip2/{agent_name}/cosine_score"
+        if itm_topic not in _itm_pubs:
+            _itm_pubs[itm_topic] = rospy.Publisher(itm_topic, Float64, queue_size=10)
+        _itm_pubs[itm_topic].publish(Float64(cosine))
 
         if not llm_answer:
             llm_answer = ["stop", "stop"]
@@ -244,6 +251,20 @@ def main(cfg: DictConfig) -> None:
         agent_obs["rgb"] = detect_img
         agent_obs["camera_pitch"] = ast["camera_pitch"]
         ros_pubs[agent_name].habitat_publish_ros_topic(agent_obs)
+
+        # Per-agent point cloud publisher
+        from basic_utils.object_point_cloud_utils.object_point_cloud import get_object_point_cloud
+        obj_point_cloud_list = get_object_point_cloud(
+            cfg, {**agent_obs}, object_masks_list, agent_name
+        )
+        cld_topic = f"/detector/{agent_name}/clouds_with_scores"
+        if cld_topic not in _cld_pubs:
+            _cld_pubs[cld_topic] = rospy.Publisher(cld_topic, MultipleMasksWithConfidence, queue_size=10)
+        cld_msg = MultipleMasksWithConfidence()
+        cld_msg.point_clouds = obj_point_cloud_list
+        cld_msg.confidence_scores = score_list
+        cld_msg.label_indices = label_list
+        _cld_pubs[cld_topic].publish(cld_msg)
 
         render_obs = {
             k: v for k, v in agent_obs.items()

@@ -29,7 +29,7 @@ habitat_sensor:
 habitat:
   simulator:
     agents:
-      main_agent:
+      agent_0:
         sim_sensors:
           depth_sensor:
             # position: [x, y, z] (y is camera height)
