@@ -80,7 +80,7 @@ void MapROS::init()
   esdf_timer_ = node_.createTimer(ros::Duration(0.1), &MapROS::updateESDFCallback, this);
   vis_timer_ = node_.createTimer(ros::Duration(0.25), &MapROS::visCallback, this);
 
-  // Setup publishers for map visualization (shared ï¿?? merged map output)
+  // Setup publishers for map visualization (shared ï¿½?? merged map output)
   occupied_pub_ = node_.advertise<sensor_msgs::PointCloud2>("/grid_map/occupied", 10);
   unknown_pub_ = node_.advertise<sensor_msgs::PointCloud2>("/grid_map/unknown", 10);
   free_pub_ = node_.advertise<sensor_msgs::PointCloud2>("/grid_map/free", 10);
@@ -117,7 +117,7 @@ void MapROS::init()
         std::string prefix = base.substr(0, pos);
         return prefix + "agent_" + std::to_string(id);
       }
-      // No agent marker found ï¿?? append suffix
+      // No agent marker found ï¿½?? append suffix
       return base + "/agent_" + std::to_string(id);
     };
 
@@ -151,11 +151,17 @@ void MapROS::init()
     std::string agent_cld = "/detector/agent_" + std::to_string(id) + "/clouds_with_scores";
 
     detected_object_cloud_sub_.push_back(
-        node_.subscribe(agent_cld, 10, &MapROS::detectedObjectCloudCallback, this,
-            boost::bind(boost::lambda::_1, id)));
+        node_.subscribe(agent_cld, 10,
+            boost::function<void(const plan_env::MultipleMasksWithConfidenceConstPtr&)>(
+                [this, id](const plan_env::MultipleMasksWithConfidenceConstPtr& msg) {
+                    return detectedObjectCloudCallback(id, msg);
+                })));
     itm_score_sub_.push_back(
-        node_.subscribe(agent_itm, 10, &MapROS::itmScoreCallback, this,
-            boost::bind(boost::lambda::_1, id)));
+        node_.subscribe(agent_itm, 10,
+            boost::function<void(const std_msgs::Float64ConstPtr&)>(
+                [this, id](const std_msgs::Float64ConstPtr& msg) {
+                    return itmScoreCallback(id, msg);
+                })));
   }
 
   // Initialize object tracking variables (shared)
@@ -167,7 +173,7 @@ void MapROS::visCallback(const ros::TimerEvent& /*event*/)
 {
   vis_timer_.stop();
 
-  // All publish functions read shared map data ï¿?? protect with mutex
+  // All publish functions read shared map data ï¿½?? protect with mutex
   {
     std::lock_guard<std::mutex> lock(map_mutex_);
     publishOccupied();
@@ -202,7 +208,7 @@ void MapROS::detectedObjectCloudCallback(int agent_id, const plan_env::MultipleM
 
   auto t1 = ros::Time::now();
 
-  // Check camera orientation ï¿?? only process when looking down
+  // Check camera orientation ï¿½?? only process when looking down
   Eigen::Vector3d euler =
       agent.camera_q_.toRotationMatrix().eulerAngles(2, 1, 0);  // ZYX order: yaw, roll, pitch
   if (euler[2] < 0)
@@ -213,7 +219,7 @@ void MapROS::detectedObjectCloudCallback(int agent_id, const plan_env::MultipleM
 
   // Backup previous per-agent over-depth object cloud for consistency tracking
   auto last_over_depth_cloud =
-      std::make_shared<PointCloud3D>(*agent.over_depth_object_cloud_);
+      boost::make_shared<PointCloud3D>(*agent.over_depth_object_cloud_);
   agent.over_depth_object_cloud_.reset(new PointCloud3D());
 
   // Initialize point cloud processing tools and containers
@@ -378,7 +384,7 @@ void MapROS::depthPoseCallback(
   processDepthImage(agent_id);
   filterPointCloudToXY(agent_id);
 
-  // Update shared map data (requires mutex ï¿?? write to shared map)
+  // Update shared map data (requires mutex ï¿½?? write to shared map)
   std::lock_guard<std::mutex> lock(map_mutex_);
 
   // Virtual ground ground points collected in filterPointCloudToXY
@@ -387,7 +393,7 @@ void MapROS::depthPoseCallback(
 
   vector<Eigen::Vector2i> free_grids;
   dilateGrids(free_grids, 1);
-  map_->inputDepthCloud2D(agent.filtered_depth_cloud2d_, camera_pos, free_grids);
+  map_->inputDepthCloud2D(agent.filtered_depth_cloud2d_, agent.camera_pos_, free_grids);
   double process_time = (ros::Time::now() - t1).toSec();
   ROS_INFO_THROTTLE(50.0, "[Calculating Time] Grid Map process time = %.3f s", process_time);
 
@@ -538,7 +544,7 @@ bool MapROS::interpolateLineAtZ(
 
 void MapROS::getObservationObjectsCloud(int agent_id, const vector<int>& filter_object_ids)
 {
-  // Caller already holds map_mutex_ ï¿?? called from within detectedObjectCloudCallback's lock scope
+  // Caller already holds map_mutex_ ï¿½?? called from within detectedObjectCloudCallback's lock scope
   AgentState& agent = agents_[agent_id];
 
   // Downsample depth cloud

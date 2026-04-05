@@ -86,7 +86,7 @@ void ExplorationFSMReal::FSMCallback(
   switch (state_) {
     case RealFSM::State::INIT: {
       // Wait for odometry and target confidence threshold
-      if (!fd_->have_odom_ || !fd_->have_confidence_) {
+      if (!fd_->agent_[0].have_odom_ || !fd_->have_confidence_) {
         ROS_WARN_THROTTLE(1.0, "[Real] No odom || No target confidence threshold.");
         exec_timer_.start();
         return;
@@ -105,8 +105,8 @@ void ExplorationFSMReal::FSMCallback(
 
     case RealFSM::State::FINISH: {
       fd_->static_state_ = true;
-      if (!fd_->have_finished_) {
-        fd_->have_finished_ = true;
+      if (!fd_->agent_[0].have_finished_) {
+        fd_->agent_[0].have_finished_ = true;
         clearVisMarker();
       }
       ROS_WARN_THROTTLE(1.0, "[Real] Finish exploration!");
@@ -117,10 +117,10 @@ void ExplorationFSMReal::FSMCallback(
       // Plan trajectory based on current state
       if (fd_->static_state_) {
         // Robot is static, use current odometry
-        fd_->start_pt_ = fd_->odom_pos_;
-        fd_->start_vel_ = fd_->odom_vel_;
-        fd_->start_yaw_ = fd_->odom_yaw_;
-        fd_->start_yaw_rate_ = 0.0;
+        fd_->agent_[0].start_pt_ = fd_->agent_[0].odom_pos_;
+        fd_->agent_[0].start_vel_ = fd_->agent_[0].odom_vel_;
+        fd_->agent_[0].start_yaw_ = fd_->agent_[0].odom_yaw_;
+        fd_->agent_[0].start_yaw_rate_ = 0.0;
       }
       else {
         // Robot is moving, predict future state for smooth replanning（保证轨迹平滑性）
@@ -147,10 +147,10 @@ void ExplorationFSMReal::FSMCallback(
         double omega = help1 * cur_acc_2d.transpose() * B_h * cur_vel_2d;//提取垂直加速度分量进行点积，v*OMEGA
         
         //将预测结果存入 FSM 运行时数据容器，作为新轨迹的起始状态
-        fd_->start_pt_ = cur_pos;
-        fd_->start_vel_ = cur_vel;
-        fd_->start_yaw_ = cur_yaw;
-        fd_->start_yaw_rate_ = omega;
+        fd_->agent_[0].start_pt_ = cur_pos;
+        fd_->agent_[0].start_vel_ = cur_vel;
+        fd_->agent_[0].start_yaw_ = cur_yaw;
+        fd_->agent_[0].start_yaw_rate_ = omega;
       }
 
       TrajPlannerResult res = callTrajectoryPlanner();  
@@ -179,10 +179,10 @@ void ExplorationFSMReal::FSMCallback(
 
     case RealFSM::State::EXEC_TRAJ: {
       // Publish trajectory and transition to execution monitoring
-      double dt = (ros::Time::now() - fd_->newest_traj_.start_time).toSec();
+      double dt = (ros::Time::now() - fd_->agent_[0].newest_traj_.start_time).toSec();
       if (dt > 0) {//等到轨迹生效时间到达后，才发布轨迹（否则执行预测瞬时轨迹）
         trajectory_manager::PolyTraj poly_msg;
-        polyTraj2ROSMsg(fd_->newest_traj_, poly_msg);
+        polyTraj2ROSMsg(fd_->agent_[0].newest_traj_, poly_msg);
         poly_traj_pub_.publish(poly_msg);
         fd_->static_state_ = false;
         transitState(RealFSM::State::REPLAN, "FSM");
@@ -206,7 +206,7 @@ void ExplorationFSMReal::FSMCallback(
 
       // Replan if frontier changed during exploration（不是等轨迹完全执行完毕再规划，而是 “提前预判”）
       if (t_cur > fp_->replan_frontier_change_delay_ &&
-          fd_->final_result_ == FINAL_RESULT::EXPLORE &&
+          fd_->agent_[0].final_result_ == FINAL_RESULT::EXPLORE &&
           expl_manager_->frontier_map2d_->isAnyFrontierChanged()) {
         transitState(RealFSM::State::PLAN_TRAJ, "FSM");
         ROS_WARN("[Real] Replan: frontier changed");
@@ -236,26 +236,26 @@ TrajPlannerResult ExplorationFSMReal::callTrajectoryPlanner()
   updateFrontierAndObject();
 
   // Call exploration manager to find next best point
-  int expl_res = expl_manager_->planNextBestPoint(fd_->start_pt_, fd_->start_yaw_);
+  int expl_res = expl_manager_->planNextBestPoint(fd_->agent_[0].start_pt_, fd_->agent_[0].start_yaw_);
 
 
 
   // Determine final result based on exploration result(确定任务状态,成功/失败/无前沿)
   if (expl_res == EXPL_RESULT::EXPLORATION)
-    fd_->final_result_ = FINAL_RESULT::EXPLORE;
+    fd_->agent_[0].final_result_ = FINAL_RESULT::EXPLORE;
   else if (expl_res == EXPL_RESULT::NO_COVERABLE_FRONTIER ||
            expl_res == EXPL_RESULT::NO_PASSABLE_FRONTIER)
-    fd_->final_result_ = FINAL_RESULT::NO_FRONTIER;
+    fd_->agent_[0].final_result_ = FINAL_RESULT::NO_FRONTIER;
   else
-    fd_->final_result_ = FINAL_RESULT::SEARCH_OBJECT;
+    fd_->agent_[0].final_result_ = FINAL_RESULT::SEARCH_OBJECT;
 
 
   // Publish exploration result
   std_msgs::Int32 expl_result_msg;
-  expl_result_msg.data = fd_->final_result_;
+  expl_result_msg.data = fd_->agent_[0].final_result_;
   expl_result_pub_.publish(expl_result_msg);
 
-  if (fd_->final_result_ == FINAL_RESULT::NO_FRONTIER) {
+  if (fd_->agent_[0].final_result_ == FINAL_RESULT::NO_FRONTIER) {
     ROS_WARN("[Real] No (passable) frontier");
     return TrajPlannerResult::MISSION_COMPLETE;
   }
@@ -264,15 +264,15 @@ TrajPlannerResult ExplorationFSMReal::callTrajectoryPlanner()
   Eigen::Vector2d goal_pos = expl_manager_->ed_->next_pos_;
   double goal_yaw = 0.0;
   auto path = expl_manager_->ed_->next_best_path_;
-  selectLocalTarget(fd_->start_pt_.head(2), path, 4.0, goal_pos, goal_yaw);
+  selectLocalTarget(fd_->agent_[0].start_pt_.head(2), path, 4.0, goal_pos, goal_yaw);
   //只规划“当前位置到4米内”的局部目标点
   //在此选定了局部目标点goal_pos和goal_yaw等
 
 
 
   // Check if reached object
-  if (fd_->final_result_ == FINAL_RESULT::SEARCH_OBJECT &&
-      (fd_->start_pt_.head(2) - goal_pos).norm() < 0.25) {
+  if (fd_->agent_[0].final_result_ == FINAL_RESULT::SEARCH_OBJECT &&
+      (fd_->agent_[0].start_pt_.head(2) - goal_pos).norm() < 0.25) {
     ROS_ERROR("[Real] Reach the object successfully!");
     return TrajPlannerResult::MISSION_COMPLETE;
   }
@@ -280,8 +280,8 @@ TrajPlannerResult ExplorationFSMReal::callTrajectoryPlanner()
   // Prepare state for trajectory planning
   Eigen::VectorXd goal_state(5), current_state(5);// 定义5维的起始/目标状态（GCopter算法要求的输入格式）
   Eigen::Vector3d current_control(0.0, 0.0, 0.0); // 初始控制量（无额外约束）
-  double start_vel = Eigen::Vector2d(fd_->start_vel_(0), fd_->start_vel_(1)).norm();// 计算起始速度的大小（只取平面速度，忽略z轴）
-  current_state << fd_->start_pt_(0), fd_->start_pt_(1), fd_->start_yaw_, 0.0, start_vel;// 填充起始状态：x坐标、y坐标、航向角、航向角速度（设0）、速度大小
+  double start_vel = Eigen::Vector2d(fd_->agent_[0].start_vel_(0), fd_->agent_[0].start_vel_(1)).norm();// 计算起始速度的大小（只取平面速度，忽略z轴）
+  current_state << fd_->agent_[0].start_pt_(0), fd_->agent_[0].start_pt_(1), fd_->agent_[0].start_yaw_, 0.0, start_vel;// 填充起始状态：x坐标、y坐标、航向角、航向角速度（设0）、速度大小
   goal_state << goal_pos(0), goal_pos(1), goal_yaw, 0.0, 0.0;
   // 填充目标状态：x坐标、y坐标、目标航向角、航向角速度（设0）、目标速度（设0，到点就停）
   
@@ -291,7 +291,7 @@ TrajPlannerResult ExplorationFSMReal::callTrajectoryPlanner()
   if (traj_res) {
     auto info = &expl_manager_->gcopter_->local_trajectory_;
     info->start_time = (ros::Time::now() - time_r).toSec() > 0 ? ros::Time::now() : time_r;
-    fd_->newest_traj_ = expl_manager_->gcopter_->local_trajectory_;
+    fd_->agent_[0].newest_traj_ = expl_manager_->gcopter_->local_trajectory_;
     return TrajPlannerResult::SUCCESS;
   }
 
@@ -471,11 +471,11 @@ bool ExplorationFSMReal::updateFrontierAndObject()//负责同步更新「探索�
   auto frt_map = expl_manager_->frontier_map2d_;//auto是必须初始化的自动指针，指向「前沿地图」对象
   auto obj_map = expl_manager_->object_map2d_;
   auto ed = expl_manager_->ed_;
-  Eigen::Vector2d sensor_pos = Eigen::Vector2d(fd_->odom_pos_(0), fd_->odom_pos_(1));
+  Eigen::Vector2d sensor_pos = Eigen::Vector2d(fd_->agent_[0].odom_pos_(0), fd_->agent_[0].odom_pos_(1));
 
   change_flag = frt_map->isAnyFrontierChanged();
   frt_map->searchFrontiers();
-  change_flag |= frt_map->dormantSeenFrontiers(sensor_pos, fd_->odom_yaw_);
+  change_flag |= frt_map->dormantSeenFrontiers(sensor_pos, fd_->agent_[0].odom_yaw_);
   frt_map->getFrontiers(ed->frontiers_, ed->frontier_averages_);
   frt_map->getDormantFrontiers(ed->dormant_frontiers_, ed->dormant_frontier_averages_);
   obj_map->getObjects(ed->objects_, ed->object_averages_, ed->object_labels_);
@@ -510,29 +510,29 @@ void ExplorationFSMReal::triggerCallback(const geometry_msgs::PoseStampedConstPt
 void ExplorationFSMReal::odometryCallback(const nav_msgs::OdometryConstPtr& msg)//获取机器人实时运动状态的核心入口
 {/*实时接收机器人的里程计（Odometry）消息，解析出位置、姿态（航向角）、线速度、角速度等核心运动数据，
   存入 FSM 运行时数据容器（fd_），标记 “已获取里程计数据”，并触发机器人可视化标记的发布*/
-  fd_->odom_pos_(0) = msg->pose.pose.position.x;
-  fd_->odom_pos_(1) = msg->pose.pose.position.y;
-  fd_->odom_pos_(2) = msg->pose.pose.position.z;
+  fd_->agent_[0].odom_pos_(0) = msg->pose.pose.position.x;
+  fd_->agent_[0].odom_pos_(1) = msg->pose.pose.position.y;
+  fd_->agent_[0].odom_pos_(2) = msg->pose.pose.position.z;
 
-  fd_->odom_orient_.w() = msg->pose.pose.orientation.w;
-  fd_->odom_orient_.x() = msg->pose.pose.orientation.x;
-  fd_->odom_orient_.y() = msg->pose.pose.orientation.y;
-  fd_->odom_orient_.z() = msg->pose.pose.orientation.z;
+  fd_->agent_[0].odom_orient_.w() = msg->pose.pose.orientation.w;
+  fd_->agent_[0].odom_orient_.x() = msg->pose.pose.orientation.x;
+  fd_->agent_[0].odom_orient_.y() = msg->pose.pose.orientation.y;
+  fd_->agent_[0].odom_orient_.z() = msg->pose.pose.orientation.z;
 
-  Eigen::Vector3d rot_x = fd_->odom_orient_.toRotationMatrix().block<3, 1>(0, 0);
-  fd_->odom_yaw_ = atan2(rot_x(1), rot_x(0));
+  Eigen::Vector3d rot_x = fd_->agent_[0].odom_orient_.toRotationMatrix().block<3, 1>(0, 0);
+  fd_->agent_[0].odom_yaw_ = atan2(rot_x(1), rot_x(0));
 
   // Extract linear velocity
-  fd_->odom_vel_(0) = msg->twist.twist.linear.x;
-  fd_->odom_vel_(1) = msg->twist.twist.linear.y;
-  fd_->odom_vel_(2) = msg->twist.twist.linear.z;
+  fd_->agent_[0].odom_vel_(0) = msg->twist.twist.linear.x;
+  fd_->agent_[0].odom_vel_(1) = msg->twist.twist.linear.y;
+  fd_->agent_[0].odom_vel_(2) = msg->twist.twist.linear.z;
 
   // Extract angular velocity
-  fd_->odom_omega_(0) = msg->twist.twist.angular.x;
-  fd_->odom_omega_(1) = msg->twist.twist.angular.y;
-  fd_->odom_omega_(2) = msg->twist.twist.angular.z;
+  fd_->agent_[0].odom_omega_(0) = msg->twist.twist.angular.x;
+  fd_->agent_[0].odom_omega_(1) = msg->twist.twist.angular.y;
+  fd_->agent_[0].odom_omega_(2) = msg->twist.twist.angular.z;
 
-  fd_->have_odom_ = true;
+  fd_->agent_[0].have_odom_ = true;
 
   // Publish robot marker for visualization
   publishRobotMarker();
@@ -565,7 +565,7 @@ void ExplorationFSMReal::goalCallback(const geometry_msgs::PoseWithCovarianceSta
 
   Eigen::VectorXd goal_state(5), current_state(5);
   Eigen::Vector3d current_control;
-  current_state << fd_->odom_pos_(0), fd_->odom_pos_(1), fd_->odom_yaw_, 0.0, fd_->odom_vel_(0);
+  current_state << fd_->agent_[0].odom_pos_(0), fd_->agent_[0].odom_pos_(1), fd_->agent_[0].odom_yaw_, 0.0, fd_->agent_[0].odom_vel_(0);
   goal_state << x, y, yaw, 0.0, 0.0;
   if ((current_state.head(2) - goal_state.head(2)).norm() > 0.2) {
     current_control << 0.0, 0.0, 0.0;
@@ -593,7 +593,7 @@ void ExplorationFSMReal::safetyCallback(const ros::TimerEvent& e)  // 安全监�
   t_cur = min(t_cur, expl_manager_->gcopter_->local_trajectory_.duration);
   Eigen::Vector3d cur_pos = expl_manager_->gcopter_->local_trajectory_.traj.getPos(t_cur);
 
-  if ((cur_pos.head(2) - fd_->odom_pos_.head(2)).norm() > 0.3) {
+  if ((cur_pos.head(2) - fd_->agent_[0].odom_pos_.head(2)).norm() > 0.3) {
     ROS_ERROR("[Real] Odom far from traj (%.2f, %.2f), Stop!!!", cur_pos(0), cur_pos(1));
     emergencyStop();
     transitState(RealFSM::State::PLAN_TRAJ, "Odom Far From Trajectory");
@@ -638,14 +638,14 @@ void ExplorationFSMReal::publishRobotMarker()
   robot_marker.type = visualization_msgs::Marker::CYLINDER;
   robot_marker.action = visualization_msgs::Marker::ADD;
 
-  robot_marker.pose.position.x = fd_->odom_pos_(0);
-  robot_marker.pose.position.y = fd_->odom_pos_(1);
-  robot_marker.pose.position.z = fd_->odom_pos_(2) + robot_height / 2.0;
+  robot_marker.pose.position.x = fd_->agent_[0].odom_pos_(0);
+  robot_marker.pose.position.y = fd_->agent_[0].odom_pos_(1);
+  robot_marker.pose.position.z = fd_->agent_[0].odom_pos_(2) + robot_height / 2.0;
 
-  robot_marker.pose.orientation.x = fd_->odom_orient_.x();
-  robot_marker.pose.orientation.y = fd_->odom_orient_.y();
-  robot_marker.pose.orientation.z = fd_->odom_orient_.z();
-  robot_marker.pose.orientation.w = fd_->odom_orient_.w();
+  robot_marker.pose.orientation.x = fd_->agent_[0].odom_orient_.x();
+  robot_marker.pose.orientation.y = fd_->agent_[0].odom_orient_.y();
+  robot_marker.pose.orientation.z = fd_->agent_[0].odom_orient_.z();
+  robot_marker.pose.orientation.w = fd_->agent_[0].odom_orient_.w();
 
   robot_marker.scale.x = robot_radius * 2;
   robot_marker.scale.y = robot_radius * 2;
@@ -665,14 +665,14 @@ void ExplorationFSMReal::publishRobotMarker()
   arrow_marker.type = visualization_msgs::Marker::ARROW;
   arrow_marker.action = visualization_msgs::Marker::ADD;
 
-  arrow_marker.pose.position.x = fd_->odom_pos_(0);
-  arrow_marker.pose.position.y = fd_->odom_pos_(1);
-  arrow_marker.pose.position.z = fd_->odom_pos_(2) + robot_height;
+  arrow_marker.pose.position.x = fd_->agent_[0].odom_pos_(0);
+  arrow_marker.pose.position.y = fd_->agent_[0].odom_pos_(1);
+  arrow_marker.pose.position.z = fd_->agent_[0].odom_pos_(2) + robot_height;
 
-  arrow_marker.pose.orientation.x = fd_->odom_orient_.x();
-  arrow_marker.pose.orientation.y = fd_->odom_orient_.y();
-  arrow_marker.pose.orientation.z = fd_->odom_orient_.z();
-  arrow_marker.pose.orientation.w = fd_->odom_orient_.w();
+  arrow_marker.pose.orientation.x = fd_->agent_[0].odom_orient_.x();
+  arrow_marker.pose.orientation.y = fd_->agent_[0].odom_orient_.y();
+  arrow_marker.pose.orientation.z = fd_->agent_[0].odom_orient_.z();
+  arrow_marker.pose.orientation.w = fd_->agent_[0].odom_orient_.w();
 
   arrow_marker.scale.x = robot_radius + 0.13;
   arrow_marker.scale.y = 0.08;

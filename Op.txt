@@ -1,0 +1,131 @@
+**************编译环境进行：**************
+# 终端0
+cd ApexNav
+conda deactivate
+rm -rf build/ devel/
+unset LD_LIBRARY_PATH
+catkin_make -DPYTHON_EXECUTABLE=/usr/bin/python3
+
+（可以在最后关闭）
+
+
+*************务必记得启动ROS核心****************************
+source /opt/ros/noetic/setup.bash
+roscore
+
+***************开启VLM必要的库****************
+
+# 终端 1
+cd ApexNav
+conda activate apexnav
+#export no_proxy="localhost,127.0.0.1"
+export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+python -m vlm.detector.grounding_dino --port 12181
+# 终端 2
+cd ApexNav
+conda activate apexnav
+#export no_proxy="localhost,127.0.0.1"
+export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+python -m vlm.itm.blip2itm --port 12182
+# 终端 3
+cd ApexNav
+conda activate apexnav
+#export no_proxy="localhost,127.0.0.1"
+export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+python -m vlm.segmentor.sam --port 12183
+# 终端 4
+cd ApexNav
+conda activate apexnav
+#export no_proxy="localhost,127.0.0.1"
+export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+python -m vlm.detector.yolov7 --port 12184
+
+
+
+
+
+**************Rviz可视化模型的启动**************
+终端 5：新开终端，确保前面没有 (apexnav) 括号
+
+source /opt/ros/noetic/setup.bash
+cd ~/ApexNav
+source ./devel/setup.bash
+roslaunch exploration_manager rviz_traj.launch
+
+
+
+
+
+************自动推理（大脑）**************************
+conda activate apexnav
+cd ~/ApexNav
+source ./devel/setup.bash
+
+#unset http_proxy https_proxy all_proxy
+#export ROS_IP=127.0.0.1
+#export ROS_MASTER_URI=http://127.0.0.1:11311
+
+
+export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+export LD_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu:/opt/ros/noetic/lib:$LD_LIBRARY_PATH
+
+roslaunch exploration_manager exploration_traj.launch 
+(*自主導航與軌跡展示)
+
+#(純邏輯/評測模式)roslaunch exploration_manager exploration.launch
+
+#(*實機測試範例)roslaunch exploration_manager exploration_traj.launch
+*************启动导航（身体）***************************
+
+
+conda activate apexnav
+cd ~/ApexNav
+source ./devel/setup.bash
+
+export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+export LD_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu:/opt/ros/noetic/lib:$LD_LIBRARY_PATH
+export LD_PRELOAD=/usr/lib/x86_64-linux-gnu/libffi.so.7
+
+#unset http_proxy https_proxy all_proxy
+#export ROS_IP=127.0.0.1
+#export ROS_MASTER_URI=http://127.0.0.1:11311
+
+python habitat_vel_control.py \
+  habitat.dataset.data_path="data/datasets/objectnav/hm3d/v1/val/content/TbHJrupSAjP.json.gz" \
+  test_epi_num=1
+  
+python habitat_vel_control.py test_epi_num=8
+(*自主導航與軌跡展示)
+#(純邏輯/評測模式)python habitat_evaluation.py --dataset hm3dv2
+
+#(*實機測試範例)python ./real_world_test_example/real_world_test_habitat.py
+
+
+
+
+
+
+*******************真实世界节点启动（桥联节点）********************************
+conda activate apexnav
+cd ~/ApexNav
+source ./devel/setup.bash
+
+export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+export LD_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu:/opt/ros/noetic/lib:$LD_LIBRARY_PATH
+export LD_PRELOAD=/usr/lib/x86_64-linux-gnu/libffi.so.7
+
+
+#unset http_proxy https_proxy all_proxy
+#export ROS_IP=127.0.0.1
+#export ROS_MASTER_URI=http://127.0.0.1:11311
+
+python ./real_world_test_example/real_world_test_habitat.py # 3. 執行橋接節點
+
+
+
+******************************************************************
+1.具体内容见---/home/blazarst/图片/2026-01-28 23-32-34 的屏幕截图.png
+2./home/blazarst/ApexNav/llm/client/deepseek_answer.py中进行API设置
+3.显存管理监视： watch -n 0.1 nvidia-smi
+4.rosrun rqt_graph rqt_graph 查看节点通信图
+5.find ~/ApexNav -name "__pycache__" -type d -exec rm -rf {} +    清除旧的缓存文件(务必在更改之后清楚缓存)

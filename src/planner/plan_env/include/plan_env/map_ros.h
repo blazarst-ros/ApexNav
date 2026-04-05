@@ -161,3 +161,7 @@ private:
 
   friend SDFMap2D;
 };
+
+}  // namespace apexnav_planner
+
+#endif

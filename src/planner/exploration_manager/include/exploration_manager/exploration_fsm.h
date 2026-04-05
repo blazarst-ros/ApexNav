@@ -10,6 +10,8 @@
 #include <string>
 #include <vector>
 
+#include <exploration_manager/exploration_data.h>
+
 // ROS core
 #include <ros/ros.h>
 

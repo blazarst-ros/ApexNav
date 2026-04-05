@@ -22,6 +22,7 @@ struct AgentFSMData {
   {
     have_odom_ = false;
     have_finished_ = false;
+    trigger_ = false;
     odom_pos_ = Eigen::Vector3d::Zero();
     odom_orient_ = Eigen::Quaterniond::Identity();
     odom_yaw_ = 0.0;
@@ -44,8 +45,11 @@ struct AgentFSMData {
     stucking_points_.clear();
 
     local_pos_ = Eigen::Vector2d(0, 0);
+    odom_vel_ = Eigen::Vector3d::Zero();
+    start_vel_ = Eigen::Vector3d::Zero();
+    odom_omega_ = Eigen::Vector3d::Zero();
   }
-  bool have_odom_, have_finished_;
+  bool have_odom_, have_finished_, trigger_;
   Eigen::Vector3d odom_pos_;
   Eigen::Quaterniond odom_orient_;
   double odom_yaw_;
@@ -66,6 +70,9 @@ struct AgentFSMData {
   double escape_stucking_yaw_;
   std::vector<Eigen::Vector3d> stucking_points_;
   Eigen::Vector2d local_pos_;
+  Eigen::Vector3d odom_vel_;
+  Eigen::Vector3d start_vel_;
+  Eigen::Vector3d odom_omega_;
   std::vector<Eigen::Vector2d> traveled_path_;
   LocalTrajectory newest_traj_;
 };
