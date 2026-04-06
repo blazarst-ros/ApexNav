@@ -3,6 +3,7 @@
 #include <exploration_manager/exploration_fsm.h>
 #include <exploration_manager/exploration_data.h>
 #include <vis_utils/planning_visualization.h>
+#include <std_msgs/Int32MultiArray.h>
 
 namespace apexnav_planner {
 void ExplorationFSM::init(ros::NodeHandle& nh)
@@ -39,6 +40,7 @@ void ExplorationFSM::init(ros::NodeHandle& nh)
 
   /* ROS Publisher */
   ros_state_pub_ = nh.advertise<std_msgs::Int32>("/ros/state", 10);
+  ros_state_all_pub_ = nh.advertise<std_msgs::Int32MultiArray>("/ros/state_all", 10);
   expl_state_pub_ = nh.advertise<std_msgs::Int32>("/ros/expl_state", 10);
   action_pub_[0] = nh.advertise<std_msgs::Int32>("/habitat/plan_action_agent_0", 10);
   action_pub_[1] = nh.advertise<std_msgs::Int32>("/habitat/plan_action_agent_1", 10);
@@ -52,19 +54,22 @@ void ExplorationFSM::FSMCallback(const ros::TimerEvent& e)
 {
   exec_timer_.stop();
   std::lock_guard<std::mutex> lock(data_mutex_);
-  std_msgs::Int32 ros_state_msg;
-  ros_state_msg.data = state_[0];  // Report primary agent state
-  ros_state_pub_.publish(ros_state_msg);
+
+  std_msgs::Int32MultiArray state_all_msg;
+  state_all_msg.data.resize(NUM_AGENTS);
 
   for (int agent_idx = 0; agent_idx < NUM_AGENTS; ++agent_idx) {
     auto& ad = fd_->agent_[agent_idx];
+    state_all_msg.data[agent_idx] = state_[agent_idx];
 
     switch (state_[agent_idx]) {
       case ROS_STATE::INIT: {
         // Wait for odometry and target confidence threshold
         if (!ad.have_odom_ || !fd_->have_confidence_) {
-          ROS_WARN_THROTTLE(1.0, "Agent %d: No odom || No target confidence threshold.", agent_idx);
-          exec_timer_.start();
+          if (agent_idx == 0)
+            ROS_WARN_THROTTLE(1.0, "Agent 0: No odom || No target confidence threshold.");
+          else
+            ROS_WARN_THROTTLE(1.0, "Agent 1: No odom || No target confidence threshold.");
           continue;
         }
         // Go to WAIT_TRIGGER when prerequisites are ready
@@ -74,7 +79,10 @@ void ExplorationFSM::FSMCallback(const ros::TimerEvent& e)
 
       case ROS_STATE::WAIT_TRIGGER: {
         if (!ad.trigger_) {
-          ROS_WARN_THROTTLE(1.0, "Agent %d: Wait for trigger.", agent_idx);
+          if (agent_idx == 0)
+            ROS_WARN_THROTTLE(1.0, "Agent 0: Wait for trigger.");
+          else
+            ROS_WARN_THROTTLE(1.0, "Agent 1: Wait for trigger.");
         }
         break;
       }
@@ -86,7 +94,10 @@ void ExplorationFSM::FSMCallback(const ros::TimerEvent& e)
           action_msg.data = ACTION::STOP;
           action_pub_[agent_idx].publish(action_msg);
         }
-        ROS_WARN_THROTTLE(1.0, "Agent %d: Finish One Episode!!!", agent_idx);
+        if (agent_idx == 0)
+          ROS_WARN_THROTTLE(1.0, "Agent 0: Finish One Episode!!!");
+        else
+          ROS_WARN_THROTTLE(1.0, "Agent 1: Finish One Episode!!!");
         break;
       }
 
@@ -142,6 +153,12 @@ void ExplorationFSM::FSMCallback(const ros::TimerEvent& e)
       }
     }
   }
+  // Publish legacy single-agent state for backward-compatible consumers
+  std_msgs::Int32 ros_state_msg;
+  ros_state_msg.data = state_[0];
+  ros_state_pub_.publish(ros_state_msg);
+  // Publish per-agent state for multi-agent Python to track all agents
+  ros_state_all_pub_.publish(state_all_msg);
   exec_timer_.start();
 }
 
@@ -614,8 +631,13 @@ bool ExplorationFSM::updateFrontierAndObject()
 void ExplorationFSM::habitatStateCallback(const std_msgs::Int32ConstPtr& msg)
 {
   std::lock_guard<std::mutex> lock(data_mutex_);
-  if (msg->data == HABITAT_STATE::ACTION_FINISH && state_[0] == ROS_STATE::WAIT_ACTION_FINISH)
-    transitState(0, ROS_STATE::PLAN_ACTION, "Habitat Finish Action");
+  if (msg->data == HABITAT_STATE::ACTION_FINISH) {
+    // Trigger all agents that are waiting for action finish
+    for (int agent_idx = 0; agent_idx < NUM_AGENTS; ++agent_idx) {
+      if (state_[agent_idx] == ROS_STATE::WAIT_ACTION_FINISH)
+        transitState(agent_idx, ROS_STATE::PLAN_ACTION, "Habitat Finish Action");
+    }
+  }
   if (msg->data == HABITAT_STATE::EPISODE_FINISH)
     init(nh_);
   return;

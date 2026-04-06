@@ -35,7 +35,11 @@ real_world_node 节点（Multi-agent 双版本）
 将结果发布到各自代理命名空间的话题，供 C++ planner 消费。
 """
 
-NUM_AGENTS = 2
+
+def _get_num_agents(cfg):
+    """Read NUM_AGENTS from config with fallback to 2."""
+    num = getattr(cfg, "num_agents", 2) if cfg else 2
+    return num if num else 2
 
 def inverse_habitat_publisher_transform(sensor_pose_msg):
     """
@@ -237,6 +241,9 @@ class MultiAgentNode:
 
         rospy.init_node("habitat_multiagent_perception", anonymous=False)
 
+        # Determine number of agents from config
+        self.num_agents = _get_num_agents(cfg)
+
         # Shared state: LLM config + label
         self.shared = SharedLLMState(cfg)
 
@@ -250,13 +257,13 @@ class MultiAgentNode:
         rospy.Subscriber("/detector/label", String, self._on_label, queue_size=1)
 
         # Create per-agent pipelines
-        agent_names = [f"agent_{i}" for i in range(NUM_AGENTS)]
+        agent_names = [f"agent_{i}" for i in range(self.num_agents)]
         self.pipelines = {}
         for name in agent_names:
             pipeline = AgentPerceptionPipeline(cfg, name, self.shared)
             self.pipelines[name] = pipeline
 
-        rospy.loginfo(f"Multi-agent perception node created with {NUM_AGENTS} agents")
+        rospy.loginfo(f"Multi-agent perception node created with {self.num_agents} agents")
 
     def _on_label(self, msg):
         """Forward label to all pipelines."""
@@ -269,7 +276,7 @@ class MultiAgentNode:
         self.confidence_threshold_pub_.publish(msg)
 
     def run(self):
-        rospy.loginfo(f"Multi-agent perception node running with {NUM_AGENTS} agents.")
+        rospy.loginfo(f"Multi-agent perception node running with {self.num_agents} agents.")
         rospy.spin()
 
 

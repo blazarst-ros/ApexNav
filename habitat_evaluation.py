@@ -346,7 +346,12 @@ def main(cfg: DictConfig) -> None:
             "habitat/object_point_cloud", PointCloud2, queue_size=10
         )
         ros_pub = habitat_publisher.ROSPublisher()
-    rospy.Subscriber("/ros/state", Int32, ros_state_callback, queue_size=10)
+    # ROS state callbacks for multi-agent tracking
+    ros_all_states = [ROS_STATE.INIT] * num_agents  # Track per-agent state
+    def ros_all_state_callback(msg):
+        for i, s in enumerate(msg.data):
+            ros_all_states[i] = s
+    rospy.Subscriber("/ros/state_all", Int32MultiArray, ros_all_state_callback, queue_size=10)
     rospy.Subscriber("/ros/expl_state", Int32, ros_final_state_callback, queue_size=10)
     rospy.Subscriber("/ros/expl_result", Int32, ros_expl_result_callback, queue_size=10)
     state_pub = rospy.Publisher("/habitat/state", Int32, queue_size=10)
@@ -394,7 +399,7 @@ def main(cfg: DictConfig) -> None:
             label = id_to_name.get(coco_id, label)
 
         llm_answer, room, fusion_threshold = read_answer(
-            llm_answer_path, llm_response_path, label, agent_{agent_name}llm_client
+            llm_answer_path, llm_response_path, label, llm_client
         )
 
         # ── Episode init ──
@@ -436,12 +441,35 @@ def main(cfg: DictConfig) -> None:
             print(f"  Termination policy: {termination_policy}")
 
         rate = rospy.Rate(10)
-        ros_state = ROS_STATE.INIT
-        while ros_state == ROS_STATE.INIT or ros_state == ROS_STATE.WAIT_TRIGGER:
-            if ros_state == ROS_STATE.INIT:
-                print("Waiting for ROS to get odometry...")
-            elif ros_state == ROS_STATE.WAIT_TRIGGER:
-                print("Waiting for ROS trigger...")
+        while True:
+            all_init = all(ros_all_states[i] == ROS_STATE.INIT for i in range(num_agents))
+            any_init = any(ros_all_states[i] == ROS_STATE.INIT for i in range(num_agents))
+            all_wait_trigger = all(ros_all_states[i] == ROS_STATE.WAIT_TRIGGER for i in range(num_agents))
+
+            if all_init:
+                print("Waiting for ROS to get odometry for all agents...")
+            elif not all_wait_trigger:
+                states_str = ", ".join(
+                    f"{agent_names[i]}: state={ros_all_states[i]}" for i in range(num_agents)
+                )
+                print(f"Waiting for trigger: [{states_str}]")
+
+            # Publish odometry/depth for all agents so the C++ planner can detect all agents in INIT state
+            if multi_agent:
+                for agent_name in agent_names:
+                    agent_obs = observations.get(agent_name, {})
+                    gps = agent_obs.get("gps", np.array([0.0, 0.0, 0.0]))
+                    compass = agent_obs.get("compass", np.array([0.0]))[0]
+                    pitch = agent_obs.get("camera_pitch", 0.0)
+                    ros_pubs[agent_name].publish_depth(rospy.Time.now(), agent_obs.get("depth"))
+                    ros_pubs[agent_name].publish_robot_odom(rospy.Time.now(), gps, compass)
+                    ros_pubs[agent_name].publish_camera_odom(rospy.Time.now(), gps, compass, pitch)
+                    ros_pubs[agent_name].publish_rgb(rospy.Time.now(), agent_obs.get("rgb"))
+            else:
+                ros_pub.habitat_publish_ros_topic(observations)
+
+            if all_wait_trigger:
+                break
             rate.sleep()
 
         trigger_pub_timer.shutdown()
@@ -596,7 +624,7 @@ def main(cfg: DictConfig) -> None:
 
                     # Point clouds
                     obj_point_cloud_list = get_object_point_cloud(
-                        cfg, agent_obs, object_masks_list
+                        cfg, agent_obs, object_masks_list, agent_name
                     )
                     cld_msg = MultipleMasksWithConfidence()
                     cld_msg.point_clouds = obj_point_cloud_list
