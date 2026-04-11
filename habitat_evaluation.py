@@ -186,6 +186,7 @@ def _setup_multi_agent_env(env, cfg: DictConfig):
     """Assign per-agent start positions.
 
     Strategy: agent_0 uses episode start_position; agent_1 is offset on same floor.
+    Habitat uses integer agent_id (index into agents_order), not string names.
     """
     offset = cfg.get("multiagent", {}).get("agent_spawn_offset", 1.0)
     episode = env.current_episode
@@ -217,8 +218,8 @@ def _setup_multi_agent_env(env, cfg: DictConfig):
     except Exception:
         start_pos_1 = start_pos_0.copy()
 
-    env.sim.set_agent_state(start_pos_0, start_rot_0, agent_id="agent_0")
-    env.sim.set_agent_state(start_pos_1, start_rot_0, agent_id="agent_1")
+    env.sim.set_agent_state(start_pos_0, start_rot_0, agent_id=0)
+    env.sim.set_agent_state(start_pos_1, start_rot_0, agent_id=1)
 
 
 def _build_agent_obs_dict(observations, multi_agent: bool, agent_names: list):
@@ -227,6 +228,70 @@ def _build_agent_obs_dict(observations, multi_agent: bool, agent_names: list):
         return {name: observations[name] for name in agent_names}
     else:
         return {agent_names[0]: observations}
+
+
+def _multi_agent_step(env, action_dict: dict, agent_names: list):
+    """Step the simulation with per-agent actions using Habitat-Sim directly.
+
+    Habitat.Env only steps the default agent via env.step(). For multi-agent,
+    we apply each agent's action via the simulator API, then advance physics once.
+    """
+    import habitat_sim
+
+    for agent_name, action in action_dict.items():
+        if action is not None:
+            agent_idx = agent_names.index(agent_name)
+            action_spec = habitat_sim.ActionSpec(action)
+            env.sim.get_agent(agent_idx).act(action_spec)
+
+    # Advance the physics simulation once (all queued actions execute together)
+    env.sim.step_world(1.0 / 60.0)
+
+    # Get observations from all agents' sensors and restructure by agent
+    return _get_agent_observations(env, agent_names)
+
+
+def _get_agent_observations(env, agent_names: list):
+    """Get per-agent observations as a dict keyed by agent name.
+
+    Habitat's SensorSuite returns a flat dict keyed by sensor uuid
+    (e.g. agent_0_rgb, agent_0_depth, agent_1_rgb, ...).  We remap
+    agent-prefixed uuids back to simple keys (rgb, depth, gps, compass)
+    within each agent's sub-dict so downstream code can use
+    agent_obs["rgb"], agent_obs["depth"], etc. unchanged.
+    """
+    sim_obs = env.sim.get_sensor_observations()
+    observations = env.sim._sensor_suite.get_observations(sim_obs)
+    result = {name: {} for name in agent_names}
+    for key, val in observations.items():
+        for agent_name in agent_names:
+            prefix = agent_name + "_"
+            if key.startswith(prefix):
+                result[agent_name][key[len(prefix):]] = val
+                break
+        else:
+            # Non-agent-prefixed keys (e.g. task sensors) — try to match
+            # by stripping known sensor names and seeing which agent they belong to
+            # Fallback: assign to agent_0
+            result[agent_names[0]][key] = val
+    return result
+
+
+def _get_agent_distance_to_goal(env, agent_idx: int):
+    """Compute geodesic distance from agent to the nearest goal position."""
+    try:
+        agent_state = env.sim.get_agent_state(agent_idx)
+        agent_pos = agent_state.position
+        goals = env.current_episode.goals
+        if not goals:
+            return 999.0
+        distances = []
+        for goal in goals:
+            dist = env.sim.geodesic_distance(agent_pos, goal.position)
+            distances.append(dist)
+        return min(distances)
+    except Exception:
+        return 999.0
 
 
 def main(cfg: DictConfig) -> None:
@@ -302,12 +367,11 @@ def main(cfg: DictConfig) -> None:
         )
 
     # ── Create environment ──
-    if multi_agent:
-        env = habitat.MultiAgentEnv(cfg)
-        print(f"Multi-agent environment created with {num_agents} agents")
-    else:
-        env = habitat.Env(cfg)
-        print("Environment creation successful")
+    # Habitat does not have MultiAgentEnv; use Env with a multi-agent config.
+    # The simulator creates all agents, and we interact with them via agent_id.
+    env = habitat.Env(cfg)
+    print(f"Environment created ({'multi-agent' if multi_agent else 'single-agent'}, "
+          f"{num_agents} agent(s))")
     number_of_episodes = env.number_of_episodes
 
     # Read previous records
@@ -407,7 +471,7 @@ def main(cfg: DictConfig) -> None:
 
         if multi_agent:
             _setup_multi_agent_env(env, cfg)
-            observations = {name: env.sim.get_agent_observations(name) for name in agent_names}
+            observations = _get_agent_observations(env, agent_names)
 
         # Normalize observations dict
         agent_obs_dict = _build_agent_obs_dict(observations, multi_agent, agent_names)
@@ -566,9 +630,17 @@ def main(cfg: DictConfig) -> None:
             if multi_agent:
                 active_actions = {
                     k: v for k, v in action_dict.items()
-                    if not agent_states[k]["finished"]
+                    if not agent_states[k]["finished"] and v is not None
                 }
-                observations = env.step(active_actions) if active_actions else observations
+                if active_actions:
+                    observations = _multi_agent_step(env, active_actions, agent_names)
+                # Update task measurements for the default agent (for spl, etc.)
+                env._task.measurements.update_measures(
+                    episode=env.current_episode,
+                    action={"action": list(active_actions.values())[0]} if active_actions else {"action": HabitatSimActions.stop},
+                    task=env._task,
+                    observations=observations,
+                )
             else:
                 observations = env.step(single_action)
                 if env.episode_over:
@@ -585,22 +657,24 @@ def main(cfg: DictConfig) -> None:
                     ast["count_steps"] += 1
                     agent_obs = observations.get(agent_name, {})
 
-                    agent_info = metrics.get(agent_name, {}) if isinstance(metrics, dict) else metrics
-                    dtg = agent_info.get("distance_to_goal", 999.0)
+                    # Compute per-agent distance to goal via simulator
+                    agent_idx = agent_names.index(agent_name)
+                    dtg = _get_agent_distance_to_goal(env, agent_idx)
                     ast["distance_to_goal"] = min(ast["distance_to_goal"], dtg)
 
                     if dtg <= success_distance:
                         ast["near_object"] = 1
                         ast["pass_object"] = max(ast["pass_object"], 1)
-                        if agent_info.get("success", 0) == 1:
+                        if dtg <= success_distance:
                             ast["success"] = 1
                             ast["finished"] = True
 
-                    ast["spl"] = agent_info.get("spl", 0.0)
-                    ast["soft_spl"] = agent_info.get("soft_spl", 0.0)
-                    ast["distance_to_goal_reward"] = agent_info.get(
+                    # Use task metrics (from default agent) as approximation for spl/soft_spl
+                    ast["spl"] = metrics.get("spl", 0.0) if isinstance(metrics, dict) else 0.0
+                    ast["soft_spl"] = metrics.get("soft_spl", 0.0) if isinstance(metrics, dict) else 0.0
+                    ast["distance_to_goal_reward"] = metrics.get(
                         "distance_to_goal_reward", 0.0
-                    )
+                    ) if isinstance(metrics, dict) else 0.0
 
                     if dtg < best_dist:
                         best_dist = dtg

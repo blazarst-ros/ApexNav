@@ -1,10 +1,6 @@
-# Multi-agent ObjectNav evaluation config for HM3D-v2
-# Composes from Habitat base configs without creating a default main_agent
-# (see benchmark/multi_agent/ in habitat-lab for reference pattern)
 defaults:
-  - /habitat: habitat_config_base
-  - /habitat/task: objectnav
-  - /habitat/dataset/objectnav: hm3d
+  - /benchmark/nav/objectnav:
+      - objectnav_hm3d
   - _self_
 
 habitat_baselines:
@@ -14,7 +10,7 @@ habitat_baselines:
 habitat:
   dataset:
     split: val
-    data_path: data/datasets/objectnav/hm3d/v2/{split}/{split}.json.gz
+    data_path: data/datasets/objectnav/hm3d/v1/{split}/{split}.json.gz # HM3D-v1 dataset
   environment:
     max_episode_steps: 500
     iterator_options:
@@ -23,34 +19,32 @@ habitat:
       max_scene_repeat_steps: 10000000
   task:
     lab_sensors:
-      pointgoal_with_gps_compass_sensor: {}
+      gps_sensor:
+        type: GPSSensor
+        dimensionality: 3
     measurements:
       success:
         success_distance: 0.2
   simulator:
-    turn_angle: 30
-    forward_step_size: 0.25
     habitat_sim_v0:
-      gpu_device_id: 0
       allow_sliding: false
-    agents_order:
-      - agent_0
-      - agent_1
+    forward_step_size: 0.25
+    turn_angle: 30
+    # Multi-agent configuration: two agents in the same environment
     agents:
       agent_0:
-        height: 0.88
         radius: 0.18
+        start_position: [0, 0, 0]  # Will be overridden programmatically
+        start_rotation: [0, 0, 0, 1]
         sim_sensors:
           rgb_sensor:
-            type: HabitatSimRGBSensor
-            uuid: agent_0_rgb
             width: 640
             height: 480
             hfov: 79
             position: [0, 0.88, 0]
+            orientation: [0, 0, 0]
+            type: RGBSensor
           depth_sensor:
-            type: HabitatSimDepthSensor
-            uuid: agent_0_depth
             width: 640
             height: 480
             hfov: 79
@@ -58,20 +52,27 @@ habitat:
             max_depth: 5.0
             normalize_depth: true
             position: [0, 0.88, 0]
+            orientation: [0, 0, 0]
+            type: DepthSensor
+          gps_sensor:
+            type: GPSSensor
+            dimensionality: 3
+          compass_sensor:
+            type: CompassSensor
+            dimensionality: 1
       agent_1:
-        height: 0.88
         radius: 0.18
+        start_position: [0, 0, 0]  # Will be overridden programmatically
+        start_rotation: [0, 0, 0, 1]
         sim_sensors:
           rgb_sensor:
-            type: HabitatSimRGBSensor
-            uuid: agent_1_rgb
             width: 640
             height: 480
             hfov: 79
             position: [0, 0.88, 0]
+            orientation: [0, 0, 0]
+            type: RGBSensor
           depth_sensor:
-            type: HabitatSimDepthSensor
-            uuid: agent_1_depth
             width: 640
             height: 480
             hfov: 79
@@ -79,7 +80,16 @@ habitat:
             max_depth: 5.0
             normalize_depth: true
             position: [0, 0.88, 0]
+            orientation: [0, 0, 0]
+            type: DepthSensor
+          gps_sensor:
+            type: GPSSensor
+            dimensionality: 3
+          compass_sensor:
+            type: CompassSensor
+            dimensionality: 1
 
+# Number of agents (used by Python code to iterate over agents)
 num_agents: 2
 
 detector:
@@ -96,16 +106,17 @@ llm:
   llm_answer_path: llm/answers/llm_answer_hm3d.txt
   llm_response_path: llm/answers/llm_response_list.txt
   llm_client:
-    llm_client: deepseek
-    ollama: "qwen3:8b"
+    llm_client: deepseek # deepseek, ollama or none
+    #ollama: "qwen3:8b"
 
+# Multi-agent specific settings
 multiagent:
-  episode_termination: cooperative
-  inter_agent_avoidance: false
-  agent_spawn_offset: 1.0
+  episode_termination: cooperative  # "cooperative" (any succeeds) or "independent" (all finish)
+  inter_agent_avoidance: false  # Whether agents avoid each other during path planning
+  agent_spawn_offset: 1.0  # Meters to offset agent_1 from agent_0's start position
 
 record_file_name: "record.txt"
 continue_file_name: "continue.txt"
 need_video: false
-video_output_path: "videos/test_hm3dv2_multiagent_{split}"
+video_output_path: "videos/test_hm3dv1_multiagent_{split}"
 test_epi_num: -1

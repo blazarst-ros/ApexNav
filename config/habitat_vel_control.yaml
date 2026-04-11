@@ -1,6 +1,10 @@
+# Single-agent velocity control config for HM3D-v2
+# This is a separate pipeline from the multi-agent exploration eval.
+# habitat_vel_control.py uses continuous velocity commands, not discrete actions.
 defaults:
-  - /benchmark/nav/objectnav:
-      - objectnav_hm3d
+  - /habitat: habitat_config_base
+  - /habitat/task: objectnav
+  - /habitat/dataset/objectnav: hm3d
   - _self_
 
 habitat_baselines:
@@ -12,16 +16,14 @@ habitat:
     split: val
     data_path: data/datasets/objectnav/hm3d/v2/{split}/{split}.json.gz
   environment:
-    max_episode_steps: 500000000000000000000
+    max_episode_steps: 5000000  # Long episodes for continuous velocity control
     iterator_options:
       cycle: false
       shuffle: false
-      max_scene_repeat_steps: 10000000000000000000000000000
+      max_scene_repeat_steps: 10000000
   task:
     lab_sensors:
-      gps_sensor:
-        type: GPSSensor
-        dimensionality: 3
+      pointgoal_with_gps_compass_sensor: {}
     measurements:
       success:
         success_distance: 0.2
@@ -33,15 +35,28 @@ habitat:
     habitat_sim_v0:
       allow_sliding: true
       enable_physics: true
-    forward_step_size: 0
-    turn_angle: 0
+    forward_step_size: 0.25
+    turn_angle: 30
     agents:
-      agent_0:
+      main_agent:
+        height: 0.88
+        radius: 0.18
         sim_sensors:
+          rgb_sensor:
+            type: HabitatSimRGBSensor
+            width: 640
+            height: 480
+            hfov: 79
+            position: [0, 0.88, 0]
           depth_sensor:
+            type: HabitatSimDepthSensor
+            width: 640
+            height: 480
+            hfov: 79
             min_depth: 0.0
             max_depth: 5.0
             normalize_depth: true
+            position: [0, 0.88, 0]
 
 detector:
   yolo:
@@ -55,10 +70,11 @@ detector:
 
 llm:
   use_llm: true
-  llm_answer_path: llm/answers/llm_answer_mp3d.txt
+  llm_answer_path: llm/answers/llm_answer_hm3d.txt
   llm_response_path: llm/answers/llm_response_list.txt
-  llm_client: deepseek 
-  ollama: 'qwen3:8b'
+  llm_client:
+    llm_client: deepseek
+    ollama: "qwen3:8b"
 
 record_file_name: "record.txt"
 continue_file_name: "continue.txt"
