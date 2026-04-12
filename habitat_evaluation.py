@@ -37,6 +37,7 @@ from copy import deepcopy
 # Third-party library imports
 from hydra import initialize, compose
 import numpy as np
+import quaternion
 import rospy
 from geometry_msgs.msg import PoseStamped
 from omegaconf import DictConfig
@@ -54,6 +55,11 @@ from habitat.config.default_structured_configs import (
     TopDownMapMeasurementConfig,
 )
 from habitat.sims.habitat_simulator.actions import HabitatSimActions
+from habitat.tasks.utils import cartesian_to_polar
+from habitat.utils.geometry_utils import (
+    quaternion_from_coeff,
+    quaternion_rotate_vector,
+)
 from habitat.utils.visualizations.utils import (
     images_to_video,
     observations_to_image,
@@ -125,6 +131,17 @@ def ros_action_callback(msg):
     """
     global global_action
     global_action = msg.data
+
+
+def _make_agent_action_callback(agent_idx: int):
+    """Create a per-agent action callback that stores actions separately.
+
+    This avoids the race condition where two agents' actions arrive
+    simultaneously and overwrite each other in a shared global variable.
+    """
+    def callback(msg):
+        agent_actions[agent_idx] = msg.data
+    return callback
 
 
 def ros_state_callback(msg):
@@ -218,8 +235,16 @@ def _setup_multi_agent_env(env, cfg: DictConfig):
     except Exception:
         start_pos_1 = start_pos_0.copy()
 
-    env.sim.set_agent_state(start_pos_0, start_rot_0, agent_id=0)
-    env.sim.set_agent_state(start_pos_1, start_rot_0, agent_id=1)
+    # Use get_agent().set_state() with numpy-typed AgentState instead of
+    # env.sim.set_agent_state() because the latter passes Python lists to
+    # habitat-sim's internal translate(), which crashes for agent_id != 0.
+    for agent_id, pos in enumerate([start_pos_0, start_pos_1]):
+        agent = env.sim.get_agent(agent_id)
+        new_state = agent.get_state()
+        new_state.position = np.array(pos, dtype=np.float32)
+        new_state.rotation = np.array(start_rot_0, dtype=np.float32)
+        new_state.sensor_states = {}
+        agent.set_state(new_state, reset_sensors=True)
 
 
 def _build_agent_obs_dict(observations, multi_agent: bool, agent_names: list):
@@ -251,6 +276,50 @@ def _multi_agent_step(env, action_dict: dict, agent_names: list):
     return _get_agent_observations(env, agent_names)
 
 
+def _compute_agent_gps(env, agent_idx: int):
+    """Compute GPS observation for a specific agent (same math as GPSSensor).
+
+    Returns 2D position in the episode's coordinate frame:
+    [-agent_z_in_frame, agent_x_in_frame]
+    """
+    agent_state = env.sim.get_agent_state(agent_idx)
+    episode = env.current_episode
+
+    origin = np.array(episode.start_position, dtype=np.float32)
+    rotation_world_start = quaternion_from_coeff(episode.start_rotation)
+
+    agent_position = np.array(agent_state.position, dtype=np.float32)
+    agent_position = quaternion_rotate_vector(
+        rotation_world_start.inverse(), agent_position - origin
+    )
+    # Return 3D [x, y, z] in episode frame — habitat_publisher accesses gps[0..2]
+    return agent_position[:3].astype(np.float32)
+
+
+def _compute_agent_compass(env, agent_idx: int):
+    """Compute compass observation for a specific agent (same math as CompassSensor).
+
+    Returns heading in the episode's coordinate frame as a scalar in [-pi, pi].
+    """
+    agent_state = env.sim.get_agent_state(agent_idx)
+    episode = env.current_episode
+
+    rotation_world_agent = agent_state.rotation
+    rotation_world_start = quaternion_from_coeff(episode.start_rotation)
+
+    if isinstance(rotation_world_agent, quaternion.quaternion):
+        quat = rotation_world_agent.inverse() * rotation_world_start
+    else:
+        # numpy array → quaternion
+        quat = quaternion_from_coeff(np.array(rotation_world_agent, dtype=np.float32))
+        quat = quat.inverse() * rotation_world_start
+
+    direction_vector = np.array([0, 0, -1])
+    heading_vector = quaternion_rotate_vector(quat, direction_vector)
+    phi = cartesian_to_polar(-heading_vector[2], heading_vector[0])[1]
+    return np.array([phi], dtype=np.float32)
+
+
 def _get_agent_observations(env, agent_names: list):
     """Get per-agent observations as a dict keyed by agent name.
 
@@ -259,6 +328,9 @@ def _get_agent_observations(env, agent_names: list):
     agent-prefixed uuids back to simple keys (rgb, depth, gps, compass)
     within each agent's sub-dict so downstream code can use
     agent_obs["rgb"], agent_obs["depth"], etc. unchanged.
+
+    GPS and compass are task sensors not available from get_sensor_observations(),
+    so we compute them per-agent manually.
     """
     num_agents = len(agent_names)
     sim_obs = env.sim.get_sensor_observations(agent_ids=list(range(num_agents)))
@@ -282,6 +354,12 @@ def _get_agent_observations(env, agent_names: list):
         else:
             # Non-agent-prefixed keys (e.g. task sensors) — assign to agent_0
             result[agent_names[0]][key] = val
+
+    # Compute GPS and compass per agent (task sensors not in sim observations)
+    for agent_idx, agent_name in enumerate(agent_names):
+        result[agent_name]["gps"] = _compute_agent_gps(env, agent_idx)
+        result[agent_name]["compass"] = _compute_agent_compass(env, agent_idx)
+
     return result
 
 
@@ -405,19 +483,24 @@ def main(cfg: DictConfig) -> None:
         env_count -= 1
 
     # ── ROS Setup ──
+    agent_actions = {}  # Per-agent action storage (keyed by agent_idx)
     if multi_agent:
         ros_pubs = {}
         for agent_name in agent_names:
             ros_pubs[agent_name] = habitat_publisher.ROSPublisher(agent_name)
         for agent_idx in range(num_agents):
             topic = _get_agent_action_index(agent_idx)
-            rospy.Subscriber(topic, Int32, ros_action_callback, queue_size=10)
+            rospy.Subscriber(topic, Int32, _make_agent_action_callback(agent_idx), queue_size=10)
         ros_pub = ros_pubs[agent_names[0]]
     else:
         obj_point_cloud_pub = rospy.Publisher(
             "habitat/object_point_cloud", PointCloud2, queue_size=10
         )
         ros_pub = habitat_publisher.ROSPublisher()
+        # Single-agent: subscribe to the default action topic
+        rospy.Subscriber(
+            _get_agent_action_index(0), Int32, ros_action_callback, queue_size=10
+        )
     # ROS state callbacks for multi-agent tracking
     ros_all_states = [ROS_STATE.INIT] * num_agents  # Track per-agent state
     def ros_all_state_callback(msg):
@@ -579,19 +662,22 @@ def main(cfg: DictConfig) -> None:
                     break
 
             # ── Parse actions ──
-            if global_action is not None:
-                if multi_agent:
-                    agent_idx, action_code = _parse_multi_agent_action(global_action)
+            if multi_agent:
+                # Process per-agent actions from separate ROS subscribers
+                for agent_idx, raw_action in list(agent_actions.items()):
+                    agent_idx, action_code = _parse_multi_agent_action(raw_action)
                     if agent_idx < num_agents:
                         aname = f"agent_{agent_idx}"
                         if agent_states[aname]["count_steps"] == max_episode_steps - 1:
                             action_code = ACTION.STOP
                         agent_states[aname]["global_action"] = action_code
-                else:
+                agent_actions.clear()
+            else:
+                if global_action is not None:
                     if agent_states[agent_names[0]]["count_steps"] == max_episode_steps - 1:
                         global_action = ACTION.STOP
                     agent_states[agent_names[0]]["global_action"] = global_action
-                global_action = None
+                    global_action = None
 
             # ── Build action dict / single action ──
             action_dict = {} if multi_agent else None
@@ -602,6 +688,9 @@ def main(cfg: DictConfig) -> None:
                 ast = agent_states[agent_name]
                 g_action = ast.pop("global_action", None)
                 if g_action is None:
+                    continue
+                # Skip finished agents — their actions are no longer relevant
+                if ast["finished"]:
                     continue
 
                 any_agent_acting = True
@@ -643,11 +732,27 @@ def main(cfg: DictConfig) -> None:
                 if active_actions:
                     observations = _multi_agent_step(env, active_actions, agent_names)
                 # Update task measurements for the default agent (for spl, etc.)
+                # Build a flat observation dict from the per-agent split format
+                # and pick a non-stop action to avoid incorrectly setting is_stop_called.
+                flat_obs = {}
+                for aname, aobs in observations.items():
+                    for k, v in aobs.items():
+                        flat_obs[f"{aname}_{k}"] = v
+                # Use the first non-stop action; if all are stop, use move_forward
+                # to avoid falsely triggering is_stop_called for unfinished episodes
+                non_stop_actions = [
+                    v for k, v in active_actions.items()
+                    if v != HabitatSimActions.stop
+                ]
+                measure_action = (
+                    non_stop_actions[0] if non_stop_actions
+                    else (list(active_actions.values())[0] if active_actions else HabitatSimActions.move_forward)
+                )
                 env._task.measurements.update_measures(
                     episode=env.current_episode,
-                    action={"action": list(active_actions.values())[0]} if active_actions else {"action": HabitatSimActions.stop},
+                    action={"action": measure_action},
                     task=env._task,
-                    observations=observations,
+                    observations=flat_obs,
                 )
             else:
                 observations = env.step(single_action)
@@ -721,10 +826,13 @@ def main(cfg: DictConfig) -> None:
 
                     # Video
                     if need_video:
-                        frame = observations_to_image(agent_obs, agent_info)
-                        if isinstance(agent_info, dict) and "top_down_map" in agent_info:
-                            agent_info.pop("top_down_map")
-                        frame = overlay_frame(frame, agent_info)
+                        frame = observations_to_image(agent_obs, metrics)
+                        if isinstance(metrics, dict) and "top_down_map" in metrics:
+                            info_copy = dict(metrics)
+                            info_copy.pop("top_down_map")
+                            frame = overlay_frame(frame, info_copy)
+                        else:
+                            frame = overlay_frame(frame, metrics)
                         ast["vis_frames"].append(frame)
 
                 print(f"\n--------------Step: {agent_states[agent_names[0]]['count_steps']}--------------")
