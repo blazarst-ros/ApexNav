@@ -23,7 +23,8 @@ habitat:
       max_scene_repeat_steps: 10000000
   task:
     lab_sensors:
-      pointgoal_with_gps_compass_sensor: {}
+      pointgoal_with_gps_compass_sensor:
+        type: PointGoalWithGPSCompassSensor
     measurements:
       success:
         success_distance: 0.2

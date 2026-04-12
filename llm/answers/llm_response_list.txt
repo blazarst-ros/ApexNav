@@ -86,3 +86,4 @@ shelf: A shelf, particularly a wide one, might be confused with a counter due to
 Room where the label may appear: A counter is most likely to appear in a kitchen or bathroom, where it is used for preparation and storage. It could also be in a laundry room or workshop, but the probability is significantly higher in the kitchen.
 
 Answer: [table, desk, shelf, 0.45, kitchen]
+cabinet: 
