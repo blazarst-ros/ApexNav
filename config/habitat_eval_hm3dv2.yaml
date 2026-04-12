@@ -29,6 +29,7 @@ habitat:
       success:
         success_distance: 0.2
   simulator:
+    type: MultiAgentSim-v0
     turn_angle: 30
     forward_step_size: 0.25
     habitat_sim_v0:

@@ -4,7 +4,7 @@ import requests
 
 def verify_deepseek_connection():
     # 你的配置信息
-    api_key = "sk-46f16f6dc6614a298138133a76a6b15c"
+    api_key = "sk-3beacc39a6d64022857850b23052ef97"
     base_url = "https://api.deepseek.com"
     
     print("--- 开始 DeepSeek 接口连通性测试 ---")

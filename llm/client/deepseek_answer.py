@@ -1,6 +1,6 @@
 from llm.utils.get_sys_prompt import get_similar_answer_prompt
 from openai import OpenAI
-client = OpenAI(api_key="sk-46f16f6dc6614a298138133a76a6b15c", base_url="https://api.deepseek.com")
+client = OpenAI(api_key="sk-3beacc39a6d64022857850b23052ef97", base_url="https://api.deepseek.com")
 
 """
     底层：LLM 模型调用层

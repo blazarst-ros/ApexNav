@@ -127,14 +127,50 @@ def main(cfg: DictConfig) -> None:
             "collisions": CollisionsMeasurementConfig(),
         })
 
-    env = habitat.MultiAgentEnv(cfg)
+    env = habitat.Env(cfg)
     print(f"Multi-agent environment created with {num_agents} agents")
+
+    def _get_agent_obs(observations):
+        """Remap namespaced sensor UUIDs to per-agent dicts."""
+        result = {name: {} for name in agent_names}
+        for key, val in observations.items():
+            for agent_name in agent_names:
+                prefix = agent_name + "_"
+                if key.startswith(prefix):
+                    result[agent_name][key[len(prefix):]] = val
+                    break
+            else:
+                result[agent_names[0]][key] = val
+        return result
+
+    def _multi_step(action_dict):
+        """Step per-agent actions via habitat-sim, return per-agent obs."""
+        import habitat_sim
+        for aname, act in action_dict.items():
+            if act is not None:
+                aidx = agent_names.index(aname)
+                action_spec = habitat_sim.ActionSpec(act)
+                env.sim.get_agent(aidx).act(action_spec)
+        env.sim.step_world(1.0 / 60.0)
+        sim_obs = env.sim.get_sensor_observations(agent_ids=list(range(num_agents)))
+        merged = {}
+        for aid, aobs in sim_obs.items():
+            merged.update(aobs)
+        observations = env.sim._sensor_suite.get_observations(merged)
+        return _get_agent_obs(observations)
 
     while env_count:
         env.current_episode = next(env.episode_iterator)
         env_count -= 1
 
-    observations = env.reset()
+    raw_obs = env.reset()
+    # Get per-agent observations with namespaced sensor UUIDs
+    sim_obs = env.sim.get_sensor_observations(agent_ids=list(range(num_agents)))
+    merged = {}
+    for aid, aobs in sim_obs.items():
+        merged.update(aobs)
+    observations = env.sim._sensor_suite.get_observations(merged)
+    agent_obs_dict = _get_agent_obs(observations)
 
     # Setup per-agent publishers and state
     ros_pubs = {}
@@ -143,7 +179,7 @@ def main(cfg: DictConfig) -> None:
 
     agent_states = {}
     for agent_name in agent_names:
-        agent_obs = observations[agent_name]
+        agent_obs = agent_obs_dict[agent_name]
         agent_obs["rgb"] = transform_rgb_bgr(agent_obs["rgb"])
         agent_obs["camera_pitch"] = 0.0
 
@@ -228,7 +264,7 @@ def main(cfg: DictConfig) -> None:
             continue
 
         timer.shutdown()
-        observations = env.step({agent_name: action})
+        observations = _multi_step({agent_name: action})
         count_steps += 1
         info = env.get_metrics()
 

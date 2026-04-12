@@ -254,14 +254,24 @@ def _multi_agent_step(env, action_dict: dict, agent_names: list):
 def _get_agent_observations(env, agent_names: list):
     """Get per-agent observations as a dict keyed by agent name.
 
-    Habitat's SensorSuite returns a flat dict keyed by sensor uuid
+    MultiAgentSim-v0 returns observations with namespaced sensor UUIDs
     (e.g. agent_0_rgb, agent_0_depth, agent_1_rgb, ...).  We remap
     agent-prefixed uuids back to simple keys (rgb, depth, gps, compass)
     within each agent's sub-dict so downstream code can use
     agent_obs["rgb"], agent_obs["depth"], etc. unchanged.
     """
-    sim_obs = env.sim.get_sensor_observations()
-    observations = env.sim._sensor_suite.get_observations(sim_obs)
+    num_agents = len(agent_names)
+    sim_obs = env.sim.get_sensor_observations(agent_ids=list(range(num_agents)))
+
+    # If sim_obs is keyed by agent_id (multi-agent), flatten first
+    if isinstance(sim_obs, dict) and any(isinstance(k, int) for k in sim_obs.keys()):
+        merged = {}
+        for aid, aobs in sim_obs.items():
+            merged.update(aobs)
+        observations = env.sim._sensor_suite.get_observations(merged)
+    else:
+        observations = env.sim._sensor_suite.get_observations(sim_obs)
+
     result = {name: {} for name in agent_names}
     for key, val in observations.items():
         for agent_name in agent_names:
@@ -270,9 +280,7 @@ def _get_agent_observations(env, agent_names: list):
                 result[agent_name][key[len(prefix):]] = val
                 break
         else:
-            # Non-agent-prefixed keys (e.g. task sensors) — try to match
-            # by stripping known sensor names and seeing which agent they belong to
-            # Fallback: assign to agent_0
+            # Non-agent-prefixed keys (e.g. task sensors) — assign to agent_0
             result[agent_names[0]][key] = val
     return result
 
@@ -683,7 +691,7 @@ def main(cfg: DictConfig) -> None:
                     # ITM score
                     img_np = agent_obs.get("rgb", np.zeros((480, 640, 3), dtype=np.uint8))
                     cosine = get_itm_message_cosine(img_np, label, room)
-                    itm_score_pub_name = f"/blip2/agent_{agent_name}/cosine_score"
+                    itm_score_pub_name = f"/blip2/{agent_name}/cosine_score"
                     if itm_score_pub_name not in globals().get("_itm_pubs", {}):
                         _itm_pubs[itm_score_pub_name] = rospy.Publisher(itm_score_pub_name, Float64, queue_size=10)
                     _itm_pubs[itm_score_pub_name].publish(Float64(cosine))
@@ -704,7 +712,7 @@ def main(cfg: DictConfig) -> None:
                     cld_msg.point_clouds = obj_point_cloud_list
                     cld_msg.confidence_scores = score_list
                     cld_msg.label_indices = label_list
-                    cld_pub_name = f"/detector/agent_{agent_name}/clouds_with_scores"
+                    cld_pub_name = f"/detector/{agent_name}/clouds_with_scores"
                     if cld_pub_name not in _cld_pubs:
                         _cld_pubs[cld_pub_name] = rospy.Publisher(
                             cld_pub_name, MultipleMasksWithConfidence, queue_size=10
