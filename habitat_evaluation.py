@@ -501,10 +501,12 @@ def main(cfg: DictConfig) -> None:
             _get_agent_action_index(0), Int32, ros_action_callback, queue_size=10
         )
     # ROS state callbacks for multi-agent tracking
-    ros_all_states = [ROS_STATE.INIT] * num_agents  # Track per-agent state
+    # Use C++ NUM_AGENTS (may be 2 even in single-agent Python mode) to avoid IndexError
+    ros_all_states = [ROS_STATE.INIT] * max(num_agents, 2)
     def ros_all_state_callback(msg):
         for i, s in enumerate(msg.data):
-            ros_all_states[i] = s
+            if i < len(ros_all_states):
+                ros_all_states[i] = s
     rospy.Subscriber("/ros/state_all", Int32MultiArray, ros_all_state_callback, queue_size=10)
     rospy.Subscriber("/ros/expl_state", Int32, ros_final_state_callback, queue_size=10)
     rospy.Subscriber("/ros/expl_result", Int32, ros_expl_result_callback, queue_size=10)
@@ -580,13 +582,24 @@ def main(cfg: DictConfig) -> None:
                 frame = overlay_frame(frame, info)
                 agent_states[agent_name]["vis_frames"].append(frame)
 
+        # Snapshot of initial observations for the timer callback (updated each step)
+        timer_obs = {name: dict(agent_obs_dict[name]) for name in agent_names}
+
+        def _publish_observations_timer(event):
+            """Timer callback: publish observations + trigger (mirrors main branch's publish_observations)."""
+            if multi_agent:
+                for agent_name in agent_names:
+                    obs = timer_obs.get(agent_name, {})
+                    ros_pubs[agent_name].habitat_publish_ros_topic(obs)
+            else:
+                ros_pub.habitat_publish_ros_topic(timer_obs.get(agent_names[0], {}))
+            publish_float64(confidence_threshold_pub, fusion_threshold)
+            trigger_pub.publish(PoseStamped())
+
         # Trigger publishing timer
         trigger_pub_timer = rospy.Timer(
             rospy.Duration(0.25),
-            lambda event: (
-                publish_float64(confidence_threshold_pub, fusion_threshold),
-                trigger_pub.publish(PoseStamped()),
-            ),
+            _publish_observations_timer,
         )
 
         print(f"Agents are waiting in the environment! Target: [{label}]")
@@ -620,13 +633,13 @@ def main(cfg: DictConfig) -> None:
                     ros_pubs[agent_name].publish_camera_odom(rospy.Time.now(), gps, compass, pitch)
                     ros_pubs[agent_name].publish_rgb(rospy.Time.now(), agent_obs.get("rgb"))
             else:
-                ros_pub.habitat_publish_ros_topic(observations)
+                # Use timer_obs which has "camera_pitch" added; raw observations lacks it
+                ros_pub.habitat_publish_ros_topic(timer_obs[agent_names[0]])
 
             if all_wait_trigger:
                 break
             rate.sleep()
 
-        trigger_pub_timer.shutdown()
         print("Agents are ready to go!!!!")
 
         # Kick the C++ planner out of WAIT_TRIGGER → PLAN_ACTION
@@ -634,6 +647,10 @@ def main(cfg: DictConfig) -> None:
         rospy.sleep(0.1)
 
         # ── Main episode loop ──
+        # NOTE: trigger_pub_timer stays alive to continuously publish odom,
+        # so the C++ planner keeps receiving odometry and updating the robot
+        # marker in RViz. It also publishes trigger, but the C++ FSM ignores
+        # triggers when not in WAIT_TRIGGER state, so this is harmless.
         rate = rospy.Rate(10)
         global_action = None
 
@@ -721,6 +738,19 @@ def main(cfg: DictConfig) -> None:
                     single_action = action
 
             if not any_agent_acting:
+                # Still publish odom so the C++ planner and RViz stay updated
+                for agent_name in agent_names:
+                    ast = agent_states[agent_name]
+                    if ast["finished"]:
+                        continue
+                    if multi_agent:
+                        gps = _compute_agent_gps(env, agent_names.index(agent_name))
+                        compass = _compute_agent_compass(env, agent_names.index(agent_name))
+                        ros_pubs[agent_name].publish_robot_odom(rospy.Time.now(), gps, compass)
+                    else:
+                        gps = observations.get("gps", np.array([0.0, 0.0, 0.0]))
+                        compass = observations.get("compass", np.array([0.0]))[0]
+                        ros_pub.publish_robot_odom(rospy.Time.now(), gps, compass)
                 rate.sleep()
                 continue
 
@@ -764,6 +794,12 @@ def main(cfg: DictConfig) -> None:
 
             # ── Process per-agent results ──
             if multi_agent:
+                # Update timer observation snapshot so the timer callback publishes latest data
+                for agent_name in agent_names:
+                    agent_obs = observations.get(agent_name, {})
+                    agent_obs["camera_pitch"] = agent_states[agent_name]["camera_pitch"]
+                    timer_obs[agent_name] = dict(agent_obs)
+
                 metrics = env.get_metrics()
                 best_agent = None
                 best_dist = float("inf")
@@ -857,6 +893,7 @@ def main(cfg: DictConfig) -> None:
                 )
 
                 observations["camera_pitch"] = ast["camera_pitch"]
+                timer_obs[agent_names[0]] = dict(observations)
                 ros_pub.habitat_publish_ros_topic(observations)
 
                 cld_msg = MultipleMasksWithConfidence()
@@ -885,6 +922,9 @@ def main(cfg: DictConfig) -> None:
                 publish_int32(state_pub, HABITAT_STATE.ACTION_FINISH)
 
             rate.sleep()
+
+        # Stop the observation timer now that the episode is over
+        trigger_pub_timer.shutdown()
 
         # ── Episode-end processing ──
         publish_int32(state_pub, HABITAT_STATE.EPISODE_FINISH)

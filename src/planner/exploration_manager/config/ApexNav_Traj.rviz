@@ -114,8 +114,8 @@ Visualization Manager:
               Marker Topic: /robot_agent_0
               Name: robot_marker
               Namespaces:
-                robot_direction: true
-                robot_position: true
+                agent_0_robot_dir: true
+                agent_0_robot: true
               Queue Size: 100
               Value: true
           Enabled: true
@@ -197,8 +197,8 @@ Visualization Manager:
               Marker Topic: /robot_agent_1
               Name: robot_marker
               Namespaces:
-                robot_direction: true
-                robot_position: true
+                agent_1_robot_dir: true
+                agent_1_robot: true
               Queue Size: 100
               Value: true
           Enabled: true
