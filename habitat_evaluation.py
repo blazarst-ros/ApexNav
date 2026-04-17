@@ -133,14 +133,14 @@ def ros_action_callback(msg):
     global_action = msg.data
 
 
-def _make_agent_action_callback(agent_idx: int):
+def _make_agent_action_callback(agent_idx: int, actions_dict: dict):
     """Create a per-agent action callback that stores actions separately.
 
     This avoids the race condition where two agents' actions arrive
     simultaneously and overwrite each other in a shared global variable.
     """
     def callback(msg):
-        agent_actions[agent_idx] = msg.data
+        actions_dict[agent_idx] = msg.data
     return callback
 
 
@@ -490,7 +490,7 @@ def main(cfg: DictConfig) -> None:
             ros_pubs[agent_name] = habitat_publisher.ROSPublisher(agent_name)
         for agent_idx in range(num_agents):
             topic = _get_agent_action_index(agent_idx)
-            rospy.Subscriber(topic, Int32, _make_agent_action_callback(agent_idx), queue_size=10)
+            rospy.Subscriber(topic, Int32, _make_agent_action_callback(agent_idx, agent_actions), queue_size=10)
         ros_pub = ros_pubs[agent_names[0]]
     else:
         obj_point_cloud_pub = rospy.Publisher(
@@ -629,6 +629,10 @@ def main(cfg: DictConfig) -> None:
 
         trigger_pub_timer.shutdown()
         print("Agents are ready to go!!!!")
+
+        # Kick the C++ planner out of WAIT_TRIGGER → PLAN_ACTION
+        trigger_pub.publish(PoseStamped())
+        rospy.sleep(0.1)
 
         # ── Main episode loop ──
         rate = rospy.Rate(10)
