@@ -149,8 +149,7 @@ def main(cfg: DictConfig) -> None:
         for aname, act in action_dict.items():
             if act is not None:
                 aidx = agent_names.index(aname)
-                action_spec = habitat_sim.ActionSpec(act)
-                env.sim.get_agent(aidx).act(action_spec)
+                env.sim.get_agent(aidx).act(act)
         env.sim.step_world(1.0 / 60.0)
         sim_obs = env.sim.get_sensor_observations(agent_ids=list(range(num_agents)))
         merged = {}

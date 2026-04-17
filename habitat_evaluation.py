@@ -266,8 +266,7 @@ def _multi_agent_step(env, action_dict: dict, agent_names: list):
     for agent_name, action in action_dict.items():
         if action is not None:
             agent_idx = agent_names.index(agent_name)
-            action_spec = habitat_sim.ActionSpec(action)
-            env.sim.get_agent(agent_idx).act(action_spec)
+            env.sim.get_agent(agent_idx).act(action)
 
     # Advance the physics simulation once (all queued actions execute together)
     env.sim.step_world(1.0 / 60.0)
