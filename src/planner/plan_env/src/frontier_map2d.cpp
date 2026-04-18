@@ -52,6 +52,78 @@ void FrontierMap2D::reset()
   fill(frontier_flag_.begin(), frontier_flag_.end(), NONE);
 }
 
+void FrontierMap2D::claimFrontier(int frontier_id, int agent_idx)
+{
+  for (auto& ft : frontiers_) {
+    if (ft.id_ == frontier_id) {
+      ft.claimed_by_ = agent_idx;
+      ROS_WARN("Agent %d claimed frontier %d at (%.2f, %.2f)",
+          agent_idx, frontier_id, ft.average_(0), ft.average_(1));
+      return;
+    }
+  }
+}
+
+void FrontierMap2D::claimFrontierByPosition(const Eigen::Vector2d& frontier_avg, int agent_idx)
+{
+  for (auto& ft : frontiers_) {
+    if ((ft.average_ - frontier_avg).norm() < 1e-2) {
+      ft.claimed_by_ = agent_idx;
+      ROS_WARN("Agent %d claimed frontier at (%.2f, %.2f)",
+          agent_idx, ft.average_(0), ft.average_(1));
+      return;
+    }
+  }
+}
+
+void FrontierMap2D::releaseFrontierClaim(int frontier_id)
+{
+  for (auto& ft : frontiers_) {
+    if (ft.id_ == frontier_id) {
+      ft.claimed_by_ = -1;
+      return;
+    }
+  }
+}
+
+void FrontierMap2D::releaseClaimByAgent(int agent_idx)
+{
+  for (auto& ft : frontiers_) {
+    if (ft.claimed_by_ == agent_idx) {
+      ft.claimed_by_ = -1;
+      ROS_WARN("Agent %d released claim on frontier %d at (%.2f, %.2f)",
+          agent_idx, ft.id_, ft.average_(0), ft.average_(1));
+    }
+  }
+}
+
+bool FrontierMap2D::isFrontierClaimed(int frontier_id) const
+{
+  for (const auto& ft : frontiers_) {
+    if (ft.id_ == frontier_id)
+      return ft.claimed_by_ >= 0;
+  }
+  return false;
+}
+
+bool FrontierMap2D::isFrontierClaimedBy(int frontier_id, int agent_idx) const
+{
+  for (const auto& ft : frontiers_) {
+    if (ft.id_ == frontier_id)
+      return ft.claimed_by_ == agent_idx;
+  }
+  return false;
+}
+
+bool FrontierMap2D::isFrontierClaimedByPosition(const Eigen::Vector2d& frontier_avg, int agent_idx) const
+{
+  for (const auto& ft : frontiers_) {
+    if ((ft.average_ - frontier_avg).norm() < 1e-2)
+      return ft.claimed_by_ == agent_idx;
+  }
+  return false;
+}
+
 void FrontierMap2D::searchFrontiers()
 /*完成 “全流程的前沿检测与更新”：
 先清理地图更新区域内失效的旧前沿，

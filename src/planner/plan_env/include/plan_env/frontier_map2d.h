@@ -46,6 +46,9 @@ struct Frontier2D {
 
   /// Axis-aligned bounding box min/max coordinates
   Vector2d box_min_, box_max_;
+
+  /// Agent index that claimed this frontier (-1 = unclaimed)
+  int claimed_by_ = -1;
 };
 
 class FrontierMap2D {
@@ -63,6 +66,15 @@ public:
   void getFrontierBoxes(vector<pair<Vector2d, Vector2d>>& boxes);
   bool isAnyFrontierChanged();
   void wrapYaw(double& yaw);
+
+  // Frontier claiming for multi-agent decoupling
+  void claimFrontier(int frontier_id, int agent_idx);
+  void claimFrontierByPosition(const Eigen::Vector2d& frontier_avg, int agent_idx);
+  void releaseFrontierClaim(int frontier_id);
+  void releaseClaimByAgent(int agent_idx);
+  bool isFrontierClaimed(int frontier_id) const;
+  bool isFrontierClaimedBy(int frontier_id, int agent_idx) const;
+  bool isFrontierClaimedByPosition(const Eigen::Vector2d& frontier_avg, int agent_idx) const;
 
   shared_ptr<PerceptionUtils2D> percep_utils_;
 

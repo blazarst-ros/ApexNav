@@ -186,7 +186,7 @@ int ExplorationFSM::callActionPlanner(int agent_idx)
 
   // Reach the object - check if close enough to target object
   if (ad.final_result_ == FINAL_RESULT::SEARCH_OBJECT &&
-      (current_pos - expl_manager_->ed_->next_pos_).norm() < reach_distance) {
+      (current_pos - ad.planned_next_pos_).norm() < reach_distance) {
     ROS_ERROR("Agent %d: Reach the object successfully!!!", agent_idx);
     final_res = FINAL_RESULT::REACH_OBJECT;
     return final_res;
@@ -197,7 +197,7 @@ int ExplorationFSM::callActionPlanner(int agent_idx)
   if (!ad.escape_stucking_flag_ && (current_pos - last_pos).norm() < stucking_distance &&
       last_action == ACTION::MOVE_FORWARD) {
     if (ad.final_result_ == FINAL_RESULT::SEARCH_OBJECT &&
-        (current_pos - expl_manager_->ed_->next_pos_).norm() < soft_reach_distance) {
+        (current_pos - ad.planned_next_pos_).norm() < soft_reach_distance) {
       ROS_ERROR("Agent %d: Reach the object successfully!!!", agent_idx);
       final_res = FINAL_RESULT::REACH_OBJECT;
       return final_res;
@@ -274,9 +274,9 @@ int ExplorationFSM::callActionPlanner(int agent_idx)
     }
   }
 
-  // Replan path (stability heuristic)
-  vector<Vector2d> last_next_best_path = expl_manager_->ed_->next_best_path_;
-  Vector2d last_next_pos = expl_manager_->ed_->next_pos_;
+  // Replan path (stability heuristic) — use per-agent data
+  vector<Vector2d> last_next_best_path = ad.planned_next_best_path_;
+  Vector2d last_next_pos = ad.planned_next_pos_;
   if (ad.dormant_frontier_flag_) {
     ad.replan_flag_ = true;
     ad.dormant_frontier_flag_ = false;
@@ -284,14 +284,20 @@ int ExplorationFSM::callActionPlanner(int agent_idx)
   else if (ad.final_result_ == FINAL_RESULT::EXPLORE && !frontier_change_flag)
     ad.replan_flag_ = false;
 
-  expl_res = expl_manager_->planNextBestPoint(ad.start_pt_, ad.start_yaw_);
+  // Release previous frontier claim if replanning
+  if (ad.replan_flag_)
+    expl_manager_->frontier_map2d_->releaseClaimByAgent(agent_idx);
+
+  expl_res = expl_manager_->planNextBestPoint(
+      ad.start_pt_, ad.start_yaw_, agent_idx, ad.planned_next_pos_, ad.planned_next_best_path_);
 
   if (expl_res != EXPL_RESULT::EXPLORATION) {
     ad.replan_flag_ = true;
   }
   if (expl_res == EXPL_RESULT::EXPLORATION && !ad.replan_flag_) {
-    expl_manager_->ed_->next_best_path_ = last_next_best_path;
-    expl_manager_->ed_->next_pos_ = last_next_pos;
+    // Keep previous path — don't overwrite with new planning result
+    ad.planned_next_best_path_ = last_next_best_path;
+    ad.planned_next_pos_ = last_next_pos;
     ad.replan_flag_ = true;
   }
 
@@ -307,22 +313,27 @@ int ExplorationFSM::callActionPlanner(int agent_idx)
   else
     final_res = FINAL_RESULT::SEARCH_OBJECT;
 
-  if (final_res == FINAL_RESULT::NO_FRONTIER || expl_manager_->ed_->next_best_path_.empty()) {
+  // Release frontier claim when switching to object search
+  if (final_res == FINAL_RESULT::SEARCH_OBJECT)
+    expl_manager_->frontier_map2d_->releaseClaimByAgent(agent_idx);
+
+  if (final_res == FINAL_RESULT::NO_FRONTIER || ad.planned_next_best_path_.empty()) {
     ROS_WARN("Agent %d: No (passable) frontier", agent_idx);
     return final_res;
   }
 
-  Eigen::Vector2d end_pos = expl_manager_->ed_->next_pos_;
+  Eigen::Vector2d end_pos = ad.planned_next_pos_;
   Eigen::Vector2d last_end_pos = ad.last_next_pos_;
   ad.last_next_pos_ = end_pos;
   double min_dist = (current_pos - end_pos).norm();
-  ROS_WARN("To the next point (%.2fm %.2fm), distance = %.2f m", end_pos(0), end_pos(1), min_dist);
+  ROS_WARN("Agent %d: To the next point (%.2fm %.2fm), distance = %.2f m",
+      agent_idx, end_pos(0), end_pos(1), min_dist);
 
   // Handling being stuck while exploring toward a specific frontier
   if (final_res == FINAL_RESULT::EXPLORE) {
     // Force dormant if very close to target but still exploring
     if (min_dist < FSMConstants::FORCE_DORMANT_DISTANCE) {
-      ROS_ERROR("Force set dormant frontier.");
+      ROS_ERROR("Agent %d: Force set dormant frontier.", agent_idx);
       expl_manager_->frontier_map2d_->setForceDormantFrontier(end_pos);
       ad.dormant_frontier_flag_ = true;
     }
@@ -331,15 +342,15 @@ int ExplorationFSM::callActionPlanner(int agent_idx)
     if ((end_pos - last_end_pos).norm() < 1e-3 &&
         (current_pos - last_pos).norm() < stucking_distance) {
       ad.stucking_next_pos_count_++;
-      ROS_ERROR_COND(ad.stucking_next_pos_count_ > 8, "stucking_next_pos_count_ = %d",
-          ad.stucking_next_pos_count_);
+      ROS_ERROR_COND(ad.stucking_next_pos_count_ > 8, "Agent %d: stucking_next_pos_count_ = %d",
+          agent_idx, ad.stucking_next_pos_count_);
     }
     else
       ad.stucking_next_pos_count_ = 0;
 
     // Mark frontier as dormant if stuck too long with same target
     if (ad.stucking_next_pos_count_ >= FSMConstants::MAX_STUCKING_NEXT_POS_COUNT) {
-      ROS_ERROR("Set dormant frontier.");
+      ROS_ERROR("Agent %d: Set dormant frontier.", agent_idx);
       ad.stucking_action_count_ = 0;
       ad.stucking_next_pos_count_ = 0;
       expl_manager_->frontier_map2d_->setForceDormantFrontier(end_pos);
@@ -350,15 +361,15 @@ int ExplorationFSM::callActionPlanner(int agent_idx)
   // Track consecutive stuck actions per-agent
   if ((current_pos - last_pos).norm() < stucking_distance) {
     ad.stucking_action_count_++;
-    ROS_ERROR_COND(ad.stucking_action_count_ > 15, "Stucking action count = %d",
-        ad.stucking_action_count_);
+    ROS_ERROR_COND(ad.stucking_action_count_ > 15, "Agent %d: Stucking action count = %d",
+        agent_idx, ad.stucking_action_count_);
   }
   else
     ad.stucking_action_count_ = 0;
 
   // If stuck for too long, terminate episode for this agent
   if (ad.stucking_action_count_ >= FSMConstants::MAX_STUCKING_COUNT) {
-    ROS_ERROR("Stuck for too long, stopping episode.");
+    ROS_ERROR("Agent %d: Stuck for too long, stopping episode.", agent_idx);
     final_res = FINAL_RESULT::STUCKING;
     return final_res;
   }
@@ -366,10 +377,10 @@ int ExplorationFSM::callActionPlanner(int agent_idx)
   // Plan specific action based on exploration result
   if (expl_res == EXPL_RESULT::SEARCH_EXTREME)
     ad.newest_action_ =
-        planNextBestAction(current_pos, current_yaw, expl_manager_->ed_->next_best_path_, false, agent_idx);
+        planNextBestAction(current_pos, current_yaw, ad.planned_next_best_path_, false, agent_idx);
   else
     ad.newest_action_ =
-        planNextBestAction(current_pos, current_yaw, expl_manager_->ed_->next_best_path_, true, agent_idx);
+        planNextBestAction(current_pos, current_yaw, ad.planned_next_best_path_, true, agent_idx);
 
   return final_res;
 }
@@ -577,8 +588,8 @@ void ExplorationFSM::visualize()
     auto& agent_vis = visualization_[agent_idx];
     auto& ad = fd_->agent_[agent_idx];
 
-    // Draw next best path for this agent
-    agent_vis->drawLines(vec2dTo3d(ed_ptr->next_best_path_), fp_->vis_scale_,
+    // Draw next best path for this agent (per-agent, decoupled)
+    agent_vis->drawLines(vec2dTo3d(ad.planned_next_best_path_), fp_->vis_scale_,
         Vector4d(1, 0.2, 0.2, 1), "next_path", 1, 6);
 
     // Draw next local point for this agent

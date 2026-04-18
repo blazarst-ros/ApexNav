@@ -71,7 +71,8 @@ void ExplorationManager::initialize(ros::NodeHandle& nh)
   ROS_INFO("[ExplorationManager] KinoAstar and GCopter initialized for real-world mode");
 }
 
-int ExplorationManager::planNextBestPoint(const Vector3d& pos, const double& yaw)
+int ExplorationManager::planNextBestPoint(const Vector3d& pos, const double& yaw, int agent_idx,
+    Eigen::Vector2d& out_next_pos, std::vector<Eigen::Vector2d>& out_next_best_path)
 {
   // 高置信度物体导航 → 过深物体导航 → 活跃前沿探索 → 可疑物体 → 休眠前沿 → 极端搜索 → 错误返回
   Vector2d pos2d = Vector2d(pos(0), pos(1));
@@ -80,87 +81,80 @@ int ExplorationManager::planNextBestPoint(const Vector3d& pos, const double& yaw
 
   // Clear previous planning results
   ed_->tsp_tour_.clear();
-  ed_->next_best_path_.clear();
+  out_next_best_path.clear();
   vector<pcl::shared_ptr<pcl::PointCloud<pcl::PointXYZ>>> object_clouds;
   sdf_map_->object_map2d_->getTopConfidenceObjectCloud(object_clouds);
 
   // ==================== Navigation Mode: High-Confidence Objects ====================
 
   if (!object_clouds.empty()) {  // 存在高置信度目标物体点云
-    ROS_WARN("[Navigation Mode] Get object_cloud num = %ld", object_clouds.size());
+    ROS_WARN("[Agent %d Navigation Mode] Get object_cloud num = %ld", agent_idx, object_clouds.size());
 
     // Try to find path to each detected object in order of confidence
     for (auto object_cloud : object_clouds) {
-      if (searchObjectPath(pos, object_cloud, ed_->next_pos_, ed_->next_best_path_))
+      if (searchObjectPath(pos, object_cloud, out_next_pos, out_next_best_path))
         return SEARCH_BEST_OBJECT;
-      // 整数码表示： Found high-confidence object
     }
   }
 
   // ==================== Navigation Mode: Over-Depth Objects ====================
-  // 高置信度物体导航失败，但存在 “过深物体”（Over-Depth Object）,尝试前往这些物体以获取更多环境信息
   if (!object_map2d_->over_depth_object_cloud_->points.empty()) {
-    ROS_WARN("[Navigation Mode (Over Depth)] Get over depth object cloud");
+    ROS_WARN("[Agent %d Navigation Mode (Over Depth)] Get over depth object cloud", agent_idx);
     if (searchObjectPath(
-            pos, object_map2d_->over_depth_object_cloud_, ed_->next_pos_, ed_->next_best_path_))
+            pos, object_map2d_->over_depth_object_cloud_, out_next_pos, out_next_best_path))
       return SEARCH_OVER_DEPTH_OBJECT;
-    // 整数码表示 Searching over-depth object
   }
 
   // ==================== Exploration Mode: Frontier-Based Planning ====================
-  // 前沿点探索模式(兜底作用)，尝试前往前沿点以覆盖未知区域
   sdf_map_->object_map2d_->getTopConfidenceObjectCloud(
-      object_clouds, false);  // 重新加载物体点云（参数false：包含次高置信度物体，非仅最高）
+      object_clouds, false);
   pcl::shared_ptr<pcl::PointCloud<pcl::PointXYZ>> top_object_cloud(
       new pcl::PointCloud<pcl::PointXYZ>);
-  if (object_clouds.size() >= 1)  // 取第一个次高置信度物体
+  if (object_clouds.size() >= 1)
     top_object_cloud = object_clouds[0];
 
-  // Apply selected exploration policy to choose next frontier（选择最优前沿点）
+  // Apply selected exploration policy to choose next frontier
   Eigen::Vector2d next_best_pos;
   std::vector<Eigen::Vector2d> next_best_path;
-  chooseExplorationPolicy(pos2d, ed_->frontier_averages_, next_best_pos, next_best_path);
+  chooseExplorationPolicy(pos2d, ed_->frontier_averages_, next_best_pos, next_best_path, agent_idx);
 
-  // Handle case when no passable frontiers are found(导航失败+前沿点失败-->进行容错机制)
+  // Handle case when no passable frontiers are found
   if (next_best_path.empty()) {
-    ROS_WARN("Maybe no passable frontier.");
+    ROS_WARN("Agent %d: Maybe no passable frontier.", agent_idx);
 
-    // Try suspicious objects as backup(第一层容错：尝试可疑物体导航)
+    // Try suspicious objects as backup
     if (!top_object_cloud->points.empty() &&
-        searchObjectPath(pos, top_object_cloud, ed_->next_pos_, ed_->next_best_path_))
+        searchObjectPath(pos, top_object_cloud, out_next_pos, out_next_best_path))
       return SEARCH_SUSPICIOUS_OBJECT;
     else
-      // Try dormant frontiers as last resort(第二层容错：尝试休眠前沿点)
+      // Try dormant frontiers as last resort
       chooseExplorationPolicy(
-          pos2d, ed_->dormant_frontier_averages_, next_best_pos, next_best_path);
+          pos2d, ed_->dormant_frontier_averages_, next_best_pos, next_best_path, agent_idx);
 
-    // Extreme search mode when all normal options fail(底层容错：极端搜索模式)
+    // Extreme search mode when all normal options fail
     if (next_best_path.empty()) {
-      ROS_ERROR("search exterme case!!!");
+      ROS_ERROR("Agent %d: search exterme case!!!", agent_idx);
 
-      // Try extreme object search with relaxed constraints（放宽约束，重新尝试所有物体）
       for (auto object_cloud : object_clouds) {
         if (!object_cloud->points.empty() &&
-            searchObjectPathExtreme(pos, object_cloud, ed_->next_pos_, ed_->next_best_path_))
+            searchObjectPathExtreme(pos, object_cloud, out_next_pos, out_next_best_path))
           return SEARCH_EXTREME;
       }
 
-      // Include lower confidence objects in extreme search（加载更低置信度的物体，继续极端搜索）
       sdf_map_->object_map2d_->getTopConfidenceObjectCloud(object_clouds, false, true);
       for (auto object_cloud : object_clouds) {
         if (!object_cloud->points.empty() &&
-            searchObjectPathExtreme(pos, object_cloud, ed_->next_pos_, ed_->next_best_path_))
+            searchObjectPathExtreme(pos, object_cloud, out_next_pos, out_next_best_path))
           return SEARCH_EXTREME;
       }
 
-      // Try cached over-depth objects as final option（ 最后尝试缓存的过深物体）
       static auto last_over_depth_object_cloud = object_map2d_->over_depth_object_cloud_;
       if (!object_map2d_->over_depth_object_cloud_->points.empty())
         last_over_depth_object_cloud = object_map2d_->over_depth_object_cloud_;
 
       if (!last_over_depth_object_cloud->points.empty() &&
           searchObjectPathExtreme(
-              pos, last_over_depth_object_cloud, ed_->next_pos_, ed_->next_best_path_)) {
+              pos, last_over_depth_object_cloud, out_next_pos, out_next_best_path)) {
         return SEARCH_EXTREME;
       }
     }
@@ -168,61 +162,78 @@ int ExplorationManager::planNextBestPoint(const Vector3d& pos, const double& yaw
     // Final error handling when no valid targets exist
     if (next_best_path.empty()) {
       if (ed_->frontiers_.empty()) {
-        ROS_ERROR("No coverable frontier!!");
-        return NO_COVERABLE_FRONTIER;  // 无任何可覆盖的前沿点（环境已探索完毕）
+        ROS_ERROR("Agent %d: No coverable frontier!!", agent_idx);
+        return NO_COVERABLE_FRONTIER;
       }
       else {
-        ROS_ERROR("No passable frontier!!");
-        return NO_PASSABLE_FRONTIER;  // 有前沿点但无可行路径（如被完全阻挡）
+        ROS_ERROR("Agent %d: No passable frontier!!", agent_idx);
+        return NO_PASSABLE_FRONTIER;
       }
     }
   }
 
   // Store successful planning results
-  ed_->next_pos_ = next_best_pos;
-  ed_->next_best_path_ = next_best_path;
+  out_next_pos = next_best_pos;
+  out_next_best_path = next_best_path;
+
+  // Claim this frontier for the agent
+  frontier_map2d_->claimFrontierByPosition(next_best_pos, agent_idx);
 
   // Performance monitoring
   double total_time = (ros::Time::now() - t2).toSec();
-  ROS_ERROR_COND(total_time > 0.25, "[Plan NBV] Total time %.2lf s too long!!!", total_time);
+  ROS_ERROR_COND(total_time > 0.25, "[Agent %d Plan NBV] Total time %.2lf s too long!!!", agent_idx, total_time);
 
   return EXPLORATION;
 }
 
 void ExplorationManager::chooseExplorationPolicy(Vector2d cur_pos, vector<Vector2d> frontiers,
-    Vector2d& next_best_pos, vector<Vector2d>& next_best_path)
+    Vector2d& next_best_pos, vector<Vector2d>& next_best_path, int agent_idx)
 {
+  // Filter out frontiers claimed by the other agent
+  int other_agent = 1 - agent_idx;
+  vector<Vector2d> original_frontiers = frontiers;  // keep for fallback
+  frontiers.erase(
+      std::remove_if(frontiers.begin(), frontiers.end(),
+          [&](const Vector2d& f) {
+              return frontier_map2d_->isFrontierClaimedByPosition(f, other_agent);
+          }),
+      frontiers.end());
+
+  // Fallback: if all frontiers are claimed, use unfiltered list
+  if (frontiers.empty() && !original_frontiers.empty()) {
+    ROS_WARN("Agent %d: All frontiers claimed by other agent, falling back to shared selection", agent_idx);
+    frontiers = original_frontiers;
+  }
+
   switch (ep_->policy_mode_) {
     case ExplorationParam::DISTANCE:
-    //机器人当前位置到单个前沿点的最短可达路径（局部最优）
-      ROS_WARN("[Exploration Mode] Find Closest Frontier");
-      findClosestFrontierPolicy(cur_pos, frontiers, next_best_pos, next_best_path);
+      ROS_WARN("[Agent %d Exploration Mode] Find Closest Frontier", agent_idx);
+      findClosestFrontierPolicy(cur_pos, frontiers, next_best_pos, next_best_path, agent_idx);
       break;
 
     case ExplorationParam::SEMANTIC:
-      ROS_WARN("[Exploration Mode] Find Highest Semantic Value Frontier");
-      findHighestSemanticsFrontierPolicy(cur_pos, frontiers, next_best_pos, next_best_path);
+      ROS_WARN("[Agent %d Exploration Mode] Find Highest Semantic Value Frontier", agent_idx);
+      findHighestSemanticsFrontierPolicy(cur_pos, frontiers, next_best_pos, next_best_path, agent_idx);
       break;
 
     case ExplorationParam::HYBRID:
-      ROS_WARN("[Exploration Mode] Working on Hybrid Mode");
-      hybridExplorePolicy(cur_pos, frontiers, next_best_pos, next_best_path);
+      ROS_WARN("[Agent %d Exploration Mode] Working on Hybrid Mode", agent_idx);
+      hybridExplorePolicy(cur_pos, frontiers, next_best_pos, next_best_path, agent_idx);
       break;
 
     case ExplorationParam::TSP_DIST:
-    //不对称旅行商问题（ATSP） 求解所有可达前沿点的 “全局最短遍历序列”
-      ROS_WARN("[Exploration Mode] Working on TSP Distance Mode");
-      findTSPTourPolicy(cur_pos, frontiers, next_best_pos, next_best_path);
+      ROS_WARN("[Agent %d Exploration Mode] Working on TSP Distance Mode", agent_idx);
+      findTSPTourPolicy(cur_pos, frontiers, next_best_pos, next_best_path, agent_idx);
       break;
 
     default:
-      ROS_WARN("[Exploration Mode] Unknown Mode");
+      ROS_WARN("[Agent %d Exploration Mode] Unknown Mode", agent_idx);
       break;
   }
 }
 
 void ExplorationManager::hybridExplorePolicy(Vector2d cur_pos, vector<Vector2d> frontiers,
-    Vector2d& next_best_pos, vector<Vector2d>& next_best_path)
+    Vector2d& next_best_pos, vector<Vector2d>& next_best_path, int agent_idx)
 {
   double std_dev_threshold = ep_->sigma_threshold_;
   double max_to_mean_threshold = ep_->max_to_mean_threshold_;
@@ -236,7 +247,7 @@ void ExplorationManager::hybridExplorePolicy(Vector2d cur_pos, vector<Vector2d> 
 
   // Decide between exploitation and exploration based on semantic statistics
   if (std_dev > std_dev_threshold && max_to_mean > max_to_mean_threshold) {
-    ROS_WARN("Exploit the semantic value (TSP)!!");
+    ROS_WARN("Agent %d: Exploit the semantic value (TSP)!!", agent_idx);
     vector<Vector2d> high_sem_frontiers;
 
     // Select high-value frontiers for TSP optimization
@@ -247,16 +258,16 @@ void ExplorationManager::hybridExplorePolicy(Vector2d cur_pos, vector<Vector2d> 
         break;
       high_sem_frontiers.push_back(sem_frontier.position);
     }
-    findTSPTourPolicy(cur_pos, high_sem_frontiers, next_best_pos, next_best_path);
+    findTSPTourPolicy(cur_pos, high_sem_frontiers, next_best_pos, next_best_path, agent_idx);
   }
   else {
-    ROS_WARN("Explore the environment (Closest)!!");
-    findClosestFrontierPolicy(cur_pos, frontiers, next_best_pos, next_best_path);
+    ROS_WARN("Agent %d: Explore the environment (Closest)!!", agent_idx);
+    findClosestFrontierPolicy(cur_pos, frontiers, next_best_pos, next_best_path, agent_idx);
   }
 }
 
 void ExplorationManager::findHighestSemanticsFrontierPolicy(Vector2d cur_pos,
-    vector<Vector2d> frontiers, Vector2d& next_best_pos, vector<Vector2d>& next_best_path)
+    vector<Vector2d> frontiers, Vector2d& next_best_pos, vector<Vector2d>& next_best_path, int agent_idx)
 {
   next_best_path.clear();
 
@@ -310,7 +321,7 @@ void ExplorationManager::findHighestSemanticsFrontierPolicy(Vector2d cur_pos,
 }
 
 void ExplorationManager::findClosestFrontierPolicy(Vector2d cur_pos, vector<Vector2d> frontiers,
-    Vector2d& next_best_pos, vector<Vector2d>& next_best_path)
+    Vector2d& next_best_pos, vector<Vector2d>& next_best_path, int agent_idx)
 {
   next_best_path.clear();
 
@@ -345,7 +356,7 @@ void ExplorationManager::findClosestFrontierPolicy(Vector2d cur_pos, vector<Vect
 }
 
 void ExplorationManager::findTSPTourPolicy(Vector2d cur_pos, vector<Vector2d> frontiers,
-    Vector2d& next_best_pos, vector<Vector2d>& next_best_path)
+    Vector2d& next_best_pos, vector<Vector2d>& next_best_path, int agent_idx)
 {
   next_best_path.clear();
   vector<Vector2d> filter_frontiers;

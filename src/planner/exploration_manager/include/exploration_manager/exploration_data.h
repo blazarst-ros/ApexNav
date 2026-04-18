@@ -75,6 +75,10 @@ struct AgentFSMData {
   Eigen::Vector3d odom_omega_;
   std::vector<Eigen::Vector2d> traveled_path_;
   LocalTrajectory newest_traj_;
+
+  // Per-agent planning output (decoupled from shared ExplorationData)
+  Eigen::Vector2d planned_next_pos_;
+  std::vector<Eigen::Vector2d> planned_next_best_path_;
 };
 
 struct FSMData {

@@ -204,7 +204,7 @@ void ExplorationFSMReal::FSMCallback(
         return;
       }
 
-      // Replan if frontier changed during exploration（不是等轨迹完全执行完毕再规划，而是 “提前预判”）
+      // Replan if frontier changed during exploration（不是等轨迹完全执行完毕再规划，而是 "提前预判"）
       if (t_cur > fp_->replan_frontier_change_delay_ &&
           fd_->agent_[0].final_result_ == FINAL_RESULT::EXPLORE &&
           expl_manager_->frontier_map2d_->isAnyFrontierChanged()) {
@@ -236,9 +236,10 @@ TrajPlannerResult ExplorationFSMReal::callTrajectoryPlanner()
   updateFrontierAndObject();
 
   // Call exploration manager to find next best point
-  int expl_res = expl_manager_->planNextBestPoint(fd_->agent_[0].start_pt_, fd_->agent_[0].start_yaw_);
-
-
+  Eigen::Vector2d next_pos;
+  std::vector<Eigen::Vector2d> next_best_path;
+  int expl_res = expl_manager_->planNextBestPoint(
+      fd_->agent_[0].start_pt_, fd_->agent_[0].start_yaw_, 0, next_pos, next_best_path);
 
   // Determine final result based on exploration result(确定任务状态,成功/失败/无前沿)
   if (expl_res == EXPL_RESULT::EXPLORATION)
@@ -261,11 +262,11 @@ TrajPlannerResult ExplorationFSMReal::callTrajectoryPlanner()
   }
 
   // Select local target from global path
-  Eigen::Vector2d goal_pos = expl_manager_->ed_->next_pos_;
+  Eigen::Vector2d goal_pos = next_pos;
   double goal_yaw = 0.0;
-  auto path = expl_manager_->ed_->next_best_path_;
+  auto& path = next_best_path;
   selectLocalTarget(fd_->agent_[0].start_pt_.head(2), path, 4.0, goal_pos, goal_yaw);
-  //只规划“当前位置到4米内”的局部目标点
+  //只规划"当前位置到4米内"的局部目标点
   //在此选定了局部目标点goal_pos和goal_yaw等
 
 
@@ -330,7 +331,7 @@ void ExplorationFSMReal::polyTraj2ROSMsg(
 void ExplorationFSMReal::selectLocalTarget(const Eigen::Vector2d& current_pos,
     const std::vector<Eigen::Vector2d>& path, const double& local_distance,
     Eigen::Vector2d& target_pos, double& target_yaw)  
-// 局部目标选择（被调用的GCopter）为轨迹规划提供一个 “靠谱” 的局部目标，避免规划长距离无效轨迹
+// 局部目标选择（被调用的GCopter）为轨迹规划提供一个 "靠谱" 的局部目标，避免规划长距离无效轨迹
 //（此处完全没有直接或间接引入「语义得分」相关的逻辑）
 {
   
@@ -497,7 +498,7 @@ void ExplorationFSMReal::triggerCallback(const geometry_msgs::PoseStampedConstPt
 {/*由 ROS 话题触发的「探索任务启动回调函数」
   —— 仅当机器人处于「等待触发（WAIT_TRIGGER）」状态时，
   接收外部触发指令（比如点击 RViz 的 2D Pose 工具、上位机发送的启动指令），
-  将探索任务标记为 “已触发”，
+  将探索任务标记为 "已触发"，
   并触发 FSM 状态从「WAIT_TRIGGER」切换到「PLAN_TRAJ」，正式启动探索轨迹规划流程*/
   if (state_ != RealFSM::State::WAIT_TRIGGER)
     return;
@@ -509,7 +510,7 @@ void ExplorationFSMReal::triggerCallback(const geometry_msgs::PoseStampedConstPt
 
 void ExplorationFSMReal::odometryCallback(const nav_msgs::OdometryConstPtr& msg)//获取机器人实时运动状态的核心入口
 {/*实时接收机器人的里程计（Odometry）消息，解析出位置、姿态（航向角）、线速度、角速度等核心运动数据，
-  存入 FSM 运行时数据容器（fd_），标记 “已获取里程计数据”，并触发机器人可视化标记的发布*/
+  存入 FSM 运行时数据容器（fd_），标记 "已获取里程计数据"，并触发机器人可视化标记的发布*/
   fd_->agent_[0].odom_pos_(0) = msg->pose.pose.position.x;
   fd_->agent_[0].odom_pos_(1) = msg->pose.pose.position.y;
   fd_->agent_[0].odom_pos_(2) = msg->pose.pose.position.z;
@@ -541,7 +542,7 @@ void ExplorationFSMReal::odometryCallback(const nav_msgs::OdometryConstPtr& msg)
 void ExplorationFSMReal::confidenceThresholdCallback(const std_msgs::Float64ConstPtr& msg)
 {
   /*在首次接收阈值指令时，将外部传入的置信度阈值设置到物体地图（object_map2d_）中，
-  标记 “已获取置信度阈值” 并打印日志，
+  标记 "已获取置信度阈值" 并打印日志，
   用于过滤物体检测结果（只保留置信度高于该阈值的物体）*/
   if (fd_->have_confidence_)
     return;

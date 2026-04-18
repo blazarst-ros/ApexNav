@@ -73,7 +73,8 @@ public:
 
   void initialize(ros::NodeHandle& nh);
 
-  int planNextBestPoint(const Vector3d& pos, const double& yaw);
+  int planNextBestPoint(const Vector3d& pos, const double& yaw, int agent_idx,
+      Eigen::Vector2d& out_next_pos, std::vector<Eigen::Vector2d>& out_next_best_path);
   bool planTrajectory(const Eigen::VectorXd& start, const Eigen::VectorXd& end, const Vector3d& ctrl);
   void getSortedSemanticFrontiers(const Vector2d& cur_pos, const vector<Vector2d>& frontiers,
       vector<SemanticFrontier>& sem_frontiers);
@@ -94,15 +95,15 @@ public:
 private:
   // Exploration Policy
   void chooseExplorationPolicy(Vector2d cur_pos, vector<Vector2d> frontiers,
-      Vector2d& next_best_pos, vector<Vector2d>& next_best_path);
+      Vector2d& next_best_pos, vector<Vector2d>& next_best_path, int agent_idx);
   void findClosestFrontierPolicy(Vector2d cur_pos, vector<Vector2d> frontiers,
-      Vector2d& next_best_pos, vector<Vector2d>& next_best_path);
+      Vector2d& next_best_pos, vector<Vector2d>& next_best_path, int agent_idx);
   void findHighestSemanticsFrontierPolicy(Vector2d cur_pos, vector<Vector2d> frontiers,
-      Vector2d& next_best_pos, vector<Vector2d>& next_best_path);
+      Vector2d& next_best_pos, vector<Vector2d>& next_best_path, int agent_idx);
   void hybridExplorePolicy(Vector2d cur_pos, vector<Vector2d> frontiers, Vector2d& next_best_pos,
-      vector<Vector2d>& next_best_path);
+      vector<Vector2d>& next_best_path, int agent_idx);
   void findTSPTourPolicy(Vector2d cur_pos, vector<Vector2d> frontiers, Vector2d& next_best_pos,
-      vector<Vector2d>& next_best_path);
+      vector<Vector2d>& next_best_path, int agent_idx);
 
   // Path Search Utils
   bool searchObjectPath(const Vector3d& start,
