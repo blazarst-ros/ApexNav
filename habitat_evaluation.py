@@ -684,8 +684,9 @@ def main(cfg: DictConfig) -> None:
             # ── Parse actions ──
             if multi_agent:
                 # Process per-agent actions from separate ROS subscribers
-                for agent_idx, raw_action in list(agent_actions.items()):
-                    agent_idx, action_code = _parse_multi_agent_action(raw_action)
+                # agent_idx is already correct from the per-topic subscription callback;
+                # the raw_action value is the plain action code (< 10), NOT encoded as agent_idx*100+code
+                for agent_idx, action_code in list(agent_actions.items()):
                     if agent_idx < num_agents:
                         aname = f"agent_{agent_idx}"
                         if agent_states[aname]["count_steps"] == max_episode_steps - 1:

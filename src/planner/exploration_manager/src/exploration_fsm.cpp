@@ -627,6 +627,30 @@ bool ExplorationFSM::updateFrontierAndObject()
   return change_flag;
 }
 
+// Lightweight episode reset — only resets FSM state and agent data.
+// Does NOT destroy/recreate ROS objects (timers, subscribers, publishers, maps).
+// This is safe to call from any callback even with AsyncSpinner,
+// unlike init(nh_) which destroys objects that other threads may be using.
+void ExplorationFSM::resetEpisode()
+{
+  // Reset FSM state for all agents
+  for (int i = 0; i < NUM_AGENTS; ++i)
+    state_[i] = ROS_STATE::INIT;
+
+  // Reset per-agent FSM data
+  fd_.reset(new FSMData);
+
+  // Reset exploration manager maps (SDF, frontier, object, value) without
+  // destroying the ROS interface (MapROS subscribers/publishers stay alive).
+  // Note: sdf_map_->resetMap() already resets object_map2d_ and value_map_.
+  expl_manager_->sdf_map_->resetMap();
+  expl_manager_->frontier_map2d_->reset();
+  expl_manager_->ed_.reset(new ExplorationData);
+
+  clearVisMarker();
+  ROS_WARN("Episode reset — FSM back to INIT, maps cleared.");
+}
+
 // Receive Habitat state messages
 void ExplorationFSM::habitatStateCallback(const std_msgs::Int32ConstPtr& msg)
 {
@@ -639,7 +663,7 @@ void ExplorationFSM::habitatStateCallback(const std_msgs::Int32ConstPtr& msg)
     }
   }
   if (msg->data == HABITAT_STATE::EPISODE_FINISH)
-    init(nh_);
+    resetEpisode();
   return;
 }
 

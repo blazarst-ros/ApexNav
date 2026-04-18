@@ -113,6 +113,7 @@ private:
   void publishRobotMarker(int agent_idx);
   void visualize();
   void clearVisMarker();
+  void resetEpisode();  ///< Lightweight reset for episode transition (no ROS object destruction)
 
   /* ROS callbacks */
   void FSMCallback(const ros::TimerEvent& e);

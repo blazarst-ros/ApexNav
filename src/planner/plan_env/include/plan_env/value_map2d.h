@@ -22,6 +22,7 @@ public:
   ValueMap(SDFMap2D* sdf_map, ros::NodeHandle& nh);
   ~ValueMap(){};
 
+  void reset();  ///< Clear all value data for a new episode
   void updateValueMap(const Vector2d& sensor_pos, const double& sensor_yaw,
       const vector<Vector2i>& free_grids, const double& itm_score);
   double getValue(const Vector2d& pos);

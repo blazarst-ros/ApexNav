@@ -46,6 +46,15 @@ ObjectMap2D::ObjectMap2D(SDFMap2D* sdf_map, ros::NodeHandle& nh)
   leaf_size_ = 0.1f;  // Voxel grid leaf size for downsampling
 }
 
+void ObjectMap2D::reset()
+{
+  objects_.clear();
+  fill(object_buffer_.begin(), object_buffer_.end(), 0);
+  fill(object_indexs_.begin(), object_indexs_.end(), -1);
+  all_object_clouds_.reset(new pcl::PointCloud<pcl::PointXYZ>());
+  over_depth_object_cloud_.reset(new pcl::PointCloud<pcl::PointXYZ>());
+}
+
 void ObjectMap2D::setConfidenceThreshold(double val)
 {
   min_confidence_ = val;

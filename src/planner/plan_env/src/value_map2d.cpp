@@ -22,6 +22,12 @@ ValueMap::ValueMap(SDFMap2D* sdf_map, ros::NodeHandle& nh)
   confidence_buffer_ = vector<double>(voxel_num, 0.0);
 }
 
+void ValueMap::reset()
+{
+  fill(value_buffer_.begin(), value_buffer_.end(), 0.0);
+  fill(confidence_buffer_.begin(), confidence_buffer_.end(), 0.0);
+}
+
 void ValueMap::updateValueMap(const Vector2d& sensor_pos, const double& sensor_yaw,
     const vector<Vector2i>& free_grids, const double& itm_score)
 {

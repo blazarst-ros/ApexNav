@@ -104,6 +104,7 @@ public:
   ObjectMap2D(SDFMap2D* sdf_map, ros::NodeHandle& nh);
   ~ObjectMap2D() = default;
 
+  void reset();  ///< Clear all object data for a new episode
   int searchSingleObjectCluster(const DetectedObject& detected_object);
   void inputObservationObjectsCloud(
       const vector<pcl::shared_ptr<pcl::PointCloud<pcl::PointXYZ>>> observation_clouds,

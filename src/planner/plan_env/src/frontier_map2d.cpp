@@ -44,6 +44,14 @@ FrontierMap2D::FrontierMap2D(const SDFMap2D::Ptr& sdf_map, ros::NodeHandle& nh){
   percep_utils_.reset(new PerceptionUtils2D(nh));
 }
 
+void FrontierMap2D::reset()
+{
+  frontiers_.clear();
+  dormant_frontiers_.clear();
+  candidate_frontiers_.clear();
+  fill(frontier_flag_.begin(), frontier_flag_.end(), NONE);
+}
+
 void FrontierMap2D::searchFrontiers()
 /*完成 “全流程的前沿检测与更新”：
 先清理地图更新区域内失效的旧前沿，

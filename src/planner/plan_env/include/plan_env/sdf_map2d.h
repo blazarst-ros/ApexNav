@@ -46,6 +46,7 @@ public:
 
   // Core map management functions
   void initMap(ros::NodeHandle& nh);
+  void resetMap();  ///< Clear all map data for a new episode (keeps ROS subscribers alive)
   void inputDepthCloud2D(const pcl::PointCloud<pcl::PointXY>::Ptr& points,
       const Eigen::Vector3d& camera_pos, vector<Eigen::Vector2i>& free_grids);
   void inputObjectCloud2D(

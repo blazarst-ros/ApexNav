@@ -53,6 +53,7 @@ public:
   FrontierMap2D(const shared_ptr<SDFMap2D>& sdf_map, ros::NodeHandle& nh);
   ~FrontierMap2D(){};
 
+  void reset();  ///< Clear all frontier data for a new episode
   void searchFrontiers();
   bool dormantSeenFrontiers(Vector2d sensor_pos, double sensor_yaw);
   void setForceDormantFrontier(const Vector2d& frontier_center);

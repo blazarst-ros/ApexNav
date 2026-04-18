@@ -20,6 +20,38 @@
 namespace apexnav_planner {
 SDFMap2D::~SDFMap2D() = default;
 
+void SDFMap2D::resetMap()
+{
+  // Reset occupancy and distance buffers to initial unknown state
+  md_->occupancy_buffer_.assign(mp_->buffer_size_, mp_->clamp_min_log_ - mp_->unknown_flag_);
+  md_->occupancy_buffer_inflate_.assign(mp_->buffer_size_, 0);
+  md_->count_hit_and_miss_.assign(mp_->buffer_size_, 0);
+  md_->count_hit_.assign(mp_->buffer_size_, 0);
+  md_->count_miss_.assign(mp_->buffer_size_, 0);
+  md_->flag_rayend_.assign(mp_->buffer_size_, -1);
+  md_->distance_buffer_neg_.assign(mp_->buffer_size_, mp_->default_dist_);
+  md_->distance_buffer_.assign(mp_->buffer_size_, mp_->default_dist_);
+  md_->tmp_buffer_.assign(mp_->buffer_size_, 0);
+  md_->virtual_ground_buffer_.assign(mp_->buffer_size_, 0);
+
+  // Reset update tracking
+  md_->raycast_num_ = 0;
+  md_->occupancy_need_clear_.clear();
+  md_->local_update_min_ = md_->local_update_max_ = Eigen::Vector2i(0, 0);
+  md_->local_update_mind_ = md_->local_update_maxd_ = Eigen::Vector2d(0, 0);
+  md_->update_min_ = md_->update_max_ = Eigen::Vector2i(0, 0);
+  md_->update_mind_ = md_->update_maxd_ = Eigen::Vector2d(0, 0);
+  while (!md_->cache_voxel_.empty()) md_->cache_voxel_.pop();
+
+  // Reset sub-maps in place (keeps their ROS publishers alive)
+  object_map2d_->reset();
+  value_map_->reset();
+
+  map_ros_->local_updated_ = false;
+  map_ros_->esdf_need_update_ = false;
+  ROS_WARN("SDFMap2D::resetMap() — all buffers cleared, sub-maps reset.");
+}
+
 void SDFMap2D::initMap(ros::NodeHandle& nh)
 {
   mp_.reset(new MapParam2D);
