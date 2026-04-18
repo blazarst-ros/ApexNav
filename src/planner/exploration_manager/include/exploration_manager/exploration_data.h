@@ -35,6 +35,7 @@ struct AgentFSMData {
     init_action_count_ = 0;
     stucking_action_count_ = 0;
     stucking_next_pos_count_ = 0;
+    wait_action_finish_count_ = 0;
     traveled_path_.clear();
 
     final_result_ = -1;
@@ -62,6 +63,7 @@ struct AgentFSMData {
   int init_action_count_;
   int stucking_action_count_;
   int stucking_next_pos_count_;
+  int wait_action_finish_count_;  // timeout counter for WAIT_ACTION_FINISH
   int final_result_;
   bool replan_flag_, dormant_frontier_flag_;
   bool escape_stucking_flag_;

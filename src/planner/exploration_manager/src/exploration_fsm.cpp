@@ -31,10 +31,10 @@ void ExplorationFSM::init(ros::NodeHandle& nh)
 
   /* ROS Subscriber */
   trigger_sub_ = nh.subscribe("/move_base_simple/goal", 10, &ExplorationFSM::triggerCallback, this);
-  odom_sub_[0] = nh.subscribe("/habitat/agent_0/odom", 10, &ExplorationFSM::odometryCallback0, this);
-  odom_sub_[1] = nh.subscribe("/habitat/agent_1/odom", 10, &ExplorationFSM::odometryCallback1, this);
+  odom_sub_[0] = nh.subscribe("/habitat/agent_0/odom", 30, &ExplorationFSM::odometryCallback0, this);
+  odom_sub_[1] = nh.subscribe("/habitat/agent_1/odom", 30, &ExplorationFSM::odometryCallback1, this);
   habitat_state_sub_ =
-      nh.subscribe("/habitat/state", 10, &ExplorationFSM::habitatStateCallback, this);
+      nh.subscribe("/habitat/state", 30, &ExplorationFSM::habitatStateCallback, this);
   confidence_threshold_sub_ = node_.subscribe(
       "/detector/confidence_threshold", 10, &ExplorationFSM::confidenceThresholdCallback, this);
 
@@ -144,11 +144,23 @@ void ExplorationFSM::FSMCallback(const ros::TimerEvent& e)
         std_msgs::Int32 action_msg;
         action_msg.data = ad.newest_action_;
         action_pub_[agent_idx].publish(action_msg);
+        ad.wait_action_finish_count_ = 0;
         transitState(agent_idx, ROS_STATE::WAIT_ACTION_FINISH, "FSM");
         break;
       }
 
       case ROS_STATE::WAIT_ACTION_FINISH: {
+        // Timeout: if Python side missed the action or ACTION_FINISH was dropped,
+        // re-publish the action after MAX_WAIT_ACTION_FINISH FSM ticks (~0.5s).
+        ad.wait_action_finish_count_++;
+        if (ad.wait_action_finish_count_ >= FSMConstants::MAX_WAIT_ACTION_FINISH) {
+          ROS_WARN("Agent %d: WAIT_ACTION_FINISH timeout, re-publishing action %d",
+              agent_idx, ad.newest_action_);
+          std_msgs::Int32 action_msg;
+          action_msg.data = ad.newest_action_;
+          action_pub_[agent_idx].publish(action_msg);
+          ad.wait_action_finish_count_ = 0;
+        }
         break;
       }
     }
@@ -669,8 +681,10 @@ void ExplorationFSM::habitatStateCallback(const std_msgs::Int32ConstPtr& msg)
   if (msg->data == HABITAT_STATE::ACTION_FINISH) {
     // Trigger all agents that are waiting for action finish
     for (int agent_idx = 0; agent_idx < NUM_AGENTS; ++agent_idx) {
-      if (state_[agent_idx] == ROS_STATE::WAIT_ACTION_FINISH)
+      if (state_[agent_idx] == ROS_STATE::WAIT_ACTION_FINISH) {
+        fd_->agent_[agent_idx].wait_action_finish_count_ = 0;
         transitState(agent_idx, ROS_STATE::PLAN_ACTION, "Habitat Finish Action");
+      }
     }
   }
   if (msg->data == HABITAT_STATE::EPISODE_FINISH)

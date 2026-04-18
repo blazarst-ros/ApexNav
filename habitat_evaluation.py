@@ -510,7 +510,7 @@ def main(cfg: DictConfig) -> None:
     rospy.Subscriber("/ros/state_all", Int32MultiArray, ros_all_state_callback, queue_size=10)
     rospy.Subscriber("/ros/expl_state", Int32, ros_final_state_callback, queue_size=10)
     rospy.Subscriber("/ros/expl_result", Int32, ros_expl_result_callback, queue_size=10)
-    state_pub = rospy.Publisher("/habitat/state", Int32, queue_size=10)
+    state_pub = rospy.Publisher("/habitat/state", Int32, queue_size=30)
     trigger_pub = rospy.Publisher("/move_base_simple/goal", PoseStamped, queue_size=10)
     itm_score_pub = rospy.Publisher("/blip2/cosine_score", Float64, queue_size=10)
     confidence_threshold_pub = rospy.Publisher(
@@ -647,10 +647,10 @@ def main(cfg: DictConfig) -> None:
         rospy.sleep(0.1)
 
         # ── Main episode loop ──
-        # NOTE: trigger_pub_timer stays alive to continuously publish odom,
-        # so the C++ planner keeps receiving odometry and updating the robot
-        # marker in RViz. It also publishes trigger, but the C++ FSM ignores
-        # triggers when not in WAIT_TRIGGER state, so this is harmless.
+        # Shut down the timer — the main loop publishes odom on every step
+        # and the no-action path (line ~750) publishes at 10Hz when idle.
+        # Keeping the timer alive causes dual publishing and TF out-of-order warnings.
+        trigger_pub_timer.shutdown()
         rate = rospy.Rate(10)
         global_action = None
 
@@ -924,8 +924,8 @@ def main(cfg: DictConfig) -> None:
 
             rate.sleep()
 
-        # Stop the observation timer now that the episode is over
-        trigger_pub_timer.shutdown()
+        # Timer was already shut down before the main loop to avoid dual publishing
+        # (causes TF out-of-order warnings and agent stuck issues)
 
         # ── Episode-end processing ──
         publish_int32(state_pub, HABITAT_STATE.EPISODE_FINISH)

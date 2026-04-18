@@ -20,10 +20,10 @@ class ROSPublisher:
         """
         ns = agent_name
         # Create ROS publishers (namespaced by agent)
-        self.depth_pub = rospy.Publisher(f"/habitat/{ns}/camera_depth", Image, queue_size=10)
-        self.rgb_pub = rospy.Publisher(f"/habitat/{ns}/camera_rgb", Image, queue_size=10)
-        self.odom_pub = rospy.Publisher(f"/habitat/{ns}/odom", Odometry, queue_size=10)
-        self.pose_pub = rospy.Publisher(f"/habitat/{ns}/sensor_pose", Odometry, queue_size=10)
+        self.depth_pub = rospy.Publisher(f"/habitat/{ns}/camera_depth", Image, queue_size=30)
+        self.rgb_pub = rospy.Publisher(f"/habitat/{ns}/camera_rgb", Image, queue_size=30)
+        self.odom_pub = rospy.Publisher(f"/habitat/{ns}/odom", Odometry, queue_size=30)
+        self.pose_pub = rospy.Publisher(f"/habitat/{ns}/sensor_pose", Odometry, queue_size=30)
         # Create cv_bridge object
         self.bridge = CvBridge()
         self.agent_name = ns
