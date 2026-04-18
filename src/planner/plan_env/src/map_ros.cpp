@@ -113,9 +113,14 @@ void MapROS::init()
     auto makeAgentTopic = [id](const std::string& base) -> std::string {
       size_t pos = base.rfind("agent_");
       if (pos != std::string::npos) {
-        // Replace the trailing digits with new agent number
-        std::string prefix = base.substr(0, pos);
-        return prefix + "agent_" + std::to_string(id);
+        // Find the end of the digit sequence after "agent_"
+        size_t num_start = pos + 6; // length of "agent_"
+        size_t num_end = num_start;
+        while (num_end < base.size() && std::isdigit(base[num_end])) {
+          num_end++;
+        }
+        // Replace only the agent number, preserving the suffix
+        return base.substr(0, pos) + "agent_" + std::to_string(id) + base.substr(num_end);
       }
       // No agent marker found �?? append suffix
       return base + "/agent_" + std::to_string(id);

@@ -15,8 +15,8 @@
   **Do NOT launch two planner instances** — this creates duplicate publishers, separate maps, and race conditions.
 
 - The map building module (`plan_env/map_ros.cpp`) dynamically subscribes per-agent:
-  - Takes the remapped depth/sensor_pose topic (e.g. `/habitat/agent_0/camera_depth`)
-  - Uses `makeAgentTopic()` to derive `/habitat/agent_1/camera_depth` from the topic string
+  - Reads `sensor_pose_topic` and `depth_topic` params from `algorithm.xml` (e.g. `/habitat/agent_0/camera_depth`)
+  - Uses `makeAgentTopic()` to replace only the digit in `agent_X`, preserving the suffix (e.g. `/habitat/agent_0/camera_depth` → `/habitat/agent_1/camera_depth`)
   - Subscribes `/detector/agent_X/clouds_with_scores` and `/blip2/agent_X/cosine_score` per agent
   - **All agents contribute to one shared SDF/Object/ValueMap via `map_mutex_`**
 
@@ -35,7 +35,7 @@ habitat_evaluation.py (MultiAgentEnv, 2 agents)
 
 exploration.launch → C++ planner (exploration_node, 1 instance, manages both agents)
   MapROS per-agent subs:
-    map_ros depth+pose: /habitat/agent_0/{camera_depth, sensor_pose}  (via remap + makeAgentTopic for agent_1)
+    map_ros depth+pose: /habitat/agent_0/{camera_depth, sensor_pose}  (via params + makeAgentTopic for agent_1)
     object cloud:       /detector/agent_0/clouds_with_scores
     ITM score:          /blip2/agent_0/cosine_score
     (same for agent_1)
@@ -79,6 +79,6 @@ All agent-namespaced topics use `/habitat/agent_{i}/` prefix. The `habitat2ros/h
 - `habitat_vel_control.py`  is **single-agent only** (separate velocity control experiment, not part of multi-agent)
 - Action encoding for multi-agent: `action = agent_idx * 100 + action_code`, single-agent uses raw code (`< 10`)
 - Episode termination policies: `cooperative` (any agent finishes → episode ends) or `independent` (all must finish)
-- `map_ros.cpp`'s `makeAgentTopic()` derives per-agent topics by replacing the agent number in the remapped base topic — only works if the topic contains `agent_X`
-- `algorithm.xml` remap: `/map_ros/depth` → `/habitat/agent_0/camera_depth`. The `makeAgentTopic` function replaces `0` with `1` for agent_1
+- `map_ros.cpp`'s `makeAgentTopic()` derives per-agent topics by replacing only the digit after `agent_` in the base topic string — preserves suffix like `/camera_depth`. Only works if the param value contains `agent_X`
+- `algorithm.xml` sets params `sensor_pose_topic=/habitat/agent_0/sensor_pose` and `depth_topic=/habitat/agent_0/camera_depth`. MapROS reads these and `makeAgentTopic` replaces `0` with `1` for agent_1. The old remap lines are still present but unused by MapROS.
 - The `/odom_world` remap in `algorithm.xml` is unused by the C++ planner — odom topics are hardcoded

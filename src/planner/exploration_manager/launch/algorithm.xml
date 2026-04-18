@@ -23,6 +23,12 @@
         <remap from ="/map_ros/pose"  to = "$(arg sensor_pose_topic_)"/>
         <remap from ="/map_ros/depth" to = "$(arg depth_topic_)"/>
 
+        <!-- MapROS reads these params to find per-agent depth/pose topics.
+             makeAgentTopic() replaces "agent_0" with "agent_1" etc.
+             These must contain the actual Python-side topic names. -->
+        <param name="sensor_pose_topic" value="$(arg sensor_pose_topic_)"/>
+        <param name="depth_topic"       value="$(arg depth_topic_)"/>
+
         <!-- FSM mode selection -->
         <param name="is_real_world" value="$(arg is_real_world_)" type="bool"/>
 
