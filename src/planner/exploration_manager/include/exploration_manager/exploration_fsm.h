@@ -121,8 +121,6 @@ private:
   void frontierCallback(const ros::TimerEvent& e);
   void triggerCallback(const geometry_msgs::PoseStampedConstPtr& msg);
   void odometryCallback(const nav_msgs::OdometryConstPtr& msg, int agent_idx);
-  void odometryCallback0(const nav_msgs::OdometryConstPtr& msg) { odometryCallback(msg, 0); }
-  void odometryCallback1(const nav_msgs::OdometryConstPtr& msg) { odometryCallback(msg, 1); }
   void habitatStateCallback(const std_msgs::Int32ConstPtr& msg);
   void confidenceThresholdCallback(const std_msgs::Float64ConstPtr& msg);
 

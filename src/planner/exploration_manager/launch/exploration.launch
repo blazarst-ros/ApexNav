@@ -7,7 +7,7 @@
   <arg name="is_real_world" default="false"/>
 
   <!-- topic of your odometry such as VIO or LIO -->
-  <!-- Multi-agent: C++ planner internally manages both agents (agent_0 and agent_1) -->
+  <!-- Multi-agent: C++ planner internally manages all configured agents. -->
   <arg name="odom_topic" value="/habitat/agent_0/odom" />
   <arg name="sensor_pose_topic" value="/habitat/agent_0/sensor_pose"/>
   <arg name="depth_topic" value="/habitat/agent_0/camera_depth"/>

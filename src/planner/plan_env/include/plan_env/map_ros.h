@@ -112,7 +112,7 @@ private:
   SDFMap2D* map_;
 
   // Number of agents
-  static constexpr int NUM_AGENTS_ = 2;
+  static constexpr int NUM_AGENTS_ = 3;
 
   // Per-agent state
   std::vector<AgentState> agents_;

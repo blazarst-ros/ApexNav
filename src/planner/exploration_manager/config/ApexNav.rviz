@@ -207,6 +207,89 @@ Visualization Manager:
           Name: Agent_1
         - Class: rviz/Group
           Displays:
+            - Angle Tolerance: 0.10000000149011612
+              Class: rviz/Odometry
+              Covariance:
+                Orientation:
+                  Alpha: 0.5
+                  Color: 255; 255; 127
+                  Color Style: Unique
+                  Frame: Local
+                  Offset: 1
+                  Scale: 1
+                  Value: true
+                Position:
+                  Alpha: 0.30000001192092896
+                  Color: 204; 51; 204
+                  Scale: 1
+                  Value: true
+                Value: true
+              Enabled: false
+              Keep: 1
+              Name: Odometry
+              Position Tolerance: 0.10000000149011612
+              Queue Size: 10
+              Shape:
+                Alpha: 1
+                Axes Length: 0.30000001192092896
+                Axes Radius: 0.15000000596046448
+                Color: 50; 180; 80
+                Head Length: 0.30000001192092896
+                Head Radius: 0.10000000149011612
+                Shaft Length: 1
+                Shaft Radius: 0.05000000074505806
+                Value: Axes
+              Topic: /habitat/agent_2/odom
+              Unreliable: false
+              Value: true
+            - Angle Tolerance: 0.10000000149011612
+              Class: rviz/Odometry
+              Covariance:
+                Orientation:
+                  Alpha: 0.5
+                  Color: 255; 255; 127
+                  Color Style: Unique
+                  Frame: Local
+                  Offset: 1
+                  Scale: 1
+                  Value: true
+                Position:
+                  Alpha: 0.30000001192092896
+                  Color: 204; 51; 204
+                  Scale: 1
+                  Value: true
+                Value: true
+              Enabled: false
+              Keep: 1
+              Name: Sensor_pose
+              Position Tolerance: 0.10000000149011612
+              Queue Size: 10
+              Shape:
+                Alpha: 1
+                Axes Length: 2
+                Axes Radius: 0.05000000074505806
+                Color: 50; 180; 80
+                Head Length: 0.30000001192092896
+                Head Radius: 0.10000000149011612
+                Shaft Length: 1
+                Shaft Radius: 0.05000000074505806
+                Value: Axes
+              Topic: /habitat/agent_2/sensor_pose
+              Unreliable: false
+              Value: true
+            - Class: rviz/Marker
+              Enabled: true
+              Marker Topic: /robot_agent_2
+              Name: robot_marker
+              Namespaces:
+                agent_2_robot_dir: true
+                agent_2_robot: true
+              Queue Size: 100
+              Value: true
+          Enabled: true
+          Name: Agent_2
+        - Class: rviz/Group
+          Displays:
             - Class: rviz/Image
               Enabled: true
               Image Topic: /habitat/agent_0/camera_depth
@@ -261,6 +344,34 @@ Visualization Manager:
               Value: true
           Enabled: true
           Name: Agent_1_Cam
+        - Class: rviz/Group
+          Displays:
+            - Class: rviz/Image
+              Enabled: true
+              Image Topic: /habitat/agent_2/camera_depth
+              Max Value: 1
+              Median window: 5
+              Min Value: 0
+              Name: agent2_depth
+              Normalize Range: true
+              Queue Size: 2
+              Transport Hint: raw
+              Unreliable: false
+              Value: true
+            - Class: rviz/Image
+              Enabled: true
+              Image Topic: /habitat/agent_2/camera_rgb
+              Max Value: 1
+              Median window: 5
+              Min Value: 0
+              Name: agent2_image
+              Normalize Range: true
+              Queue Size: 2
+              Transport Hint: raw
+              Unreliable: false
+              Value: true
+          Enabled: true
+          Name: Agent_2_Cam
       Enabled: true
       Name: Simulation
     - Class: rviz/Group
@@ -287,6 +398,16 @@ Visualization Manager:
           Value: true
         - Class: rviz/Marker
           Enabled: true
+          Marker Topic: /agent_2/planning_vis/frontier
+          Name: Agent2_frontier
+          Namespaces:
+            agent_2_dormant_frontier: true
+            agent_2_frontier: true
+            agent_2_object: true
+          Queue Size: 10000
+          Value: true
+        - Class: rviz/Marker
+          Enabled: true
           Marker Topic: /agent_0/planning_vis/viewpoints
           Name: Agent0_path
           Namespaces:
@@ -305,6 +426,17 @@ Visualization Manager:
             agent_1_next_path: true
             agent_1_traveled_path: true
             agent_1_tsp_tour: true
+          Queue Size: 100
+          Value: true
+        - Class: rviz/Marker
+          Enabled: true
+          Marker Topic: /agent_2/planning_vis/viewpoints
+          Name: Agent2_path
+          Namespaces:
+            agent_2_local_point: true
+            agent_2_next_path: true
+            agent_2_traveled_path: true
+            agent_2_tsp_tour: true
           Queue Size: 100
           Value: true
       Enabled: true

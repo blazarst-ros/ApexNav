@@ -136,7 +136,7 @@ def ros_action_callback(msg):
 def _make_agent_action_callback(agent_idx: int, actions_dict: dict):
     """Create a per-agent action callback that stores actions separately.
 
-    This avoids the race condition where two agents' actions arrive
+    This avoids the race condition where multiple agents' actions arrive
     simultaneously and overwrite each other in a shared global variable.
     """
     def callback(msg):
@@ -202,43 +202,60 @@ def _is_multi_agent(cfg: DictConfig) -> bool:
 def _setup_multi_agent_env(env, cfg: DictConfig):
     """Assign per-agent start positions.
 
-    Strategy: agent_0 uses episode start_position; agent_1 is offset on same floor.
+    Strategy: agent_0 uses episode start_position; additional agents are offset
+    around the same floor when navigable.
     Habitat uses integer agent_id (index into agents_order), not string names.
     """
     offset = cfg.get("multiagent", {}).get("agent_spawn_offset", 1.0)
+    num_agents = cfg.get("num_agents", 1)
     episode = env.current_episode
 
     start_pos_0 = list(episode.start_position)
     start_rot_0 = list(episode.start_rotation)
-    start_pos_1 = [start_pos_0[0] + offset, start_pos_0[1], start_pos_0[2]]
+    start_positions = [start_pos_0]
+
+    def candidate_offsets(base_offset):
+        return [
+            (base_offset, 0.0),
+            (-base_offset, 0.0),
+            (0.0, base_offset),
+            (0.0, -base_offset),
+            (base_offset, base_offset),
+            (base_offset, -base_offset),
+            (-base_offset, base_offset),
+            (-base_offset, -base_offset),
+        ]
 
     try:
         pathfinder = env.sim.pathfinder
-        if not pathfinder.is_navigable(start_pos_1):
-            found = False
-            for search_offset in [offset, -offset, offset * 2, -offset * 2]:
-                candidates = [
-                    [start_pos_0[0] + search_offset, start_pos_0[1], start_pos_0[2]],
-                    [start_pos_0[0] - search_offset, start_pos_0[1], start_pos_0[2]],
-                    [start_pos_0[0], start_pos_0[1], start_pos_0[2] + search_offset],
-                    [start_pos_0[0], start_pos_0[1], start_pos_0[2] - search_offset],
-                ]
-                for candidate in candidates:
-                    if pathfinder.is_navigable(candidate):
-                        start_pos_1 = candidate
-                        found = True
+        for agent_id in range(1, num_agents):
+            found_pos = None
+            for ring in range(1, 4):
+                for dx, dz in candidate_offsets(offset * ring):
+                    candidate = [
+                        start_pos_0[0] + dx,
+                        start_pos_0[1],
+                        start_pos_0[2] + dz,
+                    ]
+                    if not pathfinder.is_navigable(candidate):
+                        continue
+                    if all(
+                        np.linalg.norm(np.array(candidate) - np.array(pos)) > offset * 0.5
+                        for pos in start_positions
+                    ):
+                        found_pos = candidate
                         break
-                if found:
+                if found_pos is not None:
                     break
-            if not found:
-                start_pos_1 = start_pos_0.copy()
+            start_positions.append(found_pos if found_pos is not None else start_pos_0.copy())
     except Exception:
-        start_pos_1 = start_pos_0.copy()
+        while len(start_positions) < num_agents:
+            start_positions.append(start_pos_0.copy())
 
     # Use get_agent().set_state() with numpy-typed AgentState instead of
     # env.sim.set_agent_state() because the latter passes Python lists to
     # habitat-sim's internal translate(), which crashes for agent_id != 0.
-    for agent_id, pos in enumerate([start_pos_0, start_pos_1]):
+    for agent_id, pos in enumerate(start_positions):
         agent = env.sim.get_agent(agent_id)
         new_state = agent.get_state()
         new_state.position = np.array(pos, dtype=np.float32)
@@ -501,8 +518,8 @@ def main(cfg: DictConfig) -> None:
             _get_agent_action_index(0), Int32, ros_action_callback, queue_size=10
         )
     # ROS state callbacks for multi-agent tracking
-    # Use C++ NUM_AGENTS (may be 2 even in single-agent Python mode) to avoid IndexError
-    ros_all_states = [ROS_STATE.INIT] * max(num_agents, 2)
+    # Match C++ NUM_AGENTS in simulation mode so readiness checks include all planner agents.
+    ros_all_states = [ROS_STATE.INIT] * max(num_agents, 3)
     def ros_all_state_callback(msg):
         for i, s in enumerate(msg.data):
             if i < len(ros_all_states):
@@ -683,16 +700,38 @@ def main(cfg: DictConfig) -> None:
 
             # ── Parse actions ──
             if multi_agent:
+                waiting_action_agents = [
+                    agent_idx for agent_idx in range(num_agents)
+                    if ros_all_states[agent_idx] == ROS_STATE.WAIT_ACTION_FINISH
+                    and not agent_states[agent_names[agent_idx]]["finished"]
+                ]
+                if waiting_action_agents and not all(
+                    agent_idx in agent_actions for agent_idx in waiting_action_agents
+                ):
+                    for agent_name in agent_names:
+                        ast = agent_states[agent_name]
+                        if ast["finished"]:
+                            continue
+                        gps = _compute_agent_gps(env, agent_names.index(agent_name))
+                        compass = _compute_agent_compass(env, agent_names.index(agent_name))
+                        ros_pubs[agent_name].publish_robot_odom(rospy.Time.now(), gps, compass)
+                    rate.sleep()
+                    continue
+
                 # Process per-agent actions from separate ROS subscribers
                 # agent_idx is already correct from the per-topic subscription callback;
                 # the raw_action value is the plain action code (< 10), NOT encoded as agent_idx*100+code
-                for agent_idx, action_code in list(agent_actions.items()):
+                actionable_agents = waiting_action_agents or sorted(agent_actions.keys())
+                for agent_idx in actionable_agents:
+                    action_code = agent_actions.get(agent_idx)
+                    if action_code is None:
+                        continue
                     if agent_idx < num_agents:
                         aname = f"agent_{agent_idx}"
                         if agent_states[aname]["count_steps"] == max_episode_steps - 1:
                             action_code = ACTION.STOP
                         agent_states[aname]["global_action"] = action_code
-                agent_actions.clear()
+                    agent_actions.pop(agent_idx, None)
             else:
                 if global_action is not None:
                     if agent_states[agent_names[0]]["count_steps"] == max_episode_steps - 1:

@@ -189,19 +189,24 @@ int ExplorationManager::planNextBestPoint(const Vector3d& pos, const double& yaw
 void ExplorationManager::chooseExplorationPolicy(Vector2d cur_pos, vector<Vector2d> frontiers,
     Vector2d& next_best_pos, vector<Vector2d>& next_best_path, int agent_idx)
 {
-  // Filter out frontiers claimed by the other agent
-  int other_agent = 1 - agent_idx;
+  // Filter out frontiers claimed by any other agent.
   vector<Vector2d> original_frontiers = frontiers;  // keep for fallback
   frontiers.erase(
       std::remove_if(frontiers.begin(), frontiers.end(),
           [&](const Vector2d& f) {
-              return frontier_map2d_->isFrontierClaimedByPosition(f, other_agent);
+              for (int other_agent = 0; other_agent < NUM_AGENTS; ++other_agent) {
+                if (other_agent == agent_idx)
+                  continue;
+                if (frontier_map2d_->isFrontierClaimedByPosition(f, other_agent))
+                  return true;
+              }
+              return false;
           }),
       frontiers.end());
 
   // Fallback: if all frontiers are claimed, use unfiltered list
   if (frontiers.empty() && !original_frontiers.empty()) {
-    ROS_WARN("Agent %d: All frontiers claimed by other agent, falling back to shared selection", agent_idx);
+    ROS_WARN("Agent %d: All frontiers claimed by other agents, falling back to shared selection", agent_idx);
     frontiers = original_frontiers;
   }
 

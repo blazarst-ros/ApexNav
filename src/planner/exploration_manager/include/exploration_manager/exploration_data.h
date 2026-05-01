@@ -13,7 +13,7 @@
 
 namespace apexnav_planner {
 
-static constexpr int NUM_AGENTS = 2;
+static constexpr int NUM_AGENTS = 3;
 
 enum FINAL_RESULT { EXPLORE, SEARCH_OBJECT, STUCKING, NO_FRONTIER, REACH_OBJECT };
 
@@ -97,7 +97,7 @@ struct FSMData {
   bool trigger_, have_confidence_;
   std::vector<string> state_str_;
   bool static_state_;
-  std::vector<AgentFSMData> agent_;  // per-agent data [0] and [1]
+  std::vector<AgentFSMData> agent_;  // per-agent data
 };
 
 struct FSMParam {

@@ -4,6 +4,7 @@
 #include <exploration_manager/exploration_data.h>
 #include <vis_utils/planning_visualization.h>
 #include <std_msgs/Int32MultiArray.h>
+#include <boost/bind/bind.hpp>
 
 namespace apexnav_planner {
 void ExplorationFSM::init(ros::NodeHandle& nh)
@@ -31,8 +32,12 @@ void ExplorationFSM::init(ros::NodeHandle& nh)
 
   /* ROS Subscriber */
   trigger_sub_ = nh.subscribe("/move_base_simple/goal", 10, &ExplorationFSM::triggerCallback, this);
-  odom_sub_[0] = nh.subscribe("/habitat/agent_0/odom", 30, &ExplorationFSM::odometryCallback0, this);
-  odom_sub_[1] = nh.subscribe("/habitat/agent_1/odom", 30, &ExplorationFSM::odometryCallback1, this);
+  for (int i = 0; i < NUM_AGENTS; ++i) {
+    std::string odom_topic = "/habitat/agent_" + std::to_string(i) + "/odom";
+    odom_sub_[i] = nh.subscribe<nav_msgs::Odometry>(
+        odom_topic, 30,
+        boost::bind(&ExplorationFSM::odometryCallback, this, boost::placeholders::_1, i));
+  }
   habitat_state_sub_ =
       nh.subscribe("/habitat/state", 30, &ExplorationFSM::habitatStateCallback, this);
   confidence_threshold_sub_ = node_.subscribe(
@@ -42,11 +47,13 @@ void ExplorationFSM::init(ros::NodeHandle& nh)
   ros_state_pub_ = nh.advertise<std_msgs::Int32>("/ros/state", 10);
   ros_state_all_pub_ = nh.advertise<std_msgs::Int32MultiArray>("/ros/state_all", 10);
   expl_state_pub_ = nh.advertise<std_msgs::Int32>("/ros/expl_state", 10);
-  action_pub_[0] = nh.advertise<std_msgs::Int32>("/habitat/plan_action_agent_0", 10);
-  action_pub_[1] = nh.advertise<std_msgs::Int32>("/habitat/plan_action_agent_1", 10);
   expl_result_pub_ = nh.advertise<std_msgs::Int32>("/ros/expl_result", 10);
-  robot_marker_pub_[0] = nh.advertise<visualization_msgs::Marker>("/robot_agent_0", 10);
-  robot_marker_pub_[1] = nh.advertise<visualization_msgs::Marker>("/robot_agent_1", 10);
+  for (int i = 0; i < NUM_AGENTS; ++i) {
+    action_pub_[i] = nh.advertise<std_msgs::Int32>(
+        "/habitat/plan_action_agent_" + std::to_string(i), 10);
+    robot_marker_pub_[i] = nh.advertise<visualization_msgs::Marker>(
+        "/robot_agent_" + std::to_string(i), 10);
+  }
 }
 
 // FSM between ROS and Habitat for action planning and execution (round-robin over agents)
@@ -66,10 +73,8 @@ void ExplorationFSM::FSMCallback(const ros::TimerEvent& e)
       case ROS_STATE::INIT: {
         // Wait for odometry and target confidence threshold
         if (!ad.have_odom_ || !fd_->have_confidence_) {
-          if (agent_idx == 0)
-            ROS_WARN_THROTTLE(1.0, "Agent 0: No odom || No target confidence threshold.");
-          else
-            ROS_WARN_THROTTLE(1.0, "Agent 1: No odom || No target confidence threshold.");
+          ROS_WARN_THROTTLE(
+              1.0, "Agent %d: No odom || No target confidence threshold.", agent_idx);
           continue;
         }
         // Go to WAIT_TRIGGER when prerequisites are ready
@@ -79,10 +84,7 @@ void ExplorationFSM::FSMCallback(const ros::TimerEvent& e)
 
       case ROS_STATE::WAIT_TRIGGER: {
         if (!ad.trigger_) {
-          if (agent_idx == 0)
-            ROS_WARN_THROTTLE(1.0, "Agent 0: Wait for trigger.");
-          else
-            ROS_WARN_THROTTLE(1.0, "Agent 1: Wait for trigger.");
+          ROS_WARN_THROTTLE(1.0, "Agent %d: Wait for trigger.", agent_idx);
         }
         break;
       }
@@ -94,10 +96,7 @@ void ExplorationFSM::FSMCallback(const ros::TimerEvent& e)
           action_msg.data = ACTION::STOP;
           action_pub_[agent_idx].publish(action_msg);
         }
-        if (agent_idx == 0)
-          ROS_WARN_THROTTLE(1.0, "Agent 0: Finish One Episode!!!");
-        else
-          ROS_WARN_THROTTLE(1.0, "Agent 1: Finish One Episode!!!");
+        ROS_WARN_THROTTLE(1.0, "Agent %d: Finish One Episode!!!", agent_idx);
         break;
       }
 
@@ -790,16 +789,14 @@ void ExplorationFSM::publishRobotMarker(int agent_idx)
   robot_marker.scale.y = robot_radius * 2;
   robot_marker.scale.z = robot_height;
 
-  // Agent 0 = blue, Agent 1 = red
-  if (agent_idx == 0) {
-    robot_marker.color.r = 50.0 / 255.0;
-    robot_marker.color.g = 50.0 / 255.0;
-    robot_marker.color.b = 255.0 / 255.0;
-  } else {
-    robot_marker.color.r = 255.0 / 255.0;
-    robot_marker.color.g = 50.0 / 255.0;
-    robot_marker.color.b = 50.0 / 255.0;
-  }
+  const std::vector<Vector4d> body_colors = {
+      Vector4d(50.0 / 255.0, 50.0 / 255.0, 255.0 / 255.0, 1.0),
+      Vector4d(255.0 / 255.0, 50.0 / 255.0, 50.0 / 255.0, 1.0),
+      Vector4d(50.0 / 255.0, 180.0 / 255.0, 80.0 / 255.0, 1.0)};
+  const Vector4d& body_color = body_colors[agent_idx % body_colors.size()];
+  robot_marker.color.r = body_color(0);
+  robot_marker.color.g = body_color(1);
+  robot_marker.color.b = body_color(2);
   robot_marker.color.a = 1.0;
 
   // Create direction arrow marker
@@ -824,15 +821,14 @@ void ExplorationFSM::publishRobotMarker(int agent_idx)
   arrow_marker.scale.y = 0.08;
   arrow_marker.scale.z = 0.08;
 
-  if (agent_idx == 0) {
-    arrow_marker.color.r = 10.0 / 255.0;
-    arrow_marker.color.g = 255.0 / 255.0;
-    arrow_marker.color.b = 10.0 / 255.0;
-  } else {
-    arrow_marker.color.r = 255.0 / 255.0;
-    arrow_marker.color.g = 165.0 / 255.0;
-    arrow_marker.color.b = 10.0 / 255.0;
-  }
+  const std::vector<Vector4d> arrow_colors = {
+      Vector4d(10.0 / 255.0, 255.0 / 255.0, 10.0 / 255.0, 1.0),
+      Vector4d(255.0 / 255.0, 165.0 / 255.0, 10.0 / 255.0, 1.0),
+      Vector4d(40.0 / 255.0, 210.0 / 255.0, 255.0 / 255.0, 1.0)};
+  const Vector4d& arrow_color = arrow_colors[agent_idx % arrow_colors.size()];
+  arrow_marker.color.r = arrow_color(0);
+  arrow_marker.color.g = arrow_color(1);
+  arrow_marker.color.b = arrow_color(2);
   arrow_marker.color.a = 1.0;
 
   robot_marker_pub_[agent_idx].publish(robot_marker);

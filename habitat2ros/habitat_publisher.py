@@ -15,7 +15,7 @@ class ROSPublisher:
         Create ROS publishers with namespaced topics for a specific agent.
 
         Args:
-            agent_name: Name of the agent (e.g., "agent_0", "agent_1").
+            agent_name: Name of the agent (e.g., "agent_0", "agent_1", "agent_2").
                         This becomes the namespace between /habitat/ and the topic name.
         """
         ns = agent_name

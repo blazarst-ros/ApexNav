@@ -18,7 +18,7 @@ llm:
     #ollama: 'qwen3:8b'
 
 # Number of perception agents (used by real_world_test_habitat.py)
-num_agents: 2
+num_agents: 3
 
 habitat_sensor:
   camera_min_depth: 0.0
@@ -31,7 +31,7 @@ habitat_sensor:
 
 habitat:
   simulator:
-    # Multi-agent: two agents with identical sensor configs
+    # Multi-agent: agents with identical sensor configs
     agents:
       agent_0:
         sim_sensors:
@@ -44,6 +44,15 @@ habitat:
             height: 480
             width: 640
       agent_1:
+        sim_sensors:
+          depth_sensor:
+            position: [0.0, 0.88, 0.0]
+            min_depth: 0.0
+            max_depth: 5.0
+            hfov: 79
+            height: 480
+            width: 640
+      agent_2:
         sim_sensors:
           depth_sensor:
             position: [0.0, 0.88, 0.0]
