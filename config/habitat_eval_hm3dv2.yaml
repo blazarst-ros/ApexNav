@@ -127,6 +127,11 @@ multiagent:
   episode_termination: cooperative
   inter_agent_avoidance: false
   agent_spawn_offset: 1.0
+  perception_agents_per_step: 1
+  # perception_agents_per_step:
+  # 1 = fastest, round-robin semantic updates
+  # 2 = middle ground
+  # 3 = old behavior, all agents run perception every step
 
 record_file_name: "record.txt"
 continue_file_name: "continue.txt"

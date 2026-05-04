@@ -79,7 +79,7 @@ from basic_utils.record_episode.read_record import read_record
 from basic_utils.record_episode.write_record import write_record
 from habitat2ros import habitat_publisher
 from llm.answer_reader.answer_reader import read_answer
-from params import HABITAT_STATE, ROS_STATE, ACTION, RESULT_TYPES
+from params import HABITAT_STATE, ROS_STATE, ACTION, RESULT_TYPES, FINAL_RESULT
 from vlm.Labels import MP3D_ID_TO_NAME
 from vlm.utils.get_itm_message import get_itm_message_cosine
 from vlm.utils.get_object_utils import get_object
@@ -150,8 +150,15 @@ def ros_state_callback(msg):
 
 
 def ros_final_state_callback(msg):
-    global final_state
-    final_state = msg.data
+    global final_state, mission_reached_object
+    if msg.data == FINAL_RESULT.REACH_OBJECT:
+        # Treat a planner goal claim as an episode-level stop request.
+        # Evaluation still checks Habitat distance at episode end, so a wrong
+        # goal claim can be classified as "false positive" like single-agent.
+        mission_reached_object = True
+        final_state = FINAL_RESULT.REACH_OBJECT
+    elif not mission_reached_object:
+        final_state = msg.data
 
 
 def ros_expl_result_callback(msg):
@@ -399,12 +406,16 @@ def _get_agent_distance_to_goal(env, agent_idx: int):
 def main(cfg: DictConfig) -> None:
     global msg_observations, global_action, ros_state, fusion_threshold
     global ros_pub, trigger_pub, obj_point_cloud_pub, confidence_threshold_pub
-    global final_state, expl_result
+    global final_state, expl_result, mission_reached_object
 
     multi_agent = _is_multi_agent(cfg)
     num_agents = cfg.get("num_agents", 1)
     agent_names = [f"agent_{i}" for i in range(num_agents)]
-    termination_policy = cfg.get("multiagent", {}).get("episode_termination", "cooperative")
+    multiagent_cfg = cfg.get("multiagent", {})
+    termination_policy = multiagent_cfg.get("episode_termination", "cooperative")
+    perception_agents_per_step = max(
+        1, int(multiagent_cfg.get("perception_agents_per_step", num_agents))
+    )
     _itm_pubs = {}
     _cld_pubs = {}
 
@@ -423,6 +434,7 @@ def main(cfg: DictConfig) -> None:
 
     final_state = 0
     expl_result = 0
+    mission_reached_object = False
     result_list = [0] * len(RESULT_TYPES)
 
     cfg = patch_config(cfg)
@@ -541,6 +553,9 @@ def main(cfg: DictConfig) -> None:
 
     for epi in range(number_of_episodes - num_total):
         publish_int32_array(progress_pub, [num_total, number_of_episodes])
+        final_state = 0
+        expl_result = 0
+        mission_reached_object = False
 
         if flag_once:
             while env_count:
@@ -670,10 +685,25 @@ def main(cfg: DictConfig) -> None:
         trigger_pub_timer.shutdown()
         rate = rospy.Rate(10)
         global_action = None
+        perception_cursor = 0
+
+        def _stop_all_agents_for_evaluation():
+            print("Goal claim received from one agent; stopping all agents for evaluation.")
+            for stop_agent_name in agent_names:
+                agent_states[stop_agent_name]["finished"] = True
+            agent_actions.clear()
 
         while not rospy.is_shutdown():
             # ── Termination check ──
             if multi_agent:
+                if mission_reached_object:
+                    _stop_all_agents_for_evaluation()
+                    break
+
+                for agent_idx, agent_name in enumerate(agent_names):
+                    if ros_all_states[agent_idx] == ROS_STATE.FINISH:
+                        agent_states[agent_name]["finished"] = True
+
                 if termination_policy == "cooperative":
                     any_finished = any(
                         agent_states[a]["finished"] or agent_states[a]["count_steps"] >= max_episode_steps
@@ -732,6 +762,9 @@ def main(cfg: DictConfig) -> None:
                             action_code = ACTION.STOP
                         agent_states[aname]["global_action"] = action_code
                     agent_actions.pop(agent_idx, None)
+                if mission_reached_object:
+                    _stop_all_agents_for_evaluation()
+                    break
             else:
                 if global_action is not None:
                     if agent_states[agent_names[0]]["count_steps"] == max_episode_steps - 1:
@@ -777,6 +810,10 @@ def main(cfg: DictConfig) -> None:
                 else:
                     single_action = action
 
+            if multi_agent and mission_reached_object:
+                _stop_all_agents_for_evaluation()
+                break
+
             if not any_agent_acting:
                 # Still publish odom so the C++ planner and RViz stay updated
                 for agent_name in agent_names:
@@ -802,8 +839,12 @@ def main(cfg: DictConfig) -> None:
                     k: v for k, v in action_dict.items()
                     if not agent_states[k]["finished"] and v is not None
                 }
+                acted_agent_names = set(active_actions.keys())
                 if active_actions:
                     observations = _multi_agent_step(env, active_actions, agent_names)
+                if mission_reached_object:
+                    _stop_all_agents_for_evaluation()
+                    break
                 # Update task measurements for the default agent (for spl, etc.)
                 # Build a flat observation dict from the per-agent split format
                 # and pick a non-stop action to avoid incorrectly setting is_stop_called.
@@ -846,7 +887,8 @@ def main(cfg: DictConfig) -> None:
 
                 for agent_name in agent_names:
                     ast = agent_states[agent_name]
-                    ast["count_steps"] += 1
+                    if agent_name in acted_agent_names:
+                        ast["count_steps"] += 1
                     agent_obs = observations.get(agent_name, {})
 
                     # Compute per-agent distance to goal via simulator
@@ -872,11 +914,38 @@ def main(cfg: DictConfig) -> None:
                         best_dist = dtg
                         best_agent = agent_name
 
+                    # Always publish the latest state so the C++ planner does
+                    # not plan from stale odometry when perception is throttled.
+                    agent_obs["camera_pitch"] = ast["camera_pitch"]
+                    ros_pubs[agent_name].habitat_publish_ros_topic(agent_obs)
+
+                perception_agent_names = []
+                perception_candidates = [
+                    name for name in agent_names
+                    if name in acted_agent_names and not agent_states[name]["finished"]
+                ]
+                if perception_candidates:
+                    budget = min(perception_agents_per_step, len(perception_candidates))
+                    while len(perception_agent_names) < budget:
+                        candidate = agent_names[perception_cursor % num_agents]
+                        perception_cursor += 1
+                        if (
+                            candidate in perception_candidates
+                            and candidate not in perception_agent_names
+                        ):
+                            perception_agent_names.append(candidate)
+
+                for agent_name in perception_agent_names:
+                    if mission_reached_object:
+                        break
+                    ast = agent_states[agent_name]
+                    agent_obs = observations.get(agent_name, {})
+
                     # ITM score
                     img_np = agent_obs.get("rgb", np.zeros((480, 640, 3), dtype=np.uint8))
                     cosine = get_itm_message_cosine(img_np, label, room)
                     itm_score_pub_name = f"/blip2/{agent_name}/cosine_score"
-                    if itm_score_pub_name not in globals().get("_itm_pubs", {}):
+                    if itm_score_pub_name not in _itm_pubs:
                         _itm_pubs[itm_score_pub_name] = rospy.Publisher(itm_score_pub_name, Float64, queue_size=10)
                     _itm_pubs[itm_score_pub_name].publish(Float64(cosine))
 

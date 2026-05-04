@@ -126,6 +126,7 @@ multiagent:
   episode_termination: cooperative
   inter_agent_avoidance: false
   agent_spawn_offset: 1.0
+  perception_agents_per_step: 1
 
 record_file_name: "record.txt"
 continue_file_name: "continue.txt"

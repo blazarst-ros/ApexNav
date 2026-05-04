@@ -129,7 +129,19 @@ void ExplorationFSM::FSMCallback(const ros::TimerEvent& e)
           std_msgs::Int32 expl_state_msg;
           expl_state_msg.data = ad.final_result_;
           expl_state_pub_.publish(expl_state_msg);
-          if (ad.final_result_ == FINAL_RESULT::EXPLORE ||
+          if (ad.final_result_ == FINAL_RESULT::REACH_OBJECT) {
+            ROS_WARN("Agent %d reached an object candidate; broadcasting STOP to all agents.",
+                agent_idx);
+            for (int stop_idx = 0; stop_idx < NUM_AGENTS; ++stop_idx) {
+              std_msgs::Int32 action_msg;
+              action_msg.data = ACTION::STOP;
+              action_pub_[stop_idx].publish(action_msg);
+              fd_->agent_[stop_idx].have_finished_ = true;
+              transitState(stop_idx, ROS_STATE::FINISH, "Reach Object");
+              state_all_msg.data[stop_idx] = state_[stop_idx];
+            }
+          }
+          else if (ad.final_result_ == FINAL_RESULT::EXPLORE ||
               ad.final_result_ == FINAL_RESULT::SEARCH_OBJECT)
             transitState(agent_idx, ROS_STATE::PUB_ACTION, "FSM");
           else
