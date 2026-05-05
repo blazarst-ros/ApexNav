@@ -554,6 +554,35 @@ def main(cfg: DictConfig) -> None:
     cld_with_score_pub = rospy.Publisher(
         "/detector/clouds_with_scores", MultipleMasksWithConfidence, queue_size=10
     )
+
+    def _finish_episode_handshake():
+        """Reliably notify the planner FSM to reset before the next episode.
+
+        A single non-latched EPISODE_FINISH can be missed while the C++ FSM is
+        busy in WAIT_ACTION_FINISH, but flooding this topic queues repeated
+        C++ map resets. Send one request, wait for state feedback, then retry
+        slowly only if the FSM never acknowledges the reset.
+        """
+        global global_action
+        if multi_agent:
+            agent_actions.clear()
+        else:
+            global_action = None
+
+        for attempt in range(3):
+            publish_int32(state_pub, HABITAT_STATE.EPISODE_FINISH)
+            wait_begin = rospy.Time.now()
+            while (rospy.Time.now() - wait_begin).to_sec() < 3.0:
+                if all(
+                    ros_all_states[i] in (ROS_STATE.INIT, ROS_STATE.WAIT_TRIGGER)
+                    for i in range(num_agents)
+                ):
+                    return
+                rospy.sleep(0.05)
+            print(
+                "Waiting for planner reset acknowledgement after "
+                f"EPISODE_FINISH attempt {attempt + 1}/3..."
+            )
     progress_pub = rospy.Publisher("/habitat/progress", Int32MultiArray, queue_size=10)
     record_pub = rospy.Publisher("/habitat/record", Float32MultiArray, queue_size=10)
 
@@ -625,7 +654,7 @@ def main(cfg: DictConfig) -> None:
         timer_obs = {name: dict(agent_obs_dict[name]) for name in agent_names}
 
         def _publish_observations_timer(event):
-            """Timer callback: publish observations + trigger (mirrors main branch's publish_observations)."""
+            """Publish observations while waiting for the planner to become trigger-ready."""
             if multi_agent:
                 for agent_name in agent_names:
                     obs = timer_obs.get(agent_name, {})
@@ -633,9 +662,9 @@ def main(cfg: DictConfig) -> None:
             else:
                 ros_pub.habitat_publish_ros_topic(timer_obs.get(agent_names[0], {}))
             publish_float64(confidence_threshold_pub, fusion_threshold)
-            trigger_pub.publish(PoseStamped())
 
-        # Trigger publishing timer
+        # Readiness timer: keep odom/depth/confidence fresh, but do not trigger
+        # planning until every agent has reached WAIT_TRIGGER below.
         trigger_pub_timer = rospy.Timer(
             rospy.Duration(0.25),
             _publish_observations_timer,
@@ -651,6 +680,22 @@ def main(cfg: DictConfig) -> None:
             all_init = all(ros_all_states[i] == ROS_STATE.INIT for i in range(num_agents))
             any_init = any(ros_all_states[i] == ROS_STATE.INIT for i in range(num_agents))
             all_wait_trigger = all(ros_all_states[i] == ROS_STATE.WAIT_TRIGGER for i in range(num_agents))
+            any_wait_action_finish = any(
+                ros_all_states[i] == ROS_STATE.WAIT_ACTION_FINISH
+                for i in range(num_agents)
+            )
+
+            if any_wait_action_finish:
+                states_str = ", ".join(
+                    f"{agent_names[i]}: state={ros_all_states[i]}" for i in range(num_agents)
+                )
+                print(
+                    "Planner entered WAIT_ACTION_FINISH before Python trigger; "
+                    f"resetting planner episode state. [{states_str}]"
+                )
+                _finish_episode_handshake()
+                rate.sleep()
+                continue
 
             if all_init:
                 print("Waiting for ROS to get odometry for all agents...")
@@ -1090,7 +1135,7 @@ def main(cfg: DictConfig) -> None:
         # (causes TF out-of-order warnings and agent stuck issues)
 
         # ── Episode-end processing ──
-        publish_int32(state_pub, HABITAT_STATE.EPISODE_FINISH)
+        _finish_episode_handshake()
 
         # Aggregate metrics
         if multi_agent:
