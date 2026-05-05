@@ -416,6 +416,12 @@ def main(cfg: DictConfig) -> None:
     perception_agents_per_step = max(
         1, int(multiagent_cfg.get("perception_agents_per_step", num_agents))
     )
+    # Per-agent viewpoint-change interval for VLM requests. This is not a
+    # global scheduler-step interval; only actions by the same agent that
+    # change its camera viewpoint advance the counter.
+    perception_interval_steps = max(
+        1, int(multiagent_cfg.get("perception_interval_steps", 1))
+    )
     _itm_pubs = {}
     _cld_pubs = {}
 
@@ -578,6 +584,7 @@ def main(cfg: DictConfig) -> None:
                 "distance_to_goal_reward": 0.0,
                 "vis_frames": [],
                 "finished": False,
+                "viewpoint_steps_since_perception": perception_interval_steps,
             }
 
         # ── LLM answer (shared across agents) ──
@@ -758,7 +765,10 @@ def main(cfg: DictConfig) -> None:
                         continue
                     if agent_idx < num_agents:
                         aname = f"agent_{agent_idx}"
-                        if agent_states[aname]["count_steps"] == max_episode_steps - 1:
+                        if (
+                            action_code == ACTION.MOVE_FORWARD
+                            and agent_states[aname]["count_steps"] >= max_episode_steps - 1
+                        ):
                             action_code = ACTION.STOP
                         agent_states[aname]["global_action"] = action_code
                     agent_actions.pop(agent_idx, None)
@@ -767,7 +777,10 @@ def main(cfg: DictConfig) -> None:
                     break
             else:
                 if global_action is not None:
-                    if agent_states[agent_names[0]]["count_steps"] == max_episode_steps - 1:
+                    if (
+                        global_action == ACTION.MOVE_FORWARD
+                        and agent_states[agent_names[0]]["count_steps"] >= max_episode_steps - 1
+                    ):
                         global_action = ACTION.STOP
                     agent_states[agent_names[0]]["global_action"] = global_action
                     global_action = None
@@ -776,6 +789,10 @@ def main(cfg: DictConfig) -> None:
             action_dict = {} if multi_agent else None
             single_action = None
             any_agent_acting = False
+            movement_action_agents = set()
+            viewpoint_action_agents = set()
+            single_action_is_movement = False
+            single_action_changes_viewpoint = False
 
             for agent_name in agent_names:
                 ast = agent_states[agent_name]
@@ -791,16 +808,33 @@ def main(cfg: DictConfig) -> None:
 
                 if g_action == ACTION.MOVE_FORWARD:
                     action = HabitatSimActions.move_forward
+                    movement_action_agents.add(agent_name)
+                    viewpoint_action_agents.add(agent_name)
+                    if not multi_agent:
+                        single_action_is_movement = True
+                        single_action_changes_viewpoint = True
                 elif g_action == ACTION.TURN_LEFT:
                     action = HabitatSimActions.turn_left
+                    viewpoint_action_agents.add(agent_name)
+                    if not multi_agent:
+                        single_action_changes_viewpoint = True
                 elif g_action == ACTION.TURN_RIGHT:
                     action = HabitatSimActions.turn_right
+                    viewpoint_action_agents.add(agent_name)
+                    if not multi_agent:
+                        single_action_changes_viewpoint = True
                 elif g_action == ACTION.TURN_DOWN:
                     action = HabitatSimActions.look_down
                     ast["camera_pitch"] -= np.pi / 6.0
+                    viewpoint_action_agents.add(agent_name)
+                    if not multi_agent:
+                        single_action_changes_viewpoint = True
                 elif g_action == ACTION.TURN_UP:
                     action = HabitatSimActions.look_up
                     ast["camera_pitch"] += np.pi / 6.0
+                    viewpoint_action_agents.add(agent_name)
+                    if not multi_agent:
+                        single_action_changes_viewpoint = True
                 elif g_action == ACTION.STOP:
                     action = HabitatSimActions.stop
                     ast["finished"] = True
@@ -839,7 +873,6 @@ def main(cfg: DictConfig) -> None:
                     k: v for k, v in action_dict.items()
                     if not agent_states[k]["finished"] and v is not None
                 }
-                acted_agent_names = set(active_actions.keys())
                 if active_actions:
                     observations = _multi_agent_step(env, active_actions, agent_names)
                 if mission_reached_object:
@@ -887,8 +920,10 @@ def main(cfg: DictConfig) -> None:
 
                 for agent_name in agent_names:
                     ast = agent_states[agent_name]
-                    if agent_name in acted_agent_names:
+                    if agent_name in movement_action_agents:
                         ast["count_steps"] += 1
+                    if agent_name in viewpoint_action_agents:
+                        ast["viewpoint_steps_since_perception"] += 1
                     agent_obs = observations.get(agent_name, {})
 
                     # Compute per-agent distance to goal via simulator
@@ -922,7 +957,12 @@ def main(cfg: DictConfig) -> None:
                 perception_agent_names = []
                 perception_candidates = [
                     name for name in agent_names
-                    if name in acted_agent_names and not agent_states[name]["finished"]
+                    if (
+                        name in viewpoint_action_agents
+                        and not agent_states[name]["finished"]
+                        and agent_states[name]["viewpoint_steps_since_perception"]
+                        >= perception_interval_steps
+                    )
                 ]
                 if perception_candidates:
                     budget = min(perception_agents_per_step, len(perception_candidates))
@@ -940,6 +980,7 @@ def main(cfg: DictConfig) -> None:
                         break
                     ast = agent_states[agent_name]
                     agent_obs = observations.get(agent_name, {})
+                    ast["viewpoint_steps_since_perception"] = 0
 
                     # ITM score
                     img_np = agent_obs.get("rgb", np.zeros((480, 640, 3), dtype=np.uint8))
@@ -989,29 +1030,42 @@ def main(cfg: DictConfig) -> None:
             else:
                 # ── Single-agent processing ──
                 ast = agent_states[agent_names[0]]
-                ast["count_steps"] += 1
+                if single_action_is_movement:
+                    ast["count_steps"] += 1
+                if single_action_changes_viewpoint:
+                    ast["viewpoint_steps_since_perception"] += 1
                 info = env.get_metrics()
-
-                cosine = get_itm_message_cosine(observations["rgb"], label, room)
-                print(f"Target related room: {room}")
-                print(f"ITM cosine similarity: {cosine:.3f}")
-                publish_float64(itm_score_pub, cosine)
-
-                observations["rgb"], score_list, object_masks_list, label_list = get_object(
-                    label, observations["rgb"], detector_cfg, llm_answer
-                )
 
                 observations["camera_pitch"] = ast["camera_pitch"]
                 timer_obs[agent_names[0]] = dict(observations)
                 ros_pub.habitat_publish_ros_topic(observations)
 
-                cld_msg = MultipleMasksWithConfidence()
-                cld_msg.point_clouds = get_object_point_cloud(
-                    cfg, observations, object_masks_list
+                should_run_perception = (
+                    single_action_changes_viewpoint
+                    and ast["viewpoint_steps_since_perception"] >= perception_interval_steps
                 )
-                cld_msg.confidence_scores = score_list
-                cld_msg.label_indices = label_list
-                cld_with_score_pub.publish(cld_msg)
+                if should_run_perception:
+                    ast["viewpoint_steps_since_perception"] = 0
+                    cosine = get_itm_message_cosine(observations["rgb"], label, room)
+                    print(f"Target related room: {room}")
+                    print(f"ITM cosine similarity: {cosine:.3f}")
+                    publish_float64(itm_score_pub, cosine)
+
+                    observations["rgb"], score_list, object_masks_list, label_list = get_object(
+                        label, observations["rgb"], detector_cfg, llm_answer
+                    )
+
+                    observations["camera_pitch"] = ast["camera_pitch"]
+                    timer_obs[agent_names[0]] = dict(observations)
+                    ros_pub.habitat_publish_ros_topic(observations)
+
+                    cld_msg = MultipleMasksWithConfidence()
+                    cld_msg.point_clouds = get_object_point_cloud(
+                        cfg, observations, object_masks_list
+                    )
+                    cld_msg.confidence_scores = score_list
+                    cld_msg.label_indices = label_list
+                    cld_with_score_pub.publish(cld_msg)
 
                 ast["distance_to_goal"] = info["distance_to_goal"]
                 if ast["distance_to_goal"] <= success_distance and ast["pass_object"] == 0:
