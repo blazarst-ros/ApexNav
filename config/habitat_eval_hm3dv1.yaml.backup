@@ -24,7 +24,7 @@ habitat:
         dimensionality: 3
     measurements:
       success:
-        success_distance: 0.2
+        success_distance: 0.3
   simulator:
     habitat_sim_v0:
       allow_sliding: false

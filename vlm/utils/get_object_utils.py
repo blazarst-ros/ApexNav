@@ -1,5 +1,6 @@
 import cv2
 import numpy as np
+import socket
 from vlm.coco_classes import COCO_CLASSES
 from vlm.detector.yolov7 import YOLOv7Client
 from vlm.segmentor.sam import MobileSAMClient
@@ -7,10 +8,35 @@ from vlm.detector.grounding_dino import GroundingDINOClient
 from vlm.itm.blip2itm import BLIP2ITMClient
 from vlm.utils.get_itm_message import get_itm_message
 
-yolov7_detector = YOLOv7Client(port=12184)
+YOLOV7_PORT = 12184
+GROUNDING_DINO_PORT = 12181
+
+yolov7_detector = YOLOv7Client(port=YOLOV7_PORT)
 blip2_itm = BLIP2ITMClient(port=12182)
 sam_segmentor = MobileSAMClient(port=12183)
-dino_detector = GroundingDINOClient(port=12181)
+dino_detector = GroundingDINOClient(port=GROUNDING_DINO_PORT)
+
+
+def _is_port_open(host, port, timeout=0.2):
+    try:
+        with socket.create_connection((host, port), timeout=timeout):
+            return True
+    except OSError:
+        return False
+
+
+def _is_yolov7_available():
+    return _is_port_open("localhost", YOLOV7_PORT)
+
+
+def _predict_with_grounding_dino(labels, img, cfg):
+    caption = ' '.join(f'{item}.  ' for item in labels)
+    return dino_detector.predict(
+        img,
+        caption=caption,
+        box_threshold=cfg.groundingDINO.confidence_threshold_dino,
+        text_threshold=cfg.groundingDINO.text_threshold,
+    )
 
 
 def get_segmentation(segmented_img, idx, detections, img, label, score, color):
@@ -86,6 +112,15 @@ def get_object(right_label, img, cfg, similar_answer):
             if label in COCO_CLASSES:
                 coco_label.append(label)
 
+    yolo_available = _is_yolov7_available()
+    if coco_label and not yolo_available:
+        print(
+            f"YOLOv7 server is not running on port {YOLOV7_PORT}; "
+            "using GroundingDINO for COCO labels."
+        )
+        dino_label = list(dict.fromkeys(dino_label + coco_label))
+        coco_label = []
+
     if coco_label:
         detections = yolov7_detector.predict(img, agnostic_nms=cfg.yolo.agnostic_nms, 
                                             conf_thres=cfg.yolo.confidence_threshold_yolo, iou_thres=cfg.yolo.iou_threshold_yolo)
@@ -108,9 +143,7 @@ def get_object(right_label, img, cfg, similar_answer):
                 label_list.append(list(all_answer).index(label_detected) - len(right_label_list)+1)
 
     if dino_label:
-        caption = ' '.join(f'{item}.  ' for item in dino_label)
-        detections = dino_detector.predict(img, caption=caption, 
-                                        box_threshold=cfg.groundingDINO.confidence_threshold_dino, text_threshold=cfg.groundingDINO.text_threshold)
+        detections = _predict_with_grounding_dino(dino_label, img, cfg)
         for idx in range(len(detections.logits)):
             label_detected = detections.phrases[idx]
             score = detections.logits[idx].item()
@@ -139,43 +172,48 @@ def get_object_with_itm(label, img, cfg):
     itm_score_list = []
     segmented_img = img.copy()
     if label in COCO_CLASSES:
-        detections = yolov7_detector.predict(img, agnostic_nms=cfg.yolo.agnostic_nms,
-                                             conf_thres=cfg.yolo.confidence_threshold_yolo, iou_thres=cfg.yolo.iou_threshold_yolo)
-        for idx in range(len(detections.logits)):
-            label_detected = detections.phrases[idx]
-            score = detections.logits[idx].item()
-            if detections.phrases[idx] == label:
-                segmented_img, object_mask = get_segmentation(
-                    segmented_img, idx, detections, img, label_detected, score, color=(255, 0, 0)
-                )
-                img_detected = crop_and_expand_box(img, detections, idx)
-                # cv2.imshow(f"img_detected{idx}", img_detected)
-                cosine, itm_score = get_itm_message(img_detected, label)
-                print(f"cosine: {cosine:.3f}, itm_score: {itm_score:.3f}")
-                score_list.append(score)
-                object_masks_list.append(object_mask)
-                cosine_list.append(cosine)
-                itm_score_list.append(itm_score)
+        if _is_yolov7_available():
+            detections = yolov7_detector.predict(img, agnostic_nms=cfg.yolo.agnostic_nms,
+                                                 conf_thres=cfg.yolo.confidence_threshold_yolo, iou_thres=cfg.yolo.iou_threshold_yolo)
+            for idx in range(len(detections.logits)):
+                label_detected = detections.phrases[idx]
+                score = detections.logits[idx].item()
+                if detections.phrases[idx] == label:
+                    segmented_img, object_mask = get_segmentation(
+                        segmented_img, idx, detections, img, label_detected, score, color=(255, 0, 0)
+                    )
+                    img_detected = crop_and_expand_box(img, detections, idx)
+                    # cv2.imshow(f"img_detected{idx}", img_detected)
+                    cosine, itm_score = get_itm_message(img_detected, label)
+                    print(f"cosine: {cosine:.3f}, itm_score: {itm_score:.3f}")
+                    score_list.append(score)
+                    object_masks_list.append(object_mask)
+                    cosine_list.append(cosine)
+                    itm_score_list.append(itm_score)
+            return segmented_img, score_list, object_masks_list, cosine_list, itm_score_list
 
-    else:
-        detections = dino_detector.predict(img, caption=label, 
-                                           box_threshold=cfg.groundingDINO.confidence_threshold_dino, text_threshold=cfg.groundingDINO.text_threshold)
-        for idx in range(len(detections.logits)):
-            label_detected = detections.phrases[idx]
-            score = detections.logits[idx].item()
-            if score > cfg.groundingDINO.confidence_threshold_dino:
-                segmented_img, object_mask = get_segmentation(
-                    segmented_img, idx, detections, img, label_detected, score, color=(255, 0, 0)
-                )
-                score_list.append(score)
-                object_masks_list.append(object_mask)
-                img_detected = crop_and_expand_box(img, detections, idx)
-                # cv2.imshow(f"img_detected{idx}", img_detected)
-                cosine, itm_score = get_itm_message(img_detected, label)
-                print(f"cosine: {cosine}, itm_score: {itm_score}")
-                cosine_list.append(cosine)
-                itm_score_list.append(itm_score)
-    
+        print(
+            f"YOLOv7 server is not running on port {YOLOV7_PORT}; "
+            "using GroundingDINO for COCO label."
+        )
+
+    detections = _predict_with_grounding_dino([label], img, cfg)
+    for idx in range(len(detections.logits)):
+        label_detected = detections.phrases[idx]
+        score = detections.logits[idx].item()
+        if score > cfg.groundingDINO.confidence_threshold_dino:
+            segmented_img, object_mask = get_segmentation(
+                segmented_img, idx, detections, img, label_detected, score, color=(255, 0, 0)
+            )
+            score_list.append(score)
+            object_masks_list.append(object_mask)
+            img_detected = crop_and_expand_box(img, detections, idx)
+            # cv2.imshow(f"img_detected{idx}", img_detected)
+            cosine, itm_score = get_itm_message(img_detected, label)
+            print(f"cosine: {cosine}, itm_score: {itm_score}")
+            cosine_list.append(cosine)
+            itm_score_list.append(itm_score)
+
     return segmented_img, score_list, object_masks_list, cosine_list, itm_score_list
 
 
@@ -197,4 +235,3 @@ def crop_and_expand_box(img, detections, idx, expand_pixels=0.4):
     img_detected = img[y_min:y_max+1, x_min:x_max+1]
 
     return img_detected
-

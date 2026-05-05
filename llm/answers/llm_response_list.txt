@@ -87,3 +87,4 @@ Room where the label may appear: A counter is most likely to appear in a kitchen
 
 Answer: [table, desk, shelf, 0.45, kitchen]
 cabinet: 
+couch: 
