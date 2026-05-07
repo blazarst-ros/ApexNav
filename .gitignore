@@ -30,3 +30,6 @@ habitat-lab
 *.par
 bag
 wandb
+
+NoteBook_ICUS/
+Notebook/
