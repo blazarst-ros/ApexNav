@@ -1,3 +1,3 @@
 
-cabinet: ['stop']
-couch: ['stop']
+couch: ['bench', 'chair', 'sofa bed', 0.55, 'living room']
+# LLM_FEEDBACK_JSON: {"confusion_labels": ["bench", "chair", "sofa bed"], "fusion_score": 0.55, "label": "couch", "legacy_answer": ["bench", "chair", "sofa bed", 0.55, "living room"], "room": "living room", "schema_version": 1, "semantic_verification_prior": {"couch": {"category": "couch", "mu_v": 0.6, "rationale": "Couches are low-profile seating; a lower camera height captures the cushion and backrest shape well.", "sigma_v": 0.2, "unit": "meter"}}}

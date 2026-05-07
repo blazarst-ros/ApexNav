@@ -1,7 +1,4 @@
-from llm.client.deepseek_answer import deepseek_respond
 from llm.utils.only_answer import only_answer
-from llm.client.ollama_answer import ollama_respond
-import os
 
 
 def get_answer(client, prompt=None):
@@ -23,10 +20,14 @@ def get_answer(client, prompt=None):
     try:
         # 2. 逻辑分支对齐
         if client.llm_client == 'deepseek':
+            from llm.client.deepseek_answer import deepseek_respond
+
             print("🚀 [LLM] 正在向 DeepSeek 官网发起实时请求...")
             respond = deepseek_respond(prompt=prompt)
             
         elif client.llm_client == 'ollama':
+            from llm.client.ollama_answer import ollama_respond
+
             print("🏠 [LLM] 正在调用本地 Ollama...")
             respond = ollama_respond(model=client.ollama, prompt=prompt)
             
@@ -52,9 +53,10 @@ def get_answer(client, prompt=None):
 
     # 5. 最终安全性检查
     if not similar_answer:
-        similar_answer = ["stop"]
+        print("⚠️ [LLM 解析失败] 未提取到有效 Answer 列表，将交由 answer_reader 处理 fallback。")
+        return [], respond
     
     # 打印结果反馈
-    print(f"✅ [LLM 回复成功] 动作解析为: {similar_answer}")
+    print(f"✅ [LLM 回复成功] 相似物体解析为: {similar_answer}")
 
     return similar_answer, respond

@@ -88,3 +88,47 @@ Room where the label may appear: A counter is most likely to appear in a kitchen
 Answer: [table, desk, shelf, 0.45, kitchen]
 cabinet: 
 couch: 
+couch: Thought: In the COCO classes, confidence threshold for couch: A couch is a large, soft, rectangular piece of furniture with backrest and armrests. It is a significant piece of furniture, similar to a bed but generally smaller. The confidence threshold should be high, around 0.55, which is in [0.25, 0.65].
+
+Misdetection possibilities:
+- bench: A bench can have a similar rectangular seating shape and could be confused with a couch, especially if it has a backrest.
+- chair: A large, padded armchair might resemble a single-seater couch.
+- sofa: The terms "couch" and "sofa" are often used interchangeably in COCO datasets, but "sofa" is the standard COCO class for this object, so the misdetection is less about label confusion and more about distinguishing from similar seating.
+- ottoman: A large, padded ottoman could be misdetected as a couch if it has a backrest or is seen from an angle.
+
+Room where the label may appear: A couch is most likely to appear in a living room, den, or family room. It can appear in bedrooms or waiting rooms, but the probability is highest in a living room.
+
+Answer: [bench, chair, ottoman, 0.55, living room]
+
+Semantic Verification Prior:
+[
+  {category: couch, mu_v: 0.85, sigma_v: 0.25, unit: meter, rationale: Couches are low-profile seating; a lower camera height helps verify the seat and backrest shape.},
+  {category: bench, mu_v: 0.85, sigma_v: 0.25, unit: meter, rationale: Benches are also low seating; a similar camera height verifies the seating surface and legs.},
+  {category: chair, mu_v: 0.85, sigma_v: 0.25, unit: meter, rationale: Chairs are small seating objects; a lower camera verifies seat shape and backrest geometry.},
+  {category: ottoman, mu_v: 0.75, sigma_v: 0.20, unit: meter, rationale: Ottomans are low padded objects; a lower camera height verifies the top surface and edges.}
+]
+couch: Answer: [bench, chair, sofa, 0.45, living_room]
+
+Semantic Verification Prior:
+[
+  {category: couch, mu_v: 0.80, sigma_v: 0.35, unit: meter, rationale: Couches are low-lying seating furniture; a camera height near seat level verifies cushion and backrest shape.},
+  {category: bench, mu_v: 0.75, sigma_v: 0.30, unit: meter, rationale: Benches are similar low seating objects and best viewed from sitting height.},
+  {category: chair, mu_v: 0.80, sigma_v: 0.30, unit: meter, rationale: Chairs have similar seat height to couches and are verified from a moderate low viewpoint.},
+  {category: sofa, mu_v: 0.80, sigma_v: 0.35, unit: meter, rationale: Sofa is synonymous with couch, requiring identical verification parameters.}
+]
+couch: Answer: [bench, sofa, bed, chair, 0.50, living_room]
+
+Semantic Verification Prior:
+[
+  {category: couch, mu_v: 0.60, sigma_v: 0.25, unit: meter, rationale: Couches are low-lying seating furniture, best viewed from a downward angle to capture cushion layout and depth.},
+  {category: bench, mu_v: 0.65, sigma_v: 0.25, unit: meter, rationale: Benches are similar seated objects at ground level, requiring a similar low viewing height.},
+  {category: sofa, mu_v: 0.60, sigma_v: 0.25, unit: meter, rationale: Sofas are a direct synonym and share the same low structure verification needs.},
+  {category: bed, mu_v: 0.70, sigma_v: 0.30, unit: meter, rationale: Beds are low flat surfaces but slightly taller than couches; a low view distinguishes from couch.},
+  {category: chair, mu_v: 0.70, sigma_v: 0.25, unit: meter, rationale: Chairs are short objects often near couches, verified best from a similar low height.}
+]
+couch: Answer: [bench, chair, sofa bed, 0.55, living room]
+
+Semantic Verification Prior:
+[
+  {category: couch, mu_v: 0.60, sigma_v: 0.20, unit: meter, rationale: Couches are low-profile seating; a lower camera height captures the cushion and backrest shape well.}
+]

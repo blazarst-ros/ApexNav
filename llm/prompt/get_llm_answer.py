@@ -13,6 +13,23 @@ The labels should be in COCO classes, with at least 3 and at most 5 labels.
 (3) For the room, guess where the object is most likely to appear, with a significantly higher probability than in other rooms. If the probabilities are similar 
 
 across rooms, return "everywhere."
+
+(4) For semantic verification, provide an optional view-conditioned semantic verification prior after the original Answer line. For the target label only,
+
+estimate a category-specific recommended verification camera height mu_v and height tolerance sigma_v in meters. These values are semantic
+
+common-sense priors for verification viewpoint preference, not strict physical optima. Keep them positive and plausible for indoor mobile robots.
+
+Important output compatibility rule: the original Answer line must keep exactly this legacy structure:
+
+Answer: [misdetection_label_1, misdetection_label_2, ..., confidence_threshold, room]
+
+Put the semantic prior in a separate block after Answer so legacy parsers can still read the Answer list unchanged:
+
+Semantic Verification Prior:
+[
+  {category: target_label, mu_v: recommended_camera_height_in_meters, sigma_v: height_tolerance_in_meters, unit: meter, rationale: short_reason}
+]
 """
 
 USER1 = "cake"
@@ -34,6 +51,11 @@ pie: A pie can be misdetected as a cake due to its circular shape and pastry-lik
 Room where the label may appear: A cake can be in a kitchen or a living room.The number of rooms is more than 1, so a cake can be "everywhere".
 
 Answer: [donut, pizza, sandwich, pie, 0.30, everywhere]
+
+Semantic Verification Prior:
+[
+  {category: cake, mu_v: 0.95, sigma_v: 0.25, unit: meter, rationale: Cakes are usually on tables or counters, so a mid-height camera verifies top surface and shape details.}
+]
 """
 
 USER2 = "dining table"
@@ -57,4 +79,9 @@ Room where the label may appear: A cabinet is most likely to appear in a kitchen
 It could also be found in a living room, depending on the layout of the space.
 
 Answer: [bookshelf, dresser, closet, 0.50, kitchen]
+
+Semantic Verification Prior:
+[
+  {category: dining table, mu_v: 1.10, sigma_v: 0.30, unit: meter, rationale: Dining tables are large horizontal surfaces, so a slightly elevated camera helps verify tabletop extent and legs.}
+]
 """
