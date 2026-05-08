@@ -25,6 +25,7 @@ sys.path.append(parent_dir)
 from vlm.utils.get_object_utils import get_object
 from vlm.utils.get_itm_message import get_itm_message_cosine
 from llm.answer_reader.answer_reader import read_answer
+from llm.answer_reader.semantic_prior_ros import compute_mask_scales, publish_semantic_priors_to_ros
 from basic_utils.object_point_cloud_utils.object_point_cloud import (
     get_object_point_cloud,
 )
@@ -133,6 +134,7 @@ class AgentPerceptionPipeline:
             cld_with_score_msg.point_clouds = []
             cld_with_score_msg.confidence_scores = []
             cld_with_score_msg.label_indices = []
+            cld_with_score_msg.mask_scales = []
             rospy.loginfo("detect: [%s] label: %s", self.agent_name, self.label)
 
             if self.label is None:
@@ -157,6 +159,7 @@ class AgentPerceptionPipeline:
             cld_with_score_msg.point_clouds = obj_point_cloud_list
             cld_with_score_msg.confidence_scores = score_list
             cld_with_score_msg.label_indices = label_list
+            cld_with_score_msg.mask_scales = compute_mask_scales(object_masks_list)
 
             self.cld_with_score_pub_.publish(cld_with_score_msg)
         except Exception as e:
@@ -202,6 +205,9 @@ class AgentPerceptionPipeline:
             try:
                 self.shared.llm_answer, self.shared.room, self.shared.fusion_score = read_answer(
                     self.llm_answer_path, self.llm_response_path, self.shared.label, self.llm_client_cfg
+                )
+                publish_semantic_priors_to_ros(
+                    self.llm_answer_path, self.shared.label, self.shared.llm_answer
                 )
             except Exception:
                 self.shared.llm_answer = []

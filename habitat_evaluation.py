@@ -79,6 +79,7 @@ from basic_utils.record_episode.read_record import read_record
 from basic_utils.record_episode.write_record import write_record
 from habitat2ros import habitat_publisher
 from llm.answer_reader.answer_reader import read_answer
+from llm.answer_reader.semantic_prior_ros import compute_mask_scales, publish_semantic_priors_to_ros
 from params import HABITAT_STATE, ROS_STATE, ACTION, RESULT_TYPES, FINAL_RESULT
 from vlm.Labels import MP3D_ID_TO_NAME
 from vlm.utils.get_itm_message import get_itm_message_cosine
@@ -625,6 +626,7 @@ def main(cfg: DictConfig) -> None:
         llm_answer, room, fusion_threshold = read_answer(
             llm_answer_path, llm_response_path, label, llm_client
         )
+        publish_semantic_priors_to_ros(llm_answer_path, label, llm_answer)
 
         # ── Episode init ──
         observations = env.reset()
@@ -1051,6 +1053,7 @@ def main(cfg: DictConfig) -> None:
                     cld_msg.point_clouds = obj_point_cloud_list
                     cld_msg.confidence_scores = score_list
                     cld_msg.label_indices = label_list
+                    cld_msg.mask_scales = compute_mask_scales(object_masks_list)
                     cld_pub_name = f"/detector/{agent_name}/clouds_with_scores"
                     if cld_pub_name not in _cld_pubs:
                         _cld_pubs[cld_pub_name] = rospy.Publisher(
@@ -1110,6 +1113,7 @@ def main(cfg: DictConfig) -> None:
                     )
                     cld_msg.confidence_scores = score_list
                     cld_msg.label_indices = label_list
+                    cld_msg.mask_scales = compute_mask_scales(object_masks_list)
                     cld_with_score_pub.publish(cld_msg)
 
                 ast["distance_to_goal"] = info["distance_to_goal"]

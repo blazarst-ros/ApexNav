@@ -14,9 +14,9 @@ The labels should be in COCO classes, with at least 3 and at most 5 labels.
 
 across rooms, return "everywhere."
 
-(4) For semantic verification, provide an optional view-conditioned semantic verification prior after the original Answer line. For the target label only,
+(4) For semantic verification, provide an optional view-conditioned semantic verification prior after the original Answer line. For the target label and each
 
-estimate a category-specific recommended verification camera height mu_v and height tolerance sigma_v in meters. These values are semantic
+misdetection label, estimate a category-specific recommended verification camera height mu_v and height tolerance sigma_v in meters. These values are semantic
 
 common-sense priors for verification viewpoint preference, not strict physical optima. Keep them positive and plausible for indoor mobile robots.
 
@@ -28,7 +28,7 @@ Put the semantic prior in a separate block after Answer so legacy parsers can st
 
 Semantic Verification Prior:
 [
-  {category: target_label, mu_v: recommended_camera_height_in_meters, sigma_v: height_tolerance_in_meters, unit: meter, rationale: short_reason}
+  {category: label, mu_v: recommended_camera_height_in_meters, sigma_v: height_tolerance_in_meters, unit: meter, rationale: short_reason}
 ]
 """
 
@@ -54,7 +54,11 @@ Answer: [donut, pizza, sandwich, pie, 0.30, everywhere]
 
 Semantic Verification Prior:
 [
-  {category: cake, mu_v: 0.95, sigma_v: 0.25, unit: meter, rationale: Cakes are usually on tables or counters, so a mid-height camera verifies top surface and shape details.}
+  {category: cake, mu_v: 0.95, sigma_v: 0.25, unit: meter, rationale: Cakes are usually on tables or counters, so a mid-height camera verifies top surface and shape details.},
+  {category: donut, mu_v: 0.85, sigma_v: 0.25, unit: meter, rationale: Donuts are small tabletop objects and benefit from a close mid-height view.},
+  {category: pizza, mu_v: 0.95, sigma_v: 0.25, unit: meter, rationale: Pizza is commonly placed on tables or counters and is best verified from table height.},
+  {category: sandwich, mu_v: 0.85, sigma_v: 0.25, unit: meter, rationale: Sandwiches are small tabletop objects requiring a close view of layered shape.},
+  {category: pie, mu_v: 0.95, sigma_v: 0.25, unit: meter, rationale: Pies are usually on tables or counters and need a view that captures circular top appearance.}
 ]
 """
 
@@ -82,6 +86,9 @@ Answer: [bookshelf, dresser, closet, 0.50, kitchen]
 
 Semantic Verification Prior:
 [
-  {category: dining table, mu_v: 1.10, sigma_v: 0.30, unit: meter, rationale: Dining tables are large horizontal surfaces, so a slightly elevated camera helps verify tabletop extent and legs.}
+  {category: dining table, mu_v: 1.10, sigma_v: 0.30, unit: meter, rationale: Dining tables are large horizontal surfaces, so a slightly elevated camera helps verify tabletop extent and legs.},
+  {category: bookshelf, mu_v: 1.25, sigma_v: 0.40, unit: meter, rationale: Bookshelves are vertical storage furniture and benefit from a higher view covering shelves.},
+  {category: dresser, mu_v: 1.05, sigma_v: 0.35, unit: meter, rationale: Dressers are mid-height rectangular storage furniture, so a moderate camera height captures drawers and top surface.},
+  {category: closet, mu_v: 1.35, sigma_v: 0.45, unit: meter, rationale: Closets are tall vertical storage areas and often require a higher viewpoint to verify full structure.}
 ]
 """

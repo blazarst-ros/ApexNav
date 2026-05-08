@@ -51,6 +51,14 @@ struct DetectedObject {
   pcl::shared_ptr<pcl::PointCloud<pcl::PointXYZ>> cloud;  ///< 3D point cloud of detected object
   double score;                                           ///< Confidence score from detector (0-1)
   int label;                                              ///< Semantic class label from detection
+  double mask_scale = 1.0;                                ///< Source image mask area ratio
+  double distance = 0.0;                                  ///< Camera-to-object distance
+  double view_angle = 0.0;                                ///< Viewing angle term input
+  double observability = 1.0;                             ///< View-conditioned observability
+  double quality_evidence = 0.0;                          ///< Quality-aware semantic evidence
+  double camera_height = 1.0;                             ///< Camera height for this observation
+  double mu_v = 1.0;                                      ///< LLM prior recommended height
+  double sigma_v = 0.35;                                  ///< LLM prior height tolerance
 };
 
 struct Viewpoint2D {
@@ -83,16 +91,26 @@ struct ObjectCluster {
   vector<pcl::shared_ptr<pcl::PointCloud<pcl::PointXYZ>>> clouds_;  ///< Point clouds per semantic
                                                                     ///< class
   vector<double> confidence_scores_;    ///< Confidence scores per semantic class
+  vector<double> observability_scores_;  ///< View-conditioned observability per semantic class
+  vector<double> quality_evidence_scores_;  ///< Quality-aware semantic evidence per class
+  vector<double> last_distances_;        ///< Latest observation distance per class
+  vector<double> last_view_angles_;      ///< Latest observation angle per class
+  vector<double> last_mask_scales_;      ///< Latest mask scale per class
   vector<int> observation_nums_;        ///< Number of observations per class
   vector<int> observation_cloud_sums_;  ///< Total point count per class
 
   /**
    * @brief Constructor to initialize multi-class storage
-   * @param size Number of semantic classes to support (default: 5)
+   * @param size Number of semantic classes to support (default: target + up to 5 confusions)
    */
-  ObjectCluster(int size = 5)
+  ObjectCluster(int size = 6)
     : clouds_(size)
     , confidence_scores_(size, 0.0)
+    , observability_scores_(size, 0.0)
+    , quality_evidence_scores_(size, 0.0)
+    , last_distances_(size, 0.0)
+    , last_view_angles_(size, 0.0)
+    , last_mask_scales_(size, 0.0)
     , observation_nums_(size, 0)
     , observation_cloud_sums_(size, 0)
   {
@@ -133,6 +151,9 @@ public:
 private:
   double fusionConfidenceScore(
       int total_last, double c_last, int n_now, double c_now, int total_now, int sum);
+  void updateQualityAwareEvidence(
+      ObjectCluster& object, int label, const DetectedObject& detected_object);
+  void ensureObjectLabelCapacity(ObjectCluster& object, int label);
   void updateObjectBestLabel(int obj_idx);
   Eigen::Vector4d getColor(const double& h, double alpha);
 
@@ -173,10 +194,15 @@ private:
 
   // Algorithm parameters
   bool use_observation_;     ///< Whether to use observation-based confidence reduction
+  bool use_semantic_observability_;  ///< Whether Mission 2 score drives object selection
   bool is_vis_cloud_;        ///< Whether to publish visualization clouds
   int fusion_type_;          ///< Confidence fusion algorithm type (0=replace, 1=weighted, 2=max)
   int min_observation_num_;  ///< Minimum observations required for confidence
   double min_confidence_;    ///< Minimum confidence threshold for object acceptance
+  double min_semantic_evidence_;  ///< Minimum quality-aware evidence threshold
+  double lambda_d_;          ///< Distance decay coefficient
+  double r0_;                ///< Reference mask scale
+  double beta_;              ///< Observation saturation coefficient
   double resolution_;        ///< Grid resolution in meters
   double leaf_size_;         ///< Voxel size for point cloud downsampling
 

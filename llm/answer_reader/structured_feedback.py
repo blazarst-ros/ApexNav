@@ -5,7 +5,7 @@ from llm.utils.semantic_prior_parser import (
     SemanticPriorMap,
     parse_semantic_verification_prior,
 )
-from llm.utils.semantic_prior_defaults import ensure_target_semantic_prior
+from llm.utils.semantic_prior_defaults import ensure_semantic_priors
 
 
 STRUCTURED_FEEDBACK_PREFIX = "# LLM_FEEDBACK_JSON: "
@@ -59,8 +59,9 @@ def build_feedback_record(
 ) -> LLMFeedbackRecord:
     confusion_labels, room, fusion_score = unpack_legacy_answer(legacy_answer)
     response = raw_response or ""
-    semantic_priors = ensure_target_semantic_prior(
+    semantic_priors = ensure_semantic_priors(
         label,
+        confusion_labels,
         parse_semantic_verification_prior(response),
     )
 

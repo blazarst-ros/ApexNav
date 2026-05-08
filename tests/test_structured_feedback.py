@@ -43,12 +43,20 @@ Semantic Verification Prior:
     assert record["fusion_score"] == 0.50
     assert record["room"] == "kitchen"
     assert record["semantic_verification_prior"]["cabinet"]["mu_v"] == 1.05
-    assert set(record["semantic_verification_prior"].keys()) == {"cabinet"}
+    assert record["semantic_verification_prior"]["bookshelf"]["sigma_v"] == 0.40
+    assert record["semantic_verification_prior"]["dresser"]["mu_v"] == 1.05
+    assert record["semantic_verification_prior"]["closet"]["sigma_v"] == 0.45
+    assert set(record["semantic_verification_prior"].keys()) == {
+        "cabinet",
+        "bookshelf",
+        "dresser",
+        "closet",
+    }
     assert "created_at_utc" not in record
     assert "raw_response" not in record
 
 
-def test_build_feedback_record_adds_default_target_prior_when_llm_prior_missing():
+def test_build_feedback_record_adds_default_priors_when_llm_prior_missing():
     record = build_feedback_record(
         "couch",
         ["chair", "bed", "bench", 0.45, "living room"],
@@ -58,7 +66,10 @@ def test_build_feedback_record_adds_default_target_prior_when_llm_prior_missing(
     priors = record["semantic_verification_prior"]
     assert priors["couch"]["mu_v"] == 0.85
     assert priors["couch"]["sigma_v"] == 0.30
-    assert set(priors.keys()) == {"couch"}
+    assert priors["chair"]["mu_v"] == 0.85
+    assert priors["bed"]["sigma_v"] == 0.30
+    assert priors["bench"]["unit"] == "meter"
+    assert set(priors.keys()) == {"couch", "chair", "bed", "bench"}
 
 
 def test_append_and_read_feedback_records(tmp_path):

@@ -41,6 +41,7 @@ from habitat2ros import habitat_publisher
 from vlm.utils.get_object_utils import get_object
 from vlm.utils.get_itm_message import get_itm_message_cosine
 from llm.answer_reader.answer_reader import read_answer
+from llm.answer_reader.semantic_prior_ros import compute_mask_scales, publish_semantic_priors_to_ros
 from basic_utils.object_point_cloud_utils.object_point_cloud import (
     get_object_point_cloud,
 )
@@ -165,6 +166,7 @@ def main(cfg: DictConfig) -> None:
     # 防止 index out of range：确保长度至少为 2
     while len(llm_answer) < 2:
         llm_answer.append("stop")
+    publish_semantic_priors_to_ros(llm_answer_path, label, llm_answer)
     # ----------------------------------------------
 
     cld_with_score_msg = MultipleMasksWithConfidence()
@@ -222,6 +224,7 @@ def main(cfg: DictConfig) -> None:
         cld_with_score_msg.point_clouds = obj_point_cloud_list
         cld_with_score_msg.confidence_scores = score_list
         cld_with_score_msg.label_indices = label_list
+        cld_with_score_msg.mask_scales = compute_mask_scales(object_masks_list)
         cld_with_score_pub.publish(cld_with_score_msg)
 
         cv2.imshow("Observations", frame)

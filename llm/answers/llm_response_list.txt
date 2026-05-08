@@ -132,3 +132,12 @@ Semantic Verification Prior:
 [
   {category: couch, mu_v: 0.60, sigma_v: 0.20, unit: meter, rationale: Couches are low-profile seating; a lower camera height captures the cushion and backrest shape well.}
 ]
+couch: Answer: [bench, chair, sofa, 0.55, living room]
+
+Semantic Verification Prior:
+[
+  {category: couch, mu_v: 0.80, sigma_v: 0.30, unit: meter, rationale: Couches are low-profile seating, best observed from a seated or slightly above-seat height for cushion and armrest detail.},
+  {category: bench, mu_v: 0.75, sigma_v: 0.25, unit: meter, rationale: Benches have a low, long seat profile that is best validated from a mid-low camera height.},
+  {category: chair, mu_v: 0.85, sigma_v: 0.30, unit: meter, rationale: Chairs have vertical backs and a seat at about hip height, so a camera at that level distinguishes them from couches.},
+  {category: sofa, mu_v: 0.80, sigma_v: 0.30, unit: meter, rationale: Sofas are essentially the same as couches, requiring the same low camera for correct leg count and shape identification.}
+]

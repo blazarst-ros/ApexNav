@@ -60,6 +60,7 @@ add_library(plan_env
   src/perception_utils2d.cpp
   src/frontier_map2d.cpp
   src/object_map2d.cpp
+  src/semantic_observability.cpp
   src/value_map2d.cpp
 )
 target_link_libraries(plan_env

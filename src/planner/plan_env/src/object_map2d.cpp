@@ -11,6 +11,9 @@
  */
 
 #include <plan_env/object_map2d.h>
+#include <plan_env/semantic_observability.h>
+
+#include <algorithm>
 
 namespace apexnav_planner {
 ObjectMap2D::ObjectMap2D(SDFMap2D* sdf_map, ros::NodeHandle& nh)
@@ -30,7 +33,12 @@ ObjectMap2D::ObjectMap2D(SDFMap2D* sdf_map, ros::NodeHandle& nh)
   nh.param("object/min_observation_num", min_observation_num_, 2);
   nh.param("object/fusion_type", fusion_type_, 1);
   nh.param("object/use_observation", use_observation_, true);
+  nh.param("object/use_semantic_observability", use_semantic_observability_, true);
   nh.param("object/vis_cloud", is_vis_cloud_, false);
+  nh.param("object/lambda_d", lambda_d_, 0.25);
+  nh.param("object/r0", r0_, 0.03);
+  nh.param("object/beta", beta_, 0.8);
+  nh.param("object/min_semantic_evidence", min_semantic_evidence_, 0.05);
 
   // Setup ROS communication
   object_cloud_pub_ = nh.advertise<sensor_msgs::PointCloud2>("/object/clouds", 10);
@@ -89,7 +97,7 @@ void ObjectMap2D::inputObservationObjectsCloud(
       continue;
 
     // Check overlap with each possible object classification
-    for (int label = 0; label < 5; ++label) {
+    for (int label = 0; label < (int)object.confidence_scores_.size(); ++label) {
       if (object.confidence_scores_[label] < 1e-3)
         continue;  // Skip labels with negligible confidence
 
@@ -129,6 +137,9 @@ void ObjectMap2D::inputObservationObjectsCloud(
       // Apply confidence fusion algorithm
       merged_object.confidence_scores_[label] = fusionConfidenceScore(total_last, confidence_last,
           observation_now, confidence_now, total_now, merged_object.observation_cloud_sums_[label]);
+      merged_object.quality_evidence_scores_[label] =
+          semantic_observability::saturatedEvidence(merged_object.observability_scores_[label],
+              merged_object.confidence_scores_[label], merged_object.observation_nums_[label], beta_);
       printFusionInfo(merged_object, label, "[Observation]");
       // ROS_WARN("[Observation] id = %d label = %d overlap_count = %d object_cloud = %ld",
       //     merged_object.id_, label, overlap_count, object.clouds_[label]->points.size());
@@ -224,14 +235,16 @@ int ObjectMap2D::searchSingleObjectCluster(const DetectedObject& detected_object
 
 void ObjectMap2D::updateObjectBestLabel(int obj_idx)
 {
-  double max_func_score = 0.1;  // Minimum threshold for valid classification
+  double max_func_score = use_semantic_observability_ ? min_semantic_evidence_ : 0.1;
   int best_label = -1;
 
   // Evaluate each possible classification label
   for (int label = 0; label < (int)objects_[obj_idx].clouds_.size(); label++) {
     auto obs_sum = objects_[obj_idx].observation_cloud_sums_[label];
     auto score = objects_[obj_idx].confidence_scores_[label];
-    int func_score = obs_sum * score;  // Combined reliability metric
+    double func_score = use_semantic_observability_
+                            ? objects_[obj_idx].quality_evidence_scores_[label]
+                            : obs_sum * score;
 
     if (func_score > max_func_score) {
       max_func_score = func_score;
@@ -241,13 +254,53 @@ void ObjectMap2D::updateObjectBestLabel(int obj_idx)
   objects_[obj_idx].best_label_ = best_label;
 }
 
+void ObjectMap2D::updateQualityAwareEvidence(
+    ObjectCluster& object, int label, const DetectedObject& detected_object)
+{
+  if (label < 0 || label >= (int)object.quality_evidence_scores_.size())
+    return;
+
+  double rho = semantic_observability::observability(detected_object.camera_height,
+      detected_object.mu_v, detected_object.sigma_v, detected_object.distance,
+      detected_object.view_angle, detected_object.mask_scale, lambda_d_, r0_);
+  double evidence = semantic_observability::saturatedEvidence(
+      rho, object.confidence_scores_[label], object.observation_nums_[label], beta_);
+
+  object.observability_scores_[label] = rho;
+  object.quality_evidence_scores_[label] = evidence;
+  object.last_distances_[label] = detected_object.distance;
+  object.last_view_angles_[label] = detected_object.view_angle;
+  object.last_mask_scales_[label] = detected_object.mask_scale;
+}
+
+void ObjectMap2D::ensureObjectLabelCapacity(ObjectCluster& object, int label)
+{
+  if (label < 0 || label < (int)object.confidence_scores_.size())
+    return;
+
+  const size_t new_size = (size_t)label + 1;
+  object.clouds_.resize(new_size);
+  object.confidence_scores_.resize(new_size, 0.0);
+  object.observability_scores_.resize(new_size, 0.0);
+  object.quality_evidence_scores_.resize(new_size, 0.0);
+  object.last_distances_.resize(new_size, 0.0);
+  object.last_view_angles_.resize(new_size, 0.0);
+  object.last_mask_scales_.resize(new_size, 0.0);
+  object.observation_nums_.resize(new_size, 0);
+  object.observation_cloud_sums_.resize(new_size, 0);
+}
+
 void ObjectMap2D::createNewObjectCluster(
     const std::vector<Eigen::Vector2d>& cells, const DetectedObject& detected_object)
 {
   int label = detected_object.label;
+  if (label < 0) {
+    ROS_WARN("[ObjectMap2D] Ignore detected object with invalid label %d", label);
+    return;
+  }
 
   // Initialize new object cluster with unique ID
-  ObjectCluster obj;
+  ObjectCluster obj(std::max(6, label + 1));
   obj.id_ = (int)objects_.size();
   obj.max_seen_count_ = 0;
   obj.good_cells_.clear();
@@ -306,6 +359,7 @@ void ObjectMap2D::createNewObjectCluster(
   obj.confidence_scores_[label] = detected_object.score;
   obj.observation_cloud_sums_[label] = detected_object.cloud->points.size();
   obj.observation_nums_[label] = 1;
+  updateQualityAwareEvidence(obj, label, detected_object);
 
   // Add to global object registry
   objects_.push_back(obj);
@@ -316,6 +370,12 @@ void ObjectMap2D::mergeCellsIntoObjectCluster(const int& merged_object_id,
     const std::vector<Eigen::Vector2d>& new_cells, const DetectedObject& detected_object)
 {
   int label = detected_object.label;
+  if (label < 0) {
+    ROS_WARN("[ObjectMap2D] Ignore detected object with invalid label %d", label);
+    return;
+  }
+
+  ensureObjectLabelCapacity(objects_[merged_object_id], label);
   const auto last_objects = objects_;
 
   ObjectCluster& merged_object = objects_[merged_object_id];
@@ -384,6 +444,7 @@ void ObjectMap2D::mergeCellsIntoObjectCluster(const int& merged_object_id,
     merged_object.confidence_scores_[label] = detected_object.score;
     merged_object.observation_cloud_sums_[label] = detected_object.cloud->points.size();
     merged_object.observation_nums_[label] = 1;
+    updateQualityAwareEvidence(merged_object, label, detected_object);
     printFusionInfo(merged_object, label, "[New Label Merged]");
   }
   else {
@@ -434,6 +495,7 @@ void ObjectMap2D::mergeCellsIntoObjectCluster(const int& merged_object_id,
     else if (fusion_type_ == 2)
       merged_object.confidence_scores_[label] =
           max(merged_object.confidence_scores_[label], now_confidence);  // Maximum confidence
+    updateQualityAwareEvidence(merged_object, label, detected_object);
     printFusionInfo(merged_object, label, "[Fusion]");
   }
 }
@@ -530,7 +592,10 @@ void ObjectMap2D::getAllConfidenceObjectClouds(
 
   // Extract high-confidence object cells
   for (auto object : objects_) {
-    if (object.confidence_scores_[0] >= min_confidence_) {
+    bool score_ok = use_semantic_observability_
+                        ? object.quality_evidence_scores_[0] >= min_semantic_evidence_
+                        : object.confidence_scores_[0] >= min_confidence_;
+    if (score_ok) {
       for (auto cell : object.good_cells_) {
         pcl::PointXYZ point;
         point.x = cell[0];
@@ -556,14 +621,19 @@ void ObjectMap2D::getTopConfidenceObjectCloud(
     for (auto object : objects_) top_objects.push_back(object);
 
     // Sort by confidence score in descending order
-    std::sort(
-        top_objects.begin(), top_objects.end(), [](const ObjectCluster& a, const ObjectCluster& b) {
+    std::sort(top_objects.begin(), top_objects.end(),
+        [this](const ObjectCluster& a, const ObjectCluster& b) {
+          if (use_semantic_observability_)
+            return a.quality_evidence_scores_[0] > b.quality_evidence_scores_[0];
           return a.confidence_scores_[0] > b.confidence_scores_[0];
         });
 
     // Extract point clouds for top-ranked objects
     for (auto top_obj : top_objects) {
-      if (top_obj.confidence_scores_[0] <= 0.01)
+      double object_score = use_semantic_observability_ ? top_obj.quality_evidence_scores_[0]
+                                                        : top_obj.confidence_scores_[0];
+      double min_score = use_semantic_observability_ ? min_semantic_evidence_ : 0.01;
+      if (object_score <= min_score)
         break;  // Skip extremely low confidence objects
 
       pcl::shared_ptr<pcl::PointCloud<pcl::PointXYZ>> top_object_cloud;
@@ -600,13 +670,16 @@ void ObjectMap2D::getTopConfidenceObjectCloud(
   else {
     // Apply confidence filtering with functional scoring
     for (auto object : objects_) {
-      int max_func_score = 0, best_label = -1;
+      double max_func_score = use_semantic_observability_ ? min_semantic_evidence_ : 0.0;
+      int best_label = -1;
 
       // Find best label using functional score (observation count * confidence)
       for (int label = 0; label < (int)object.clouds_.size(); label++) {
         auto obs_sum = object.observation_cloud_sums_[label];
         auto score = object.confidence_scores_[label];
-        int func_score = obs_sum * score;
+        double func_score = use_semantic_observability_
+                                ? object.quality_evidence_scores_[label]
+                                : obs_sum * score;
         if (func_score > max_func_score) {
           max_func_score = func_score;
           best_label = label;
@@ -619,8 +692,10 @@ void ObjectMap2D::getTopConfidenceObjectCloud(
     }
 
     // Sort filtered objects by confidence
-    std::sort(
-        top_objects.begin(), top_objects.end(), [](const ObjectCluster& a, const ObjectCluster& b) {
+    std::sort(top_objects.begin(), top_objects.end(),
+        [this](const ObjectCluster& a, const ObjectCluster& b) {
+          if (use_semantic_observability_)
+            return a.quality_evidence_scores_[0] > b.quality_evidence_scores_[0];
           return a.confidence_scores_[0] > b.confidence_scores_[0];
         });
 
@@ -642,8 +717,10 @@ void ObjectMap2D::getTopConfidenceObjectCloud(
 
 bool ObjectMap2D::isConfidenceObject(const ObjectCluster& obj)
 {
-  if (obj.confidence_scores_[0] >= min_confidence_ &&
-      obj.observation_nums_[0] >= min_observation_num_)
+  bool score_ok = use_semantic_observability_
+                      ? obj.quality_evidence_scores_[0] >= min_semantic_evidence_
+                      : obj.confidence_scores_[0] >= min_confidence_;
+  if (score_ok && obj.observation_nums_[0] >= min_observation_num_)
     return true;
   return false;
 }

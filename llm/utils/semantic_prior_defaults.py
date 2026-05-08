@@ -1,3 +1,5 @@
+from typing import Iterable
+
 from llm.utils.semantic_prior_parser import SemanticPriorMap, SemanticVerificationPrior
 
 
@@ -91,11 +93,16 @@ def get_default_semantic_prior(category: str) -> SemanticVerificationPrior:
     }
 
 
-def ensure_target_semantic_prior(
+def ensure_semantic_priors(
     target_label: str,
+    categories: Iterable[str],
     parsed_priors: SemanticPriorMap,
 ) -> SemanticPriorMap:
     priors = dict(parsed_priors or {})
-    if target_label in priors:
-        return {target_label: priors[target_label]}
-    return {target_label: get_default_semantic_prior(target_label)}
+    required_categories = [target_label]
+    required_categories.extend(category for category in categories if category)
+
+    output: SemanticPriorMap = {}
+    for category in required_categories:
+        output[category] = priors.get(category, get_default_semantic_prior(category))
+    return output

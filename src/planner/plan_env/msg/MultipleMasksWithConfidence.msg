@@ -9,3 +9,6 @@ float32[] confidence_scores
 
 # List of label indices
 int32[] label_indices
+
+# Corresponding mask area ratios in the source image
+float32[] mask_scales

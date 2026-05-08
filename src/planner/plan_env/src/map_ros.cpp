@@ -11,6 +11,9 @@
 
 #include <plan_env/map_ros.h>
 
+#include <algorithm>
+#include <cmath>
+
 namespace apexnav_planner {
 
 void MapROS::setMap(SDFMap2D* map)
@@ -204,11 +207,19 @@ void MapROS::detectedObjectCloudCallback(int agent_id, const plan_env::MultipleM
   if (agent_id < 0 || agent_id >= NUM_AGENTS_) return;
   AgentState& agent = agents_[agent_id];
 
-  // Validate message structure consistency
+  // Validate message structure consistency. mask_scales is required for normal
+  // Mission 2 operation, but keep a fallback for old/debug publishers.
   if (!(msg->confidence_scores.size() == msg->point_clouds.size() &&
           msg->confidence_scores.size() == msg->label_indices.size())) {
     ROS_ERROR("[Bug] The MultipleMasksWithConfidence msg is wrong!!!");
     return;
+  }
+  const bool has_mask_scales = msg->confidence_scores.size() == msg->mask_scales.size();
+  if (!has_mask_scales) {
+    ROS_WARN_THROTTLE(5.0,
+        "[SemanticObservability] mask_scales size mismatch: detections=%lu mask_scales=%lu. "
+        "Using fallback mask_scale=1.0 for this message.",
+        msg->confidence_scores.size(), msg->mask_scales.size());
   }
 
   auto t1 = ros::Time::now();
@@ -238,6 +249,11 @@ void MapROS::detectedObjectCloudCallback(int agent_id, const plan_env::MultipleM
     auto cloud = msg->point_clouds[i];
     auto confidence_score = msg->confidence_scores[i];
     auto label = msg->label_indices[i];
+    auto mask_scale = has_mask_scales ? msg->mask_scales[i] : 1.0;
+    if (label < 0) {
+      ROS_WARN("[SemanticObservability] Ignore detection with invalid label %d", label);
+      continue;
+    }
 
     // Convert ROS message to PCL point cloud
     PointCloud3D::Ptr single_object_cloud(new PointCloud3D());
@@ -285,11 +301,39 @@ void MapROS::detectedObjectCloudCallback(int agent_id, const plan_env::MultipleM
       continue;
     }
 
+    Eigen::Vector3d object_center = Eigen::Vector3d::Zero();
+    for (const auto& object_pt : single_object_cloud->points) {
+      object_center += Eigen::Vector3d(object_pt.x, object_pt.y, object_pt.z);
+    }
+    object_center /= (double)single_object_cloud->points.size();
+    double object_distance = (object_center - agent.camera_pos_).norm();
+
+    double view_angle = 0.0;
+    if (object_distance > 1e-6) {
+      Eigen::Vector3d target_dir = (object_center - agent.camera_pos_) / object_distance;
+      Eigen::Vector3d optical_axis = agent.camera_q_.toRotationMatrix() * Eigen::Vector3d::UnitZ();
+      double cos_theta = optical_axis.normalized().dot(target_dir);
+      cos_theta = std::max(-1.0, std::min(1.0, cos_theta));
+      view_angle = std::acos(cos_theta);
+    }
+
+    std::string prior_base = "/semantic_prior/label_" + std::to_string(label);
+    double mu_v = 1.0;
+    double sigma_v = 0.35;
+    ros::param::param(prior_base + "/mu_v", mu_v, mu_v);
+    ros::param::param(prior_base + "/sigma_v", sigma_v, sigma_v);
+
     *filtered_all_object_cloud += *single_object_cloud;
     DetectedObject detected_object;
     detected_object.cloud = single_object_cloud;
     detected_object.score = confidence_score;
     detected_object.label = label;
+    detected_object.mask_scale = mask_scale;
+    detected_object.distance = object_distance;
+    detected_object.view_angle = view_angle;
+    detected_object.camera_height = agent.camera_pos_(2);
+    detected_object.mu_v = mu_v;
+    detected_object.sigma_v = sigma_v;
     detected_objects.push_back(detected_object);
   }
 
