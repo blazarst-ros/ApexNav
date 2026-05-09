@@ -53,6 +53,7 @@ constexpr double MIN_SAFE_DISTANCE = 0.15;       // min safe distance to obstacl
 constexpr int MAX_STUCKING_COUNT = 25;           // max consecutive stuck actions -> stop
 constexpr int MAX_STUCKING_NEXT_POS_COUNT = 14;  // times next_pos unchanged while stuck
 constexpr int MAX_WAIT_ACTION_FINISH = 50;       // FSM ticks in WAIT_ACTION_FINISH before re-pub (~0.5s at 100Hz)
+constexpr int MAX_NO_FRONTIER_RECOVERY = 12;     // rotate/re-scan before accepting no-frontier termination
 
 // Cost weights
 constexpr double TARGET_WEIGHT = 150.0;

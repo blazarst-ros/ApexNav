@@ -84,6 +84,28 @@ struct SemanticEvidenceSnapshot {
   int target_observation_num = 0;
   bool target_passes_threshold = false;
   bool target_is_best_label = false;
+  int top_label = -1;
+  double top_quality_evidence = 0.0;
+  double top_fused_confidence = 0.0;
+  int top_observation_num = 0;
+  int top_observation_cloud_sum = 0;
+  double top_observability = 0.0;
+  double top_distance = 0.0;
+  double top_view_angle = 0.0;
+  double top_mask_scale = 0.0;
+  bool top_passes_threshold = false;
+  int second_label = -1;
+  double second_quality_evidence = 0.0;
+  double second_fused_confidence = 0.0;
+  int second_observation_num = 0;
+  int second_observation_cloud_sum = 0;
+  double second_observability = 0.0;
+  double second_distance = 0.0;
+  double second_view_angle = 0.0;
+  double second_mask_scale = 0.0;
+  bool second_passes_threshold = false;
+  double top_second_abs_diff = 0.0;
+  bool target_is_top_label = false;
 };
 
 struct Viewpoint2D {

@@ -72,10 +72,10 @@
         <param name="exploration/max_to_mean_percentage" value="0.90" type="double"/>
         <param name="exploration/tsp_dir" value="$(find lkh_mtsp_solver)/resource" type="string"/>
 
-        <param name="frontier/cluster_min" value="2" type="int"/>
+        <param name="frontier/cluster_min" value="1" type="int"/>
         <param name="frontier/cluster_size_xy" value="0.65" type="double"/>
         <param name="frontier/min_view_finish_fraction" value="0.2" type="double"/>
-        <param name="frontier/min_contain_unknown" value="30" type="int"/>
+        <param name="frontier/min_contain_unknown" value="10" type="int"/>
 
         <param name="object/min_observation_num" value="4" type="int"/>
         <!-- 0: no_fusion 1: ours_fusion 2: max_fusion-->
@@ -84,9 +84,9 @@
         <param name="object/vis_cloud" value="true" type="bool"/>
         <param name="object/use_semantic_observability" value="true" type="bool"/>
         <param name="object/lambda_d" value="0.25" type="double"/>
-        <param name="object/r0" value="0.007" type="double"/>
+        <param name="object/r0" value="0.013" type="double"/>
         <param name="object/mask_sigmoid_k" value="300.0" type="double"/>
-        <param name="object/beta" value="0.8" type="double"/>
+        <param name="object/beta" value="0.5" type="double"/>
         <param name="object/min_semantic_evidence" value="0.15" type="double"/>
 
         <!-- Perception utils -->

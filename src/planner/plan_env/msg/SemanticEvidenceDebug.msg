@@ -45,3 +45,32 @@ float64 target_fused_confidence
 int32 target_observation_num
 bool target_passes_threshold
 bool target_is_best_label
+
+# Cluster-level top-two semantic evidence check.
+# These values compare the largest and second-largest per-label s_tilde in
+# the cluster after the current map update. The absolute difference is useful
+# as a confidence margin against mixed-label false positives.
+int32 top_label
+float64 top_quality_evidence
+float64 top_fused_confidence
+int32 top_observation_num
+int32 top_observation_cloud_sum
+float64 top_observability
+float64 top_distance
+float64 top_view_angle
+float64 top_mask_scale
+bool top_passes_threshold
+
+int32 second_label
+float64 second_quality_evidence
+float64 second_fused_confidence
+int32 second_observation_num
+int32 second_observation_cloud_sum
+float64 second_observability
+float64 second_distance
+float64 second_view_angle
+float64 second_mask_scale
+bool second_passes_threshold
+
+float64 top_second_abs_diff
+bool target_is_top_label

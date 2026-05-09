@@ -14,6 +14,8 @@
 #include <plan_env/semantic_observability.h>
 
 #include <algorithm>
+#include <cmath>
+#include <limits>
 
 namespace apexnav_planner {
 ObjectMap2D::ObjectMap2D(SDFMap2D* sdf_map, ros::NodeHandle& nh)
@@ -36,9 +38,9 @@ ObjectMap2D::ObjectMap2D(SDFMap2D* sdf_map, ros::NodeHandle& nh)
   nh.param("object/use_semantic_observability", use_semantic_observability_, true);
   nh.param("object/vis_cloud", is_vis_cloud_, false);
   nh.param("object/lambda_d", lambda_d_, 0.25);
-  nh.param("object/r0", r0_, 0.007);
+  nh.param("object/r0", r0_, 0.013);
   nh.param("object/mask_sigmoid_k", mask_sigmoid_k_, 300.0);
-  nh.param("object/beta", beta_, 0.8);
+  nh.param("object/beta", beta_, 0.5);
   nh.param("object/min_semantic_evidence", min_semantic_evidence_, 0.05);
 
   // Setup ROS communication
@@ -104,6 +106,65 @@ bool ObjectMap2D::getSemanticEvidenceSnapshot(
         object.observation_nums_[0] >= min_observation_num_;
     snapshot.target_is_best_label = object.best_label_ == 0;
   }
+
+  int top_label = -1;
+  int second_label = -1;
+  double top_score = -std::numeric_limits<double>::infinity();
+  double second_score = -std::numeric_limits<double>::infinity();
+  for (int semantic_label = 0; semantic_label < (int)object.quality_evidence_scores_.size();
+       ++semantic_label) {
+    const double score = object.quality_evidence_scores_[semantic_label];
+    if (score > top_score) {
+      second_score = top_score;
+      second_label = top_label;
+      top_score = score;
+      top_label = semantic_label;
+    }
+    else if (score > second_score) {
+      second_score = score;
+      second_label = semantic_label;
+    }
+  }
+
+  auto fillEvidenceRank = [&](int semantic_label, bool is_top) {
+    if (semantic_label < 0)
+      return;
+    const bool passes_threshold =
+        object.quality_evidence_scores_[semantic_label] >= min_semantic_evidence_ &&
+        object.observation_nums_[semantic_label] >= min_observation_num_;
+    if (is_top) {
+      snapshot.top_label = semantic_label;
+      snapshot.top_quality_evidence = object.quality_evidence_scores_[semantic_label];
+      snapshot.top_fused_confidence = object.confidence_scores_[semantic_label];
+      snapshot.top_observation_num = object.observation_nums_[semantic_label];
+      snapshot.top_observation_cloud_sum = object.observation_cloud_sums_[semantic_label];
+      snapshot.top_observability = object.observability_scores_[semantic_label];
+      snapshot.top_distance = object.last_distances_[semantic_label];
+      snapshot.top_view_angle = object.last_view_angles_[semantic_label];
+      snapshot.top_mask_scale = object.last_mask_scales_[semantic_label];
+      snapshot.top_passes_threshold = passes_threshold;
+    }
+    else {
+      snapshot.second_label = semantic_label;
+      snapshot.second_quality_evidence = object.quality_evidence_scores_[semantic_label];
+      snapshot.second_fused_confidence = object.confidence_scores_[semantic_label];
+      snapshot.second_observation_num = object.observation_nums_[semantic_label];
+      snapshot.second_observation_cloud_sum = object.observation_cloud_sums_[semantic_label];
+      snapshot.second_observability = object.observability_scores_[semantic_label];
+      snapshot.second_distance = object.last_distances_[semantic_label];
+      snapshot.second_view_angle = object.last_view_angles_[semantic_label];
+      snapshot.second_mask_scale = object.last_mask_scales_[semantic_label];
+      snapshot.second_passes_threshold = passes_threshold;
+    }
+  };
+
+  fillEvidenceRank(top_label, true);
+  fillEvidenceRank(second_label, false);
+  snapshot.top_second_abs_diff =
+      second_label >= 0 ? std::abs(snapshot.top_quality_evidence -
+                              snapshot.second_quality_evidence)
+                        : snapshot.top_quality_evidence;
+  snapshot.target_is_top_label = snapshot.top_label == 0;
 
   return true;
 }

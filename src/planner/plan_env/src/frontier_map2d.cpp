@@ -30,7 +30,7 @@ FrontierMap2D::FrontierMap2D(const SDFMap2D::Ptr& sdf_map, ros::NodeHandle& nh){
   // Load exploration parameters from ROS parameter server从参数服务器读取指定名称的参数，赋值给类成员变量；如果参数不存在，就使用默认值()
   nh.param("frontier/cluster_min", cluster_min_, -1);//最小尺寸阈值
   nh.param("frontier/cluster_size_xy", cluster_size_xy_, -1.0);//最大尺寸阈值（米）(大于则会被PCA分割)
-  nh.param("frontier/min_contain_unknown", min_contain_unknown_, 50);//前沿需要包含的最小未知栅格数（低于这个数的前沿无探索价值，会被标记为休眠）
+  nh.param("frontier/min_contain_unknown", min_contain_unknown_, 10);//前沿需要包含的最小未知栅格数（低于这个数的前沿无探索价值，会被标记为休眠）
   nh.param("frontier/min_view_finish_fraction", min_view_finish_fraction_, -1.0);//前沿的最小可视完成率
 
   // Initialize ray-casting system for visibility analysis

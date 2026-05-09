@@ -560,6 +560,33 @@ void MapROS::publishSemanticEvidenceDebug(
   msg.target_observation_num = has_snapshot ? snapshot.target_observation_num : 0;
   msg.target_passes_threshold = has_snapshot ? snapshot.target_passes_threshold : false;
   msg.target_is_best_label = has_snapshot ? snapshot.target_is_best_label : false;
+  msg.top_label = has_snapshot ? snapshot.top_label : detected_object.label;
+  msg.top_quality_evidence =
+      has_snapshot ? snapshot.top_quality_evidence : observation_evidence;
+  msg.top_fused_confidence = has_snapshot ? snapshot.top_fused_confidence : detected_object.score;
+  msg.top_observation_num = has_snapshot ? snapshot.top_observation_num : 1;
+  msg.top_observation_cloud_sum =
+      has_snapshot ? snapshot.top_observation_cloud_sum : raw_point_count;
+  msg.top_observability = has_snapshot ? snapshot.top_observability : observation_rho;
+  msg.top_distance = has_snapshot ? snapshot.top_distance : detected_object.distance;
+  msg.top_view_angle = has_snapshot ? snapshot.top_view_angle : detected_object.view_angle;
+  msg.top_mask_scale = has_snapshot ? snapshot.top_mask_scale : detected_object.mask_scale;
+  msg.top_passes_threshold = has_snapshot ? snapshot.top_passes_threshold : false;
+  msg.second_label = has_snapshot ? snapshot.second_label : -1;
+  msg.second_quality_evidence = has_snapshot ? snapshot.second_quality_evidence : 0.0;
+  msg.second_fused_confidence = has_snapshot ? snapshot.second_fused_confidence : 0.0;
+  msg.second_observation_num = has_snapshot ? snapshot.second_observation_num : 0;
+  msg.second_observation_cloud_sum =
+      has_snapshot ? snapshot.second_observation_cloud_sum : 0;
+  msg.second_observability = has_snapshot ? snapshot.second_observability : 0.0;
+  msg.second_distance = has_snapshot ? snapshot.second_distance : 0.0;
+  msg.second_view_angle = has_snapshot ? snapshot.second_view_angle : 0.0;
+  msg.second_mask_scale = has_snapshot ? snapshot.second_mask_scale : 0.0;
+  msg.second_passes_threshold = has_snapshot ? snapshot.second_passes_threshold : false;
+  msg.top_second_abs_diff = has_snapshot ? snapshot.top_second_abs_diff
+                                         : std::abs(observation_evidence);
+  msg.target_is_top_label = has_snapshot ? snapshot.target_is_top_label
+                                         : detected_object.label == 0;
 
   semantic_evidence_debug_pub_[agent_id].publish(msg);
 }

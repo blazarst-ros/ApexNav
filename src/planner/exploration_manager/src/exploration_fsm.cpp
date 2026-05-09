@@ -130,6 +130,7 @@ void ExplorationFSM::FSMCallback(const ros::TimerEvent& e)
           expl_state_msg.data = ad.final_result_;
           expl_state_pub_.publish(expl_state_msg);
           if (ad.final_result_ == FINAL_RESULT::REACH_OBJECT) {
+            ad.no_frontier_recovery_count_ = 0;
             ROS_WARN("Agent %d reached an object candidate; broadcasting STOP to all agents.",
                 agent_idx);
             for (int stop_idx = 0; stop_idx < NUM_AGENTS; ++stop_idx) {
@@ -142,8 +143,20 @@ void ExplorationFSM::FSMCallback(const ros::TimerEvent& e)
             }
           }
           else if (ad.final_result_ == FINAL_RESULT::EXPLORE ||
-              ad.final_result_ == FINAL_RESULT::SEARCH_OBJECT)
+              ad.final_result_ == FINAL_RESULT::SEARCH_OBJECT) {
+            ad.no_frontier_recovery_count_ = 0;
             transitState(agent_idx, ROS_STATE::PUB_ACTION, "FSM");
+          }
+          else if (ad.final_result_ == FINAL_RESULT::NO_FRONTIER &&
+              ad.no_frontier_recovery_count_ < FSMConstants::MAX_NO_FRONTIER_RECOVERY) {
+            ad.no_frontier_recovery_count_++;
+            ad.newest_action_ = ACTION::TURN_LEFT;
+            ad.replan_flag_ = true;
+            ROS_WARN("Agent %d: No frontier recovery scan (%d/%d)",
+                agent_idx, ad.no_frontier_recovery_count_,
+                FSMConstants::MAX_NO_FRONTIER_RECOVERY);
+            transitState(agent_idx, ROS_STATE::PUB_ACTION, "No frontier recovery");
+          }
           else
             transitState(agent_idx, ROS_STATE::FINISH, "FSM");
         }
