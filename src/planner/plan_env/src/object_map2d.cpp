@@ -78,7 +78,12 @@ bool ObjectMap2D::getSemanticEvidenceSnapshot(
   if (object_id < 0 || object_id >= (int)objects_.size())
     return false;
   const ObjectCluster& object = objects_[object_id];
-  if (label < 0 || label >= (int)object.confidence_scores_.size())
+  const int evidence_label_count = std::min({ (int)object.quality_evidence_scores_.size(),
+      (int)object.confidence_scores_.size(), (int)object.observation_nums_.size(),
+      (int)object.observation_cloud_sums_.size(), (int)object.observability_scores_.size(),
+      (int)object.last_distances_.size(), (int)object.last_view_angles_.size(),
+      (int)object.last_mask_scales_.size() });
+  if (label < 0 || label >= evidence_label_count)
     return false;
 
   snapshot.cluster_id = object_id;
@@ -97,7 +102,7 @@ bool ObjectMap2D::getSemanticEvidenceSnapshot(
   snapshot.observability = object.observability_scores_[label];
   snapshot.quality_evidence = object.quality_evidence_scores_[label];
 
-  if (!object.quality_evidence_scores_.empty()) {
+  if (evidence_label_count > 0) {
     snapshot.target_quality_evidence = object.quality_evidence_scores_[0];
     snapshot.target_fused_confidence = object.confidence_scores_[0];
     snapshot.target_observation_num = object.observation_nums_[0];
@@ -111,8 +116,7 @@ bool ObjectMap2D::getSemanticEvidenceSnapshot(
   int second_label = -1;
   double top_score = -std::numeric_limits<double>::infinity();
   double second_score = -std::numeric_limits<double>::infinity();
-  for (int semantic_label = 0; semantic_label < (int)object.quality_evidence_scores_.size();
-       ++semantic_label) {
+  for (int semantic_label = 0; semantic_label < evidence_label_count; ++semantic_label) {
     const double score = object.quality_evidence_scores_[semantic_label];
     if (score > top_score) {
       second_score = top_score;
@@ -703,6 +707,9 @@ void ObjectMap2D::getAllConfidenceObjectClouds(
 
   // Extract high-confidence object cells
   for (auto object : objects_) {
+    if (object.quality_evidence_scores_.empty() || object.confidence_scores_.empty() ||
+        object.observation_nums_.empty())
+      continue;
     bool score_ok = use_semantic_observability_
                         ? object.quality_evidence_scores_[0] >= min_semantic_evidence_
                         : object.confidence_scores_[0] >= min_confidence_;
@@ -729,7 +736,12 @@ void ObjectMap2D::getTopConfidenceObjectCloud(
   // TODO: May need logic adjustment for relaxed no limited_confidence conditions
   if (!limited_confidence) {
     // Include all objects without confidence filtering
-    for (auto object : objects_) top_objects.push_back(object);
+    for (auto object : objects_) {
+      if (object.quality_evidence_scores_.empty() || object.confidence_scores_.empty() ||
+          object.observation_nums_.empty())
+        continue;
+      top_objects.push_back(object);
+    }
 
     // Sort by confidence score in descending order
     std::sort(top_objects.begin(), top_objects.end(),
@@ -757,7 +769,8 @@ void ObjectMap2D::getTopConfidenceObjectCloud(
         point.z = 0;
         top_object_cloud->push_back(point);
       }
-      top_object_clouds.push_back(top_object_cloud);
+      if (!top_object_cloud->points.empty())
+        top_object_clouds.push_back(top_object_cloud);
     }
 
     // Fallback for extreme mode when no high-confidence objects exist
@@ -775,17 +788,24 @@ void ObjectMap2D::getTopConfidenceObjectCloud(
           others_object_cloud->push_back(point);
         }
       }
-      top_object_clouds.push_back(others_object_cloud);
+      if (!others_object_cloud->points.empty())
+        top_object_clouds.push_back(others_object_cloud);
     }
   }
   else {
     // Apply confidence filtering with functional scoring
     for (auto object : objects_) {
+      if (object.quality_evidence_scores_.empty() || object.confidence_scores_.empty() ||
+          object.observation_nums_.empty())
+        continue;
       double max_func_score = use_semantic_observability_ ? min_semantic_evidence_ : 0.0;
       int best_label = -1;
 
       // Find best label using functional score (observation count * confidence)
-      for (int label = 0; label < (int)object.clouds_.size(); label++) {
+      const int label_count = std::min({ (int)object.clouds_.size(),
+          (int)object.observation_cloud_sums_.size(), (int)object.confidence_scores_.size(),
+          (int)object.quality_evidence_scores_.size() });
+      for (int label = 0; label < label_count; label++) {
         auto obs_sum = object.observation_cloud_sums_[label];
         auto score = object.confidence_scores_[label];
         double func_score = use_semantic_observability_
@@ -821,13 +841,18 @@ void ObjectMap2D::getTopConfidenceObjectCloud(
         point.z = 0;
         top_object_cloud->push_back(point);
       }
-      top_object_clouds.push_back(top_object_cloud);
+      if (!top_object_cloud->points.empty())
+        top_object_clouds.push_back(top_object_cloud);
     }
   }
 }
 
 bool ObjectMap2D::isConfidenceObject(const ObjectCluster& obj)
 {
+  if (obj.quality_evidence_scores_.empty() || obj.confidence_scores_.empty() ||
+      obj.observation_nums_.empty())
+    return false;
+
   bool score_ok = use_semantic_observability_
                       ? obj.quality_evidence_scores_[0] >= min_semantic_evidence_
                       : obj.confidence_scores_[0] >= min_confidence_;

@@ -151,6 +151,9 @@ inline bool ExplorationManager::searchObjectPathExtreme(const Vector3d& start,
     const pcl::shared_ptr<pcl::PointCloud<pcl::PointXYZ>>& object_cloud,
     Eigen::Vector2d& refined_pos, std::vector<Eigen::Vector2d>& refined_path)
 {
+  if (!object_cloud || object_cloud->points.empty())
+    return false;
+
   Vector2d object_pose = findNearestObjectPoint(start, object_cloud);
   if (object_pose.x() < -999.0)
     return false;  // Error finding nearest point

@@ -514,6 +514,11 @@ void ExplorationManager::computeATSPTour(
 Vector2d ExplorationManager::findNearestObjectPoint(
     const Vector3d& start, const pcl::shared_ptr<pcl::PointCloud<pcl::PointXYZ>>& object_cloud)
 {
+  if (!object_cloud || object_cloud->points.empty()) {
+    ROS_ERROR("[Object Path] Empty object cloud; skip object path search.");
+    return Vector2d(-1000.0, -1000.0);
+  }
+
   pcl::KdTreeFLANN<pcl::PointXYZ> kdtree;
   kdtree.setInputCloud(object_cloud);
   std::vector<int> pointIdxNKNSearch(1);
