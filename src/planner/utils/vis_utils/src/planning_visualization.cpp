@@ -1,5 +1,8 @@
 #include <vis_utils/planning_visualization.h>
 
+#include <algorithm>
+#include <cmath>
+
 using std::cout;
 using std::endl;
 namespace apexnav_planner {
@@ -383,8 +386,7 @@ Eigen::Vector4d PlanningVisualization::getColor(const double& h, double alpha)
 {
   double h1 = h;
   if (h1 < 0.0 || h1 > 1.0) {
-    std::cout << "h out of range" << std::endl;
-    h1 = 0.0;
+    h1 = std::fmod(std::max(0.0, h1), 1.0);
   }
 
   double lambda;

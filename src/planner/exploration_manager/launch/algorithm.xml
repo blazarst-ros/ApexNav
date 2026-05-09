@@ -77,7 +77,7 @@
         <param name="frontier/min_view_finish_fraction" value="0.2" type="double"/>
         <param name="frontier/min_contain_unknown" value="30" type="int"/>
 
-        <param name="object/min_observation_num" value="2" type="int"/>
+        <param name="object/min_observation_num" value="4" type="int"/>
         <!-- 0: no_fusion 1: ours_fusion 2: max_fusion-->
         <param name="object/fusion_type" value="1" type="int"/>
         <param name="object/use_observation" value="true" type="bool"/>
@@ -86,7 +86,7 @@
         <param name="object/lambda_d" value="0.25" type="double"/>
         <param name="object/r0" value="0.03" type="double"/>
         <param name="object/beta" value="0.8" type="double"/>
-        <param name="object/min_semantic_evidence" value="0.05" type="double"/>
+        <param name="object/min_semantic_evidence" value="0.15" type="double"/>
 
         <!-- Perception utils -->
         <param name="perception_utils/left_angle" value="$(eval 30 * 3.1415926 / 180.0)" type="double"/>

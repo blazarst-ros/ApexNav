@@ -141,3 +141,51 @@ Semantic Verification Prior:
   {category: chair, mu_v: 0.85, sigma_v: 0.30, unit: meter, rationale: Chairs have vertical backs and a seat at about hip height, so a camera at that level distinguishes them from couches.},
   {category: sofa, mu_v: 0.80, sigma_v: 0.30, unit: meter, rationale: Sofas are essentially the same as couches, requiring the same low camera for correct leg count and shape identification.}
 ]
+table | dining table | coffee table | desk: Analyzing the query: The user has provided four labels that are related: "table", "dining table", "coffee table", and "desk". I need to process each step sequentially based on the instructions. However, looking at the instruction structure, each step gives "a label", but here there are four. I should interpret this as a single step with a group of closely related labels, or perhaps treat it as one combined concept of "table-like furniture". Since the instruction says "I will give you a label" (singular), I'll treat the first one "table" as the primary label, and the others as context.
+
+Given the context, "table | dining table | coffee table | desk" - these are all types of tables. For the Answer line, I need misdetection labels from COCO classes, confidence threshold, and room.
+
+Misdetection possibilities:
+- bench: A bench has a similar flat top surface and legs, could be misdetected as a table
+- sofa: From certain angles, a long sofa might resemble a low coffee table or desk
+- bed: A bed has a flat rectangular surface, though usually larger
+
+The confidence threshold: Table-like furniture is medium-sized. Smaller than a bed (0.65) but larger than an apple (0.25). A typical table in a home would be around 0.45-0.55. Let's use 0.50.
+
+Room: Tables appear in dining rooms, living rooms, offices, kitchens. Since there are many types, "everywhere" is appropriate.
+
+Answer: [bench, sofa, bed, 0.50, everywhere]
+
+Semantic Verification Prior: I need to provide mu_v and sigma_v for the target label "table" and each misdetection label. Note that the user specified "table | dining table | coffee table | desk" - for the target label, I'll use "table" as the primary, but semantically I can treat it as a general table item.
+
+Let me think about the heights:
+- Table: typical table height is about 0.75m, so camera at 0.85m to look down slightly
+- Bench: similar to table height
+- Sofa: lower, about 0.45m seat height
+- Bed: low, about 0.50m
+
+Given the instruction says "the target label and each misdetection label" about verification camera height, I'll use all labels provided by the user as the target group, combined with the 3 misdetection labels.
+
+Wait, re-reading: "For the target label and each misdetection label, estimate a category-specific recommended verification camera height mu_v and height tolerance sigma_v"
+
+The target label from the user is the first one "table", but the user specified a group. I'll use "table" as the primary target label for the verification prior, since the Answer already captures the higher-level concept.
+
+Let me finalize:
+
+Answer: [bench, sofa, bed, 0.50, everywhere]
+
+Semantic Verification Prior:
+[
+  {category: table, mu_v: 0.85, sigma_v: 0.25, unit: meter, rationale: Tables are standard waist-height furniture, best viewed from slightly above tabletop height.},
+  {category: bench, mu_v: 0.80, sigma_v: 0.25, unit: meter, rationale: Benches have similar height to tables, requiring a mid-level view for surface distinction.},
+  {category: sofa, mu_v: 0.55, sigma_v: 0.20, unit: meter, rationale: Sofas are low furniture, requiring a lower camera height to distinguish from table surfaces.},
+  {category: bed, mu_v: 0.55, sigma_v: 0.20, unit: meter, rationale: Beds are low horizontal surfaces, best verified from a lower viewpoint to assess mattress vs tabletop.}
+]Answer: [bench, sofa, bed, 0.50, everywhere]
+
+Semantic Verification Prior:
+[
+  {category: table, mu_v: 0.85, sigma_v: 0.25, unit: meter, rationale: Tables are standard waist-height furniture, best viewed from slightly above tabletop height.},
+  {category: bench, mu_v: 0.80, sigma_v: 0.25, unit: meter, rationale: Benches have similar height to tables, requiring a mid-level view for surface distinction.},
+  {category: sofa, mu_v: 0.55, sigma_v: 0.20, unit: meter, rationale: Sofas are low furniture, requiring a lower camera height to distinguish from table surfaces.},
+  {category: bed, mu_v: 0.55, sigma_v: 0.20, unit: meter, rationale: Beds are low horizontal surfaces, best verified from a lower viewpoint to assess mattress vs tabletop.}
+]

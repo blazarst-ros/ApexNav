@@ -26,6 +26,7 @@ find_package(PCL 1.7 REQUIRED)
 add_message_files(
   FILES
   MultipleMasksWithConfidence.msg
+  SemanticEvidenceDebug.msg
 )
 
 generate_messages(
@@ -67,3 +68,4 @@ target_link_libraries(plan_env
   ${catkin_LIBRARIES}
   ${PCL_LIBRARIES}
 )
+add_dependencies(plan_env ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS})

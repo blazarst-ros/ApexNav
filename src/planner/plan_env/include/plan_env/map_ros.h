@@ -10,6 +10,7 @@
 
 // Custom messages and mapping components
 #include <plan_env/MultipleMasksWithConfidence.h>
+#include <plan_env/SemanticEvidenceDebug.h>
 #include <plan_env/sdf_map2d.h>
 #include <plan_env/object_map2d.h>
 #include <plan_env/value_map2d.h>
@@ -95,6 +96,10 @@ private:
   void publishESDFMap();
   void publishValueMap();
   void publishPointCloud(const ros::Publisher& pub, const PointCloud3D::Ptr& point_cloud);
+  void publishSemanticEvidenceDebug(
+      int agent_id, const DetectedObject& detected_object, int object_cluster_id,
+      const std::string& stage = "map_update", const std::string& status = "accepted",
+      const std::string& reason = "");
 
   // Data processing functions (all take agent_id to index agents_[agent_id])
   void processDepthImage(int agent_id);           ///< Process raw depth image into 3D point cloud
@@ -134,6 +139,7 @@ private:
   vector<SynchronizerImagePose> sync_image_pose_;
   vector<ros::Subscriber> detected_object_cloud_sub_;
   vector<ros::Subscriber> itm_score_sub_;
+  vector<ros::Publisher> semantic_evidence_debug_pub_;
 
   // ROS publishers for shared merged-map visualization
   ros::Publisher occupied_pub_, occupied_inflate_pub_, unknown_pub_, free_pub_, esdf_pub_,
@@ -155,6 +161,7 @@ private:
   int skip_pixel_;                 ///< Pixel skip factor for processing efficiency
   std::string frame_id_;           ///< Reference frame ID for published data
   double virtual_ground_height_;   ///< Virtual ground plane offset for navigation
+  bool loose_semantic_evidence_debug_ = true;
 
   // Map state flags (shared)
   bool local_updated_, esdf_need_update_;

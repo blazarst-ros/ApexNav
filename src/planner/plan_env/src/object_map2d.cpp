@@ -69,6 +69,53 @@ void ObjectMap2D::setConfidenceThreshold(double val)
   ROS_INFO("Set Confidence Threshold = %f", val);
 }
 
+bool ObjectMap2D::getSemanticEvidenceSnapshot(
+    int object_id, int label, SemanticEvidenceSnapshot& snapshot)
+{
+  if (object_id < 0 || object_id >= (int)objects_.size())
+    return false;
+  const ObjectCluster& object = objects_[object_id];
+  if (label < 0 || label >= (int)object.confidence_scores_.size())
+    return false;
+
+  snapshot.cluster_id = object_id;
+  snapshot.label = label;
+  snapshot.best_label = object.best_label_;
+  snapshot.use_semantic_observability = use_semantic_observability_;
+  snapshot.lambda_d = lambda_d_;
+  snapshot.r0 = r0_;
+  snapshot.beta = beta_;
+  snapshot.min_semantic_evidence = min_semantic_evidence_;
+  snapshot.min_observation_num = min_observation_num_;
+  snapshot.fused_confidence = object.confidence_scores_[label];
+  snapshot.observation_num = object.observation_nums_[label];
+  snapshot.observation_cloud_sum = object.observation_cloud_sums_[label];
+  snapshot.observability = object.observability_scores_[label];
+  snapshot.quality_evidence = object.quality_evidence_scores_[label];
+
+  if (!object.quality_evidence_scores_.empty()) {
+    snapshot.target_quality_evidence = object.quality_evidence_scores_[0];
+    snapshot.target_fused_confidence = object.confidence_scores_[0];
+    snapshot.target_observation_num = object.observation_nums_[0];
+    snapshot.target_passes_threshold =
+        object.quality_evidence_scores_[0] >= min_semantic_evidence_ &&
+        object.observation_nums_[0] >= min_observation_num_;
+    snapshot.target_is_best_label = object.best_label_ == 0;
+  }
+
+  return true;
+}
+
+void ObjectMap2D::getSemanticEvidenceConfig(SemanticEvidenceSnapshot& snapshot) const
+{
+  snapshot.use_semantic_observability = use_semantic_observability_;
+  snapshot.lambda_d = lambda_d_;
+  snapshot.r0 = r0_;
+  snapshot.beta = beta_;
+  snapshot.min_semantic_evidence = min_semantic_evidence_;
+  snapshot.min_observation_num = min_observation_num_;
+}
+
 /**
  * @brief Process observation clouds to adjust detection confidence
  *

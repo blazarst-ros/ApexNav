@@ -8,6 +8,8 @@
 #include <vector>
 #include <list>
 #include <utility>
+#include <algorithm>
+#include <cmath>
 
 // Internal mapping components
 #include <plan_env/sdf_map2d.h>
@@ -59,6 +61,28 @@ struct DetectedObject {
   double camera_height = 1.0;                             ///< Camera height for this observation
   double mu_v = 1.0;                                      ///< LLM prior recommended height
   double sigma_v = 0.35;                                  ///< LLM prior height tolerance
+};
+
+struct SemanticEvidenceSnapshot {
+  int cluster_id = -1;
+  int label = -1;
+  int best_label = -1;
+  bool use_semantic_observability = true;
+  double lambda_d = 0.0;
+  double r0 = 0.0;
+  double beta = 0.0;
+  double min_semantic_evidence = 0.0;
+  int min_observation_num = 0;
+  double fused_confidence = 0.0;
+  int observation_num = 0;
+  int observation_cloud_sum = 0;
+  double observability = 0.0;
+  double quality_evidence = 0.0;
+  double target_quality_evidence = 0.0;
+  double target_fused_confidence = 0.0;
+  int target_observation_num = 0;
+  bool target_passes_threshold = false;
+  bool target_is_best_label = false;
 };
 
 struct Viewpoint2D {
@@ -128,6 +152,8 @@ public:
       const vector<pcl::shared_ptr<pcl::PointCloud<pcl::PointXYZ>>> observation_clouds,
       const double& itm_score);
   void setConfidenceThreshold(double val);
+  bool getSemanticEvidenceSnapshot(int object_id, int label, SemanticEvidenceSnapshot& snapshot);
+  void getSemanticEvidenceConfig(SemanticEvidenceSnapshot& snapshot) const;
 
   void getAllConfidenceObjectClouds(pcl::shared_ptr<pcl::PointCloud<pcl::PointXYZ>>& object_clouds);
   void getTopConfidenceObjectCloud(
@@ -376,8 +402,7 @@ inline Eigen::Vector4d ObjectMap2D::getColor(const double& h, double alpha)
 {
   double h1 = h;
   if (h1 < 0.0 || h1 > 1.0) {
-    std::cout << "h out of range" << std::endl;
-    h1 = 0.0;
+    h1 = std::fmod(std::max(0.0, h1), 1.0);
   }
 
   double lambda;

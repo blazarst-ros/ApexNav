@@ -189,12 +189,13 @@ void SDFMap2D::inputObjectCloud2D(
   object_cluster_ids.clear();
   // Process each detected object and try to associate it with existing clusters
   for (auto detected_object : detected_objects) {
-    if (detected_object.cloud->points.empty())
+    if (detected_object.cloud->points.empty()) {
+      object_cluster_ids.push_back(-1);
       continue;
+    }
 
     int object_cluster_id = object_map2d_->searchSingleObjectCluster(detected_object);
-    if (object_cluster_id != -1)
-      object_cluster_ids.push_back(object_cluster_id);
+    object_cluster_ids.push_back(object_cluster_id);
   }
 }
 

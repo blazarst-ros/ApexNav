@@ -43,7 +43,7 @@ constexpr double ACTION_ANGLE = M_PI / 6.0;
 // Distances (m)
 constexpr double STUCKING_DISTANCE = 0.05;       // consider stuck if movement < this
 constexpr double REACH_DISTANCE = 0.35;          // reach object distance
-constexpr double SOFT_REACH_DISTANCE = 0.45;     // soft reach distance for object
+constexpr double SOFT_REACH_DISTANCE = 0.34;     // soft reach distance for object
 constexpr double LOCAL_DISTANCE = 0.80;          // local target lookahead
 constexpr double FORWARD_DISTANCE = 0.15;        // min clearance for marking obstacles
 constexpr double FORCE_DORMANT_DISTANCE = 0.35;  // force dormant frontier if very close

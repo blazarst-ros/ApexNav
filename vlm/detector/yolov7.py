@@ -129,6 +129,10 @@ class YOLOv7Client:
     ) -> ObjectDetections:
         response = send_request(
             self.url,
+            retries=1,
+            quiet=True,
+            exit_on_failure=False,
+            total_timeout=2,
             image=image_numpy,
             agnostic_nms=agnostic_nms,
             conf_thres=conf_thres,

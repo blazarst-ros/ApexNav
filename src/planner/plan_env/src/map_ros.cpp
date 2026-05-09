@@ -10,6 +10,7 @@
  */
 
 #include <plan_env/map_ros.h>
+#include <plan_env/semantic_observability.h>
 
 #include <algorithm>
 #include <cmath>
@@ -39,6 +40,7 @@ void MapROS::init()
   node_.param("map_ros/skip_pixel", skip_pixel_, -1);
   node_.param("map_ros/frame_id", frame_id_, string("world"));
   node_.param("map_ros/virtual_ground_height", virtual_ground_height_, -0.28);
+  node_.param("map_ros/loose_semantic_evidence_debug", loose_semantic_evidence_debug_, true);
 
   // Handle Habitat simulator vs real-world configuration
   bool is_real_world;
@@ -170,6 +172,23 @@ void MapROS::init()
                 [this, id](const std_msgs::Float64ConstPtr& msg) {
                     return itmScoreCallback(id, msg);
                 })));
+
+    std::string debug_topic =
+        "/semantic_observability/agent_" + std::to_string(id) + "/evidence_debug";
+    semantic_evidence_debug_pub_.push_back(
+        node_.advertise<plan_env::SemanticEvidenceDebug>(debug_topic, 30, true));
+    DetectedObject init_detection;
+    init_detection.cloud.reset(new PointCloud3D());
+    init_detection.score = 0.0;
+    init_detection.label = -1;
+    init_detection.mask_scale = 0.0;
+    init_detection.distance = 0.0;
+    init_detection.view_angle = 0.0;
+    init_detection.camera_height = agents_[id].camera_pos_(2);
+    init_detection.mu_v = 1.0;
+    init_detection.sigma_v = 0.35;
+    publishSemanticEvidenceDebug(
+        id, init_detection, -1, "init", "waiting", "waiting_for_detection_message");
   }
 
   // Initialize object tracking variables (shared)
@@ -230,8 +249,74 @@ void MapROS::detectedObjectCloudCallback(int agent_id, const plan_env::MultipleM
   if (euler[2] < 0)
     euler[2] += M_PI;
   double camera_pitch = euler[2];
-  if (camera_pitch < 1.5)  // Skip if camera not tilted down enough
+  if (loose_semantic_evidence_debug_) {
+    if (msg->confidence_scores.empty()) {
+      DetectedObject empty_detection;
+      empty_detection.cloud.reset(new PointCloud3D());
+      empty_detection.score = 0.0;
+      empty_detection.label = -1;
+      empty_detection.mask_scale = 0.0;
+      empty_detection.distance = 0.0;
+      empty_detection.view_angle = 0.0;
+      empty_detection.camera_height = agent.camera_pos_(2);
+      empty_detection.mu_v = 1.0;
+      empty_detection.sigma_v = 0.35;
+      publishSemanticEvidenceDebug(
+          agent_id, empty_detection, -1, "input", "empty", "detection_message_empty");
+    }
+    for (int i = 0; i < (int)msg->confidence_scores.size(); i++) {
+      PointCloud3D::Ptr raw_cloud(new PointCloud3D());
+      pcl::fromROSMsg(msg->point_clouds[i], *raw_cloud);
+
+      double object_distance = 0.0;
+      double view_angle = 0.0;
+      if (!raw_cloud->points.empty()) {
+        Eigen::Vector3d object_center = Eigen::Vector3d::Zero();
+        for (const auto& object_pt : raw_cloud->points) {
+          object_center += Eigen::Vector3d(object_pt.x, object_pt.y, object_pt.z);
+        }
+        object_center /= (double)raw_cloud->points.size();
+        object_distance = (object_center - agent.camera_pos_).norm();
+
+        if (object_distance > 1e-6) {
+          Eigen::Vector3d target_dir = (object_center - agent.camera_pos_) / object_distance;
+          Eigen::Vector3d optical_axis = agent.camera_q_.toRotationMatrix() * Eigen::Vector3d::UnitZ();
+          double cos_theta = optical_axis.normalized().dot(target_dir);
+          cos_theta = std::max(-1.0, std::min(1.0, cos_theta));
+          view_angle = std::acos(cos_theta);
+        }
+      }
+
+      DetectedObject raw_detection;
+      raw_detection.cloud = raw_cloud;
+      raw_detection.score = msg->confidence_scores[i];
+      raw_detection.label = msg->label_indices[i];
+      raw_detection.mask_scale = has_mask_scales ? msg->mask_scales[i] : 1.0;
+      raw_detection.distance = object_distance;
+      raw_detection.view_angle = view_angle;
+      raw_detection.camera_height = agent.camera_pos_(2);
+      raw_detection.mu_v = 1.0;
+      raw_detection.sigma_v = 0.35;
+      publishSemanticEvidenceDebug(
+          agent_id, raw_detection, -1, "input", "received", "raw_detection_before_filters");
+    }
+  }
+
+  if (camera_pitch < 1.5 && !loose_semantic_evidence_debug_) {  // Skip if camera not tilted down enough
+    DetectedObject pitch_detection;
+    pitch_detection.cloud.reset(new PointCloud3D());
+    pitch_detection.score = 0.0;
+    pitch_detection.label = -1;
+    pitch_detection.mask_scale = 0.0;
+    pitch_detection.distance = 0.0;
+    pitch_detection.view_angle = 0.0;
+    pitch_detection.camera_height = agent.camera_pos_(2);
+    pitch_detection.mu_v = 1.0;
+    pitch_detection.sigma_v = 0.35;
+    publishSemanticEvidenceDebug(
+        agent_id, pitch_detection, -1, "pitch_gate", "rejected", "camera_pitch_below_1.5");
     return;
+  }
 
   // Backup previous per-agent over-depth object cloud for consistency tracking
   auto last_over_depth_cloud =
@@ -252,6 +337,15 @@ void MapROS::detectedObjectCloudCallback(int agent_id, const plan_env::MultipleM
     auto mask_scale = has_mask_scales ? msg->mask_scales[i] : 1.0;
     if (label < 0) {
       ROS_WARN("[SemanticObservability] Ignore detection with invalid label %d", label);
+      DetectedObject invalid_detection;
+      invalid_detection.cloud.reset(new PointCloud3D());
+      pcl::fromROSMsg(cloud, *invalid_detection.cloud);
+      invalid_detection.score = confidence_score;
+      invalid_detection.label = label;
+      invalid_detection.mask_scale = mask_scale;
+      invalid_detection.camera_height = agent.camera_pos_(2);
+      publishSemanticEvidenceDebug(
+          agent_id, invalid_detection, -1, "label_filter", "rejected", "invalid_label");
       continue;
     }
 
@@ -286,6 +380,14 @@ void MapROS::detectedObjectCloudCallback(int agent_id, const plan_env::MultipleM
         ROS_ERROR("Have all over depth object cloud!!!!");
         *agent.over_depth_object_cloud_ += *over_depth_object_cloud;
       }
+      DetectedObject rejected_object;
+      rejected_object.cloud = over_depth_object_cloud;
+      rejected_object.score = confidence_score;
+      rejected_object.label = label;
+      rejected_object.mask_scale = mask_scale;
+      rejected_object.camera_height = agent.camera_pos_(2);
+      publishSemanticEvidenceDebug(
+          agent_id, rejected_object, -1, "depth_filter", "rejected", "all_points_over_depth");
       continue;
     }
 
@@ -293,11 +395,27 @@ void MapROS::detectedObjectCloudCallback(int agent_id, const plan_env::MultipleM
     single_object_cloud = dbscan(single_object_cloud, 0.12f, 10);
     if (single_object_cloud == nullptr) {
       ROS_ERROR("After DBSCAN, no point cloud cluster!!");
+      DetectedObject rejected_object;
+      rejected_object.cloud.reset(new PointCloud3D());
+      rejected_object.score = confidence_score;
+      rejected_object.label = label;
+      rejected_object.mask_scale = mask_scale;
+      rejected_object.camera_height = agent.camera_pos_(2);
+      publishSemanticEvidenceDebug(
+          agent_id, rejected_object, -1, "dbscan", "rejected", "no_cluster_found");
       continue;
     }
 
     if (single_object_cloud->points.empty()) {
       ROS_ERROR("Single object point cloud is empty!!!");
+      DetectedObject rejected_object;
+      rejected_object.cloud = single_object_cloud;
+      rejected_object.score = confidence_score;
+      rejected_object.label = label;
+      rejected_object.mask_scale = mask_scale;
+      rejected_object.camera_height = agent.camera_pos_(2);
+      publishSemanticEvidenceDebug(
+          agent_id, rejected_object, -1, "dbscan", "rejected", "cluster_empty");
       continue;
     }
 
@@ -366,6 +484,13 @@ void MapROS::detectedObjectCloudCallback(int agent_id, const plan_env::MultipleM
     *map_->object_map2d_->all_object_clouds_ = *filtered_all_object_cloud;
     vector<int> detected_object_cluster_ids;
     map_->inputObjectCloud2D(detected_objects, detected_object_cluster_ids);
+    for (int i = 0; i < (int)detected_objects.size() &&
+                    i < (int)detected_object_cluster_ids.size(); ++i) {
+      const int cluster_id = detected_object_cluster_ids[i];
+      publishSemanticEvidenceDebug(agent_id, detected_objects[i], cluster_id,
+          "map_update", cluster_id >= 0 ? "accepted" : "rejected",
+          cluster_id >= 0 ? "" : "no_occupied_object_cells");
+    }
 
     // Extract observation objects not detected by vision
     getObservationObjectsCloud(agent_id, detected_object_cluster_ids);
@@ -374,6 +499,67 @@ void MapROS::detectedObjectCloudCallback(int agent_id, const plan_env::MultipleM
   double object_map_process_time = (ros::Time::now() - t1).toSec();
   ROS_INFO_THROTTLE(
       10.0, "[Calculating Time] Object Map process time = %.3f s", object_map_process_time);
+}
+
+void MapROS::publishSemanticEvidenceDebug(
+    int agent_id, const DetectedObject& detected_object, int object_cluster_id,
+    const std::string& stage, const std::string& status, const std::string& reason)
+{
+  if (agent_id < 0 || agent_id >= (int)semantic_evidence_debug_pub_.size())
+    return;
+  SemanticEvidenceSnapshot snapshot;
+  if (map_ != nullptr && map_->object_map2d_ != nullptr)
+    map_->object_map2d_->getSemanticEvidenceConfig(snapshot);
+  bool has_snapshot = false;
+  if (object_cluster_id >= 0 && map_ != nullptr && map_->object_map2d_ != nullptr) {
+    has_snapshot = map_->object_map2d_->getSemanticEvidenceSnapshot(
+        object_cluster_id, detected_object.label, snapshot);
+  }
+
+  const int raw_point_count = detected_object.cloud ? detected_object.cloud->points.size() : 0;
+  double observation_rho = semantic_observability::observability(detected_object.camera_height,
+      detected_object.mu_v, detected_object.sigma_v, detected_object.distance,
+      detected_object.view_angle, detected_object.mask_scale, snapshot.lambda_d, snapshot.r0);
+  double observation_evidence = semantic_observability::saturatedEvidence(
+      observation_rho, detected_object.score, 1, snapshot.beta);
+
+  plan_env::SemanticEvidenceDebug msg;
+  msg.header.stamp = ros::Time::now();
+  msg.header.frame_id = frame_id_;
+  msg.agent_id = agent_id;
+  msg.cluster_id = has_snapshot ? snapshot.cluster_id : object_cluster_id;
+  msg.label = has_snapshot ? snapshot.label : detected_object.label;
+  msg.best_label = has_snapshot ? snapshot.best_label : -1;
+  msg.stage = stage;
+  msg.status = status;
+  msg.reason = reason;
+  msg.accepted = status == "accepted";
+  msg.use_semantic_observability = snapshot.use_semantic_observability;
+  msg.lambda_d = snapshot.lambda_d;
+  msg.r0 = snapshot.r0;
+  msg.beta = snapshot.beta;
+  msg.min_semantic_evidence = snapshot.min_semantic_evidence;
+  msg.min_observation_num = snapshot.min_observation_num;
+  msg.camera_height = detected_object.camera_height;
+  msg.mu_v = detected_object.mu_v;
+  msg.sigma_v = detected_object.sigma_v;
+  msg.distance = detected_object.distance;
+  msg.view_angle = detected_object.view_angle;
+  msg.mask_scale = detected_object.mask_scale;
+  msg.raw_confidence = detected_object.score;
+  msg.fused_confidence = has_snapshot ? snapshot.fused_confidence : 0.0;
+  msg.observation_num = has_snapshot ? snapshot.observation_num : 0;
+  msg.observation_cloud_sum =
+      has_snapshot ? snapshot.observation_cloud_sum : raw_point_count;
+  msg.observability = has_snapshot ? snapshot.observability : observation_rho;
+  msg.quality_evidence = has_snapshot ? snapshot.quality_evidence : observation_evidence;
+  msg.target_quality_evidence = has_snapshot ? snapshot.target_quality_evidence : 0.0;
+  msg.target_fused_confidence = has_snapshot ? snapshot.target_fused_confidence : 0.0;
+  msg.target_observation_num = has_snapshot ? snapshot.target_observation_num : 0;
+  msg.target_passes_threshold = has_snapshot ? snapshot.target_passes_threshold : false;
+  msg.target_is_best_label = has_snapshot ? snapshot.target_is_best_label : false;
+
+  semantic_evidence_debug_pub_[agent_id].publish(msg);
 }
 
 void MapROS::updateESDFCallback(const ros::TimerEvent& /*event*/)
@@ -607,7 +793,10 @@ void MapROS::getObservationObjectsCloud(int agent_id, const vector<int>& filter_
   vector<Vector3d> bmins, bmaxs;
   map_->object_map2d_->getObjectBoxes(bmins, bmaxs);
   vector<char> filter_object_flag(bmins.size(), 0);
-  for (auto filter_object_id : filter_object_ids) filter_object_flag[filter_object_id] = 1;
+  for (auto filter_object_id : filter_object_ids) {
+    if (filter_object_id >= 0 && filter_object_id < (int)filter_object_flag.size())
+      filter_object_flag[filter_object_id] = 1;
+  }
 
   pcl::CropBox<Point3D> crop_box_filter;
   crop_box_filter.setInputCloud(filtered_depth_cloud);

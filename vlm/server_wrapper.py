@@ -3,7 +3,7 @@ import os
 import random
 import socket
 import time
-from typing import Any, Dict
+from typing import Any, Dict, Tuple
 
 import cv2
 import numpy as np
@@ -66,26 +66,56 @@ def str_to_image(img_str: str) -> np.ndarray:
     return img_np
 
 
-def send_request(url: str, **kwargs: Any) -> dict:
+def send_request(
+    url: str,
+    retries: int = 10,
+    retry_delay_range: Tuple[int, int] = (20, 30),
+    quiet: bool = False,
+    exit_on_failure: bool = True,
+    total_timeout: float = 20,
+    request_timeout: float = 1,
+    **kwargs: Any,
+) -> dict:
     response = {}
-    for attempt in range(10):
+    for attempt in range(retries):
         try:
-            response = _send_request(url, **kwargs)
+            response = _send_request(
+                url,
+                quiet=quiet,
+                total_timeout=total_timeout,
+                request_timeout=request_timeout,
+                **kwargs,
+            )
             break
         except Exception as e:
-            if attempt == 9:
-                print(e)
-                exit()
+            if attempt == retries - 1:
+                if not quiet:
+                    print(e)
+                if exit_on_failure:
+                    exit()
+                raise
             else:
-                print(f"VLM Server Error Type: {type(e).__name__}")
-                print(f"VLM Server Error Detail: {str(e)}")
-                print(f"Retrying in 20-30 seconds...")
-                time.sleep(20 + random.random() * 10)
+                if not quiet:
+                    print(f"VLM Server Error Type: {type(e).__name__}")
+                    print(f"VLM Server Error Detail: {str(e)}")
+                    print(
+                        f"Retrying in {retry_delay_range[0]}-{retry_delay_range[1]} seconds..."
+                    )
+                time.sleep(
+                    retry_delay_range[0]
+                    + random.random() * (retry_delay_range[1] - retry_delay_range[0])
+                )
 
     return response
 
 
-def _send_request(url: str, **kwargs: Any) -> dict:
+def _send_request(
+    url: str,
+    quiet: bool = False,
+    total_timeout: float = 20,
+    request_timeout: float = 1,
+    **kwargs: Any,
+) -> dict:
     lockfiles_dir = "lockfiles"
     if not os.path.exists(lockfiles_dir):
         os.makedirs(lockfiles_dir)
@@ -132,7 +162,9 @@ def _send_request(url: str, **kwargs: Any) -> dict:
         start_time = time.time()
         while True:
             try:
-                resp = requests.post(url, headers=headers, json=payload, timeout=1)
+                resp = requests.post(
+                    url, headers=headers, json=payload, timeout=request_timeout
+                )
                 if resp.status_code == 200:
                     result = resp.json()
                     break
@@ -142,9 +174,10 @@ def _send_request(url: str, **kwargs: Any) -> dict:
                 requests.exceptions.Timeout,
                 requests.exceptions.RequestException,
             ) as e:
-                print(e)
-                if time.time() - start_time > 20:
-                    raise Exception("Request timed out after 20 seconds")
+                if not quiet:
+                    print(e)
+                if time.time() - start_time > total_timeout:
+                    raise Exception(f"Request timed out after {total_timeout} seconds")
 
         try:
             # Delete the lock file
