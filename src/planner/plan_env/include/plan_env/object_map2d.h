@@ -69,7 +69,8 @@ struct SemanticEvidenceSnapshot {
   int best_label = -1;
   bool use_semantic_observability = true;
   double lambda_d = 0.0;
-  double r0 = 0.0;
+  double r0 = 0.007;
+  double mask_sigmoid_k = 300.0;
   double beta = 0.0;
   double min_semantic_evidence = 0.0;
   int min_observation_num = 0;
@@ -227,7 +228,8 @@ private:
   double min_confidence_;    ///< Minimum confidence threshold for object acceptance
   double min_semantic_evidence_;  ///< Minimum quality-aware evidence threshold
   double lambda_d_;          ///< Distance decay coefficient
-  double r0_;                ///< Reference mask scale
+  double r0_;                ///< Mask sigmoid midpoint
+  double mask_sigmoid_k_;    ///< Mask sigmoid slope
   double beta_;              ///< Observation saturation coefficient
   double resolution_;        ///< Grid resolution in meters
   double leaf_size_;         ///< Voxel size for point cloud downsampling

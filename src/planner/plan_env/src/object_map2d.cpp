@@ -36,7 +36,8 @@ ObjectMap2D::ObjectMap2D(SDFMap2D* sdf_map, ros::NodeHandle& nh)
   nh.param("object/use_semantic_observability", use_semantic_observability_, true);
   nh.param("object/vis_cloud", is_vis_cloud_, false);
   nh.param("object/lambda_d", lambda_d_, 0.25);
-  nh.param("object/r0", r0_, 0.03);
+  nh.param("object/r0", r0_, 0.007);
+  nh.param("object/mask_sigmoid_k", mask_sigmoid_k_, 300.0);
   nh.param("object/beta", beta_, 0.8);
   nh.param("object/min_semantic_evidence", min_semantic_evidence_, 0.05);
 
@@ -84,6 +85,7 @@ bool ObjectMap2D::getSemanticEvidenceSnapshot(
   snapshot.use_semantic_observability = use_semantic_observability_;
   snapshot.lambda_d = lambda_d_;
   snapshot.r0 = r0_;
+  snapshot.mask_sigmoid_k = mask_sigmoid_k_;
   snapshot.beta = beta_;
   snapshot.min_semantic_evidence = min_semantic_evidence_;
   snapshot.min_observation_num = min_observation_num_;
@@ -111,6 +113,7 @@ void ObjectMap2D::getSemanticEvidenceConfig(SemanticEvidenceSnapshot& snapshot) 
   snapshot.use_semantic_observability = use_semantic_observability_;
   snapshot.lambda_d = lambda_d_;
   snapshot.r0 = r0_;
+  snapshot.mask_sigmoid_k = mask_sigmoid_k_;
   snapshot.beta = beta_;
   snapshot.min_semantic_evidence = min_semantic_evidence_;
   snapshot.min_observation_num = min_observation_num_;
@@ -309,7 +312,7 @@ void ObjectMap2D::updateQualityAwareEvidence(
 
   double rho = semantic_observability::observability(detected_object.camera_height,
       detected_object.mu_v, detected_object.sigma_v, detected_object.distance,
-      detected_object.view_angle, detected_object.mask_scale, lambda_d_, r0_);
+      detected_object.view_angle, detected_object.mask_scale, lambda_d_, r0_, mask_sigmoid_k_);
   double evidence = semantic_observability::saturatedEvidence(
       rho, object.confidence_scores_[label], object.observation_nums_[label], beta_);
 

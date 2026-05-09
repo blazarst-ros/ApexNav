@@ -28,17 +28,19 @@ double angleQuality(double theta)
   return c * c;
 }
 
-double maskScaleQuality(double mask_scale, double r0)
+double maskScaleQuality(double mask_scale, double r0, double mask_sigmoid_k)
 {
-  const double ref = std::max(r0, 1e-6);
-  return clamp(mask_scale / ref, 0.0, 1.0);
+  const double midpoint = std::max(r0, 1e-6);
+  const double slope = std::max(mask_sigmoid_k, 1e-6);
+  const double exponent = clamp(-slope * (std::max(0.0, mask_scale) - midpoint), -60.0, 60.0);
+  return 1.0 / (1.0 + std::exp(exponent));
 }
 
 double observability(double h, double mu_v, double sigma_v, double distance, double theta,
-    double mask_scale, double lambda_d, double r0)
+    double mask_scale, double lambda_d, double r0, double mask_sigmoid_k)
 {
   return heightAdaptation(h, mu_v, sigma_v) * distanceQuality(distance, lambda_d) *
-         angleQuality(theta) * maskScaleQuality(mask_scale, r0);
+         angleQuality(theta) * maskScaleQuality(mask_scale, r0, mask_sigmoid_k);
 }
 
 double saturatedEvidence(double observability_score, double confidence, int observation_num,

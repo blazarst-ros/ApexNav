@@ -519,7 +519,8 @@ void MapROS::publishSemanticEvidenceDebug(
   const int raw_point_count = detected_object.cloud ? detected_object.cloud->points.size() : 0;
   double observation_rho = semantic_observability::observability(detected_object.camera_height,
       detected_object.mu_v, detected_object.sigma_v, detected_object.distance,
-      detected_object.view_angle, detected_object.mask_scale, snapshot.lambda_d, snapshot.r0);
+      detected_object.view_angle, detected_object.mask_scale, snapshot.lambda_d, snapshot.r0,
+      snapshot.mask_sigmoid_k);
   double observation_evidence = semantic_observability::saturatedEvidence(
       observation_rho, detected_object.score, 1, snapshot.beta);
 
@@ -537,6 +538,7 @@ void MapROS::publishSemanticEvidenceDebug(
   msg.use_semantic_observability = snapshot.use_semantic_observability;
   msg.lambda_d = snapshot.lambda_d;
   msg.r0 = snapshot.r0;
+  msg.mask_sigmoid_k = snapshot.mask_sigmoid_k;
   msg.beta = snapshot.beta;
   msg.min_semantic_evidence = snapshot.min_semantic_evidence;
   msg.min_observation_num = snapshot.min_observation_num;

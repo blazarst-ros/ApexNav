@@ -84,7 +84,8 @@
         <param name="object/vis_cloud" value="true" type="bool"/>
         <param name="object/use_semantic_observability" value="true" type="bool"/>
         <param name="object/lambda_d" value="0.25" type="double"/>
-        <param name="object/r0" value="0.03" type="double"/>
+        <param name="object/r0" value="0.007" type="double"/>
+        <param name="object/mask_sigmoid_k" value="300.0" type="double"/>
         <param name="object/beta" value="0.8" type="double"/>
         <param name="object/min_semantic_evidence" value="0.15" type="double"/>
 

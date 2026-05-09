@@ -18,6 +18,7 @@ bool use_semantic_observability
 # Innovation1 runtime parameters
 float64 lambda_d
 float64 r0
+float64 mask_sigmoid_k
 float64 beta
 float64 min_semantic_evidence
 int32 min_observation_num
