@@ -20,6 +20,7 @@
 #include <nav_msgs/Odometry.h>
 #include <std_msgs/Float64.h>
 #include <std_msgs/Int32.h>
+#include <std_msgs/String.h>
 #include <visualization_msgs/Marker.h>
 
 using Eigen::Vector2d;
@@ -86,14 +87,19 @@ private:
   shared_ptr<FSMParam> fp_;
   shared_ptr<FSMData> fd_;
   ROS_STATE state_[NUM_AGENTS];
+  string exploration_mode_[NUM_AGENTS];
+  ros::WallTime last_mode_debug_publish_time_[NUM_AGENTS];
+  ros::WallTime last_exploration_mode_publish_time_[NUM_AGENTS];
   std::mutex data_mutex_;  // Protect fd_ and state_ array
 
   /* ROS Utils */
   ros::NodeHandle node_;
   ros::Timer exec_timer_, frontier_timer_;
   ros::Subscriber trigger_sub_, odom_sub_[NUM_AGENTS], habitat_state_sub_, confidence_threshold_sub_;
-  ros::Publisher action_pub_[NUM_AGENTS], ros_state_pub_, ros_state_all_pub_, expl_state_pub_, expl_result_pub_;
-  ros::Publisher robot_marker_pub_[NUM_AGENTS];
+  ros::Publisher action_pub_[NUM_AGENTS], ros_state_pub_, ros_state_all_pub_, ros_state_agents_pub_,
+      expl_state_pub_, expl_result_pub_;
+  ros::Publisher robot_marker_pub_[NUM_AGENTS], mode_debug_pub_[NUM_AGENTS],
+      exploration_mode_pub_[NUM_AGENTS];
 
   /* Action Planner */
   int callActionPlanner(int agent_idx);
@@ -111,6 +117,14 @@ private:
   /* Helper functions */
   bool updateFrontierAndObject();
   void transitState(int agent_idx, ROS_STATE new_state, string pos_call);
+  void publishModeDebug(int agent_idx, const string& mode, const ros::Time& stamp);
+  void setExplorationMode(int agent_idx, const string& mode);
+  void publishExplorationMode(int agent_idx, const ros::Time& stamp);
+  string formatModeRecord(int agent_idx, const string& mode, const ros::Time& stamp) const;
+  bool shouldPublishModeRecord(ros::WallTime& last_publish_time) const;
+  string rosStateName(ROS_STATE state) const;
+  string finalResultName(int final_result) const;
+  string explorationResultName(int expl_result) const;
   void wrapAngle(double& angle);
   void publishRobotMarker(int agent_idx);
   void visualize();

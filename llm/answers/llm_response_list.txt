@@ -254,3 +254,85 @@ Semantic Verification Prior:
   {category: bench, mu_v: 0.80, sigma_v: 0.20, unit: meter, rationale: Benches are long seating surfaces usually at typical chair height.},
   {category: dining table, mu_v: 0.95, sigma_v: 0.15, unit: meter, rationale: Dining tables are high horizontal surfaces requiring a raised camera to verify top view.}
 ]
+cabinet: Thought: The user has given the label "cabinet". I need to process it following the instruction format.
+
+For misdetection: Consider objects that may be misdetected as a cabinet by detectors like YOLO and GroundingDINO, based on shape, color, size similarities. Must be COCO classes, at least 3, at most 5.
+
+Cabinets are typically rectangular, box-like pieces of furniture with doors, used for storage. They can be tall or short, often with flat fronts.
+
+Potential COCO misdetection labels:
+- refrigerator: Similar rectangular shape, often in kitchens, can be confused with a tall cabinet (especially if refrigerator paneling matches cabinets).
+- dresser: Another rectangular storage furniture with drawers, similar shape to a cabinet.
+- oven: A built-in oven can look like a cabinet when installed in a cabinet surround.
+- suitcase: A large upright suitcase could resemble a small cabinet in shape and size.
+- bookshelf: Can be similar in overall rectangular shape, though more open.
+
+I'll pick the most shape-similar: refrigerator, dresser, oven, bookshelf (4 labels).
+
+For confidence threshold: The label is "cabinet". The threshold should be in [0.25, 0.65]. A cabinet is a common indoor object, somewhat larger than an apple but not as large as a bed. I'll set it around 0.40.
+
+For room: Cabinet is most common in kitchens and bathrooms, but can be everywhere in a house. However, "kitchen" is the most likely dedicated room for cabinets as storage. Some cabinets in living rooms, but for the format, I'll choose "kitchen" as the primary room with significantly higher probability.
+
+For semantic verification: Provide category-specific recommended camera height (mu_v) and tolerance (sigma_v) for the target (cabinet) and each misdetection label (refrigerator, dresser, oven, bookshelf).
+
+Camera height priors for indoor mobile robots:
+- cabinet: mu_v=1.0m (counter height), sigma_v=0.3m
+- refrigerator: mu_v=1.2m (mid-fridge), sigma_v=0.4m (taller)
+- dresser: mu_v=1.0m (chest height), sigma_v=0.3m
+- oven: mu_v=0.9m (counter height), sigma_v=0.2m (more precise)
+- bookshelf: mu_v=1.3m (mid-shelf), sigma_v=0.4m (taller)
+
+Rationales: short reason for each.
+
+Now formatting the output.
+
+Answer: [refrigerator, dresser, oven, bookshelf, 0.40, kitchen]
+
+Semantic Verification Prior:
+[
+  {category: cabinet, mu_v: 1.0, sigma_v: 0.3, unit: meter, rationale: Common at counter height for kitchen cabinets.},
+  {category: refrigerator, mu_v: 1.2, sigma_v: 0.4, unit: meter, rationale: Tall appliance best viewed at mid-height to see door shape.},
+  {category: dresser, mu_v: 1.0, sigma_v: 0.3, unit: meter, rationale: Typical chest of drawers height for bedroom furniture.},
+  {category: oven, mu_v: 0.9, sigma_v: 0.2, unit: meter, rationale: Built-in at counter level, precise height verification.},
+  {category: bookshelf, mu_v: 1.3, sigma_v: 0.4, unit: meter, rationale: Tall vertical furniture needing a higher viewpoint.}
+]
+
+Double-check: confidence threshold 0.40 is within [0.25, 0.65]. Room is kitchen. Misdetection labels are COCO classes: refrigerator (yes), dresser (yes), oven (yes), bookshelf (yes). All good.Answer: [refrigerator, dresser, oven, bookshelf, 0.40, kitchen]
+
+Semantic Verification Prior:
+[
+  {category: cabinet, mu_v: 1.0, sigma_v: 0.3, unit: meter, rationale: Common at counter height for kitchen cabinets.},
+  {category: refrigerator, mu_v: 1.2, sigma_v: 0.4, unit: meter, rationale: Tall appliance best viewed at mid-height to see door shape.},
+  {category: dresser, mu_v: 1.0, sigma_v: 0.3, unit: meter, rationale: Typical chest of drawers height for bedroom furniture.},
+  {category: oven, mu_v: 0.9, sigma_v: 0.2, unit: meter, rationale: Built-in at counter level, precise height verification.},
+  {category: bookshelf, mu_v: 1.3, sigma_v: 0.4, unit: meter, rationale: Tall vertical furniture needing a higher viewpoint.}
+]
+pillow: Thought: The user provides the label "pillow". I need to consider misdetection, confidence threshold, and room. For pillows, common misdetections could be other soft, rectangular objects like "book" (similar shape from certain angles), "cell phone" (if small and rectangular), "remote" (similar shape), or "tie" (although less common). However, I should stick to COCO classes. In COCO, potential misdetections for a pillow include "book" (rectangular shape), "cell phone" (if small and rectangular, though less likely at a distance), "remote" (similar rectangular shape), and perhaps "handbag" (if soft and placed on a couch). I need at least 3 and at most 5. Let's think of the most common ones: a pillow on a bed or couch can be misdetected as a "book" if it's a thin rectangular pillow, or as a "cell phone" if it's a small throw pillow (though unlikely), but more likely as a "couch" or "bed" itself? No, those are different categories. Actually, common misdetections for a pillow in object detectors might be "teddy bear" (soft, cuddly), but teddy bear is not in COCO. "dog" or "cat" (if the pillow has a shape or color similar), but that's a stretch. Let's think about typical YOLO misdetections. A pillow, especially a decorative rectangular one, can be misdetected as a "book" (similar rectangular shape). A round pillow could be misdetected as a "clock" or "frisbee", but those are less common. In COCO, possible misdetections: "book", "cell phone", "remote", "cup" (if small and cylindrical), "vase" (if shape is similar). To be safe, I'll choose: book, cell phone, remote, cup. That's 4 misdetections.
+
+Confidence threshold: For a pillow in a home, the confidence should be between 0.25 and 0.65. A pillow is a common object but can be ambiguous in appearance. The smallest is an apple at 0.25, and the largest is a bed at 0.65. A pillow is smaller than a bed but larger than an apple? Not necessarily, but the confidence threshold should reflect typical detection difficulty. I'll set it around 0.40 to 0.45. Let's say 0.45 is reasonable.
+
+Room: Pillows are commonly found in bedrooms (on beds) and living rooms (on couches). They can also be in other rooms but less frequently. Since it appears in both bedrooms and living rooms with high probability, the room should be "everywhere" because the probabilities are similar across rooms? Actually, the instructions say: "if the probabilities are similar across rooms, return 'everywhere'." A pillow can appear in bedroom, living room, and sometimes even in a child's playroom. So I'll return "everywhere".
+
+Now, for semantic verification prior: I need to provide mu_v (recommended camera height in meters) and sigma_v (height tolerance) for the target label and each misdetection label. These are common-sense priors for indoor mobile robots. For a pillow, typical height: Pillows are usually on beds (bed height ~0.5-0.7m) or on couches (seat height ~0.4-0.5m). So the recommended camera height for verifying a pillow could be around 0.60 meters (mid-height between bed and couch). The tolerance could be 0.20 meters. For misdetections: 
+- book: often on tables or shelves, height around 0.75-1.0m (table height ~0.75m, shelf ~1.2m), so mu_v=0.90, sigma_v=0.30.
+- cell phone: often on tables or held in hand, typical height 0.75-1.0m, mu_v=0.80, sigma_v=0.25.
+- remote: often on tables or sofas, height 0.40-0.80m (sofa arm ~0.60m, table ~0.75m), mu_v=0.60, sigma_v=0.25.
+- cup: on tables, height 0.75m, mu_v=0.75, sigma_v=0.20.
+
+I'll keep the rationale short.
+
+Thus, the answer should follow the strict structure: 
+Answer: [misdetection_label_1, misdetection_label_2, ..., confidence_threshold, room]
+Semantic Verification Prior:
+[ {category: label, mu_v: value, sigma_v: value, unit: meter, rationale: short_reason}, ... ]
+
+Make sure to output the Answer line exactly as required, then the Semantic Verification Prior block separately.Answer: [book, cell phone, remote, cup, 0.45, everywhere]
+
+Semantic Verification Prior:
+[
+  {category: pillow, mu_v: 0.60, sigma_v: 0.20, unit: meter, rationale: Pillows commonly sit on beds (0.5-0.7 m) or couches (0.4-0.5 m); mid-height view captures shape and texture.},
+  {category: book, mu_v: 0.90, sigma_v: 0.30, unit: meter, rationale: Books are often placed on tables or shelves; a higher camera can verify planar rectangular cover.},
+  {category: cell phone, mu_v: 0.80, sigma_v: 0.25, unit: meter, rationale: Cell phones are often used on tables or held at waist-to-chest height; moderate elevation reduces confusion.},
+  {category: remote, mu_v: 0.60, sigma_v: 0.25, unit: meter, rationale: Remotes are frequently on sofas or side tables; a view from furniture height distinguishes slim form.},
+  {category: cup, mu_v: 0.75, sigma_v: 0.20, unit: meter, rationale: Cups are typically on tables or countertops; camera captures cylindrical shape from table height.}
+]

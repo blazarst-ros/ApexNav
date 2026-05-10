@@ -539,11 +539,46 @@ def main(cfg: DictConfig) -> None:
     # ROS state callbacks for multi-agent tracking
     # Match C++ NUM_AGENTS in simulation mode so readiness checks include all planner agents.
     ros_all_states = [ROS_STATE.INIT] * max(num_agents, 3)
+    ros_all_state_stamps = [rospy.Time(0)] * max(num_agents, 3)
+    ros_all_state_receive_stamps = [0.0] * max(num_agents, 3)
+
     def ros_all_state_callback(msg):
+        # Legacy compatibility only: this topic has no per-agent timestamp or
+        # agent_id, so it must not make state look fresh.
         for i, s in enumerate(msg.data):
             if i < len(ros_all_states):
                 ros_all_states[i] = s
+
+    def ros_state_agents_callback(msg):
+        record_size = 4
+        if len(msg.data) % record_size != 0:
+            rospy.logwarn_throttle(
+                1.0,
+                "Ignoring malformed /ros/state_agents message with %d fields",
+                len(msg.data),
+            )
+            return
+        for offset in range(0, len(msg.data), record_size):
+            stamp_sec, stamp_nsec, agent_id, state = msg.data[offset : offset + record_size]
+            if 0 <= agent_id < len(ros_all_states):
+                ros_all_states[agent_id] = state
+                ros_all_state_stamps[agent_id] = rospy.Time(stamp_sec, stamp_nsec)
+                ros_all_state_receive_stamps[agent_id] = time.monotonic()
+
+    def _fresh_ros_state(agent_idx, max_age_sec=1.0):
+        receive_stamp = ros_all_state_receive_stamps[agent_idx]
+        if receive_stamp <= 0.0:
+            return False
+        return time.monotonic() - receive_stamp <= max_age_sec
+
+    def _ros_state_is(agent_idx, state, max_age_sec=1.0):
+        return ros_all_states[agent_idx] == state and _fresh_ros_state(agent_idx, max_age_sec)
+
+    def _ros_state_in(agent_idx, states, max_age_sec=1.0):
+        return ros_all_states[agent_idx] in states and _fresh_ros_state(agent_idx, max_age_sec)
+
     rospy.Subscriber("/ros/state_all", Int32MultiArray, ros_all_state_callback, queue_size=10)
+    rospy.Subscriber("/ros/state_agents", Int32MultiArray, ros_state_agents_callback, queue_size=10)
     rospy.Subscriber("/ros/expl_state", Int32, ros_final_state_callback, queue_size=10)
     rospy.Subscriber("/ros/expl_result", Int32, ros_expl_result_callback, queue_size=10)
     state_pub = rospy.Publisher("/habitat/state", Int32, queue_size=30)
@@ -571,11 +606,15 @@ def main(cfg: DictConfig) -> None:
             global_action = None
 
         for attempt in range(3):
+            for i in range(num_agents):
+                ros_all_states[i] = -1
+                ros_all_state_stamps[i] = rospy.Time(0)
+                ros_all_state_receive_stamps[i] = 0.0
             publish_int32(state_pub, HABITAT_STATE.EPISODE_FINISH)
             wait_begin = rospy.Time.now()
             while (rospy.Time.now() - wait_begin).to_sec() < 3.0:
                 if all(
-                    ros_all_states[i] in (ROS_STATE.INIT, ROS_STATE.WAIT_TRIGGER)
+                    _ros_state_in(i, (ROS_STATE.INIT, ROS_STATE.WAIT_TRIGGER), 1.0)
                     for i in range(num_agents)
                 ):
                     return
@@ -671,6 +710,7 @@ def main(cfg: DictConfig) -> None:
             rospy.Duration(0.25),
             _publish_observations_timer,
         )
+        _finish_episode_handshake()
 
         print(f"Agents are waiting in the environment! Target: [{label}]")
         if multi_agent:
@@ -679,11 +719,13 @@ def main(cfg: DictConfig) -> None:
 
         rate = rospy.Rate(10)
         while True:
-            all_init = all(ros_all_states[i] == ROS_STATE.INIT for i in range(num_agents))
-            any_init = any(ros_all_states[i] == ROS_STATE.INIT for i in range(num_agents))
-            all_wait_trigger = all(ros_all_states[i] == ROS_STATE.WAIT_TRIGGER for i in range(num_agents))
+            all_init = all(_ros_state_is(i, ROS_STATE.INIT) for i in range(num_agents))
+            any_init = any(_ros_state_is(i, ROS_STATE.INIT) for i in range(num_agents))
+            all_wait_trigger = all(
+                _ros_state_is(i, ROS_STATE.WAIT_TRIGGER) for i in range(num_agents)
+            )
             any_wait_action_finish = any(
-                ros_all_states[i] == ROS_STATE.WAIT_ACTION_FINISH
+                _ros_state_is(i, ROS_STATE.WAIT_ACTION_FINISH)
                 for i in range(num_agents)
             )
 
@@ -755,7 +797,7 @@ def main(cfg: DictConfig) -> None:
                     break
 
                 for agent_idx, agent_name in enumerate(agent_names):
-                    if ros_all_states[agent_idx] == ROS_STATE.FINISH:
+                    if _ros_state_is(agent_idx, ROS_STATE.FINISH):
                         agent_states[agent_name]["finished"] = True
 
                 if termination_policy == "cooperative":
@@ -786,7 +828,7 @@ def main(cfg: DictConfig) -> None:
             if multi_agent:
                 waiting_action_agents = [
                     agent_idx for agent_idx in range(num_agents)
-                    if ros_all_states[agent_idx] == ROS_STATE.WAIT_ACTION_FINISH
+                    if _ros_state_is(agent_idx, ROS_STATE.WAIT_ACTION_FINISH)
                     and not agent_states[agent_names[agent_idx]]["finished"]
                 ]
                 if waiting_action_agents and not all(

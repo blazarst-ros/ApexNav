@@ -6,6 +6,8 @@
 #include <std_msgs/Int32MultiArray.h>
 #include <boost/bind/bind.hpp>
 
+#include <sstream>
+
 namespace apexnav_planner {
 void ExplorationFSM::init(ros::NodeHandle& nh)
 {
@@ -21,8 +23,12 @@ void ExplorationFSM::init(ros::NodeHandle& nh)
     visualization_[i].reset(new PlanningVisualization(nh, i));
   fp_->vis_scale_ = expl_manager_->sdf_map_->getResolution() * FSMConstants::VIS_SCALE_FACTOR;
 
-  for (int i = 0; i < NUM_AGENTS; ++i)
+  for (int i = 0; i < NUM_AGENTS; ++i) {
     state_[i] = ROS_STATE::INIT;
+    exploration_mode_[i] = "INIT";
+    last_mode_debug_publish_time_[i] = ros::WallTime(0);
+    last_exploration_mode_publish_time_[i] = ros::WallTime(0);
+  }
 
   /* ROS Timer */
   exec_timer_ = nh.createTimer(
@@ -44,8 +50,10 @@ void ExplorationFSM::init(ros::NodeHandle& nh)
       "/detector/confidence_threshold", 10, &ExplorationFSM::confidenceThresholdCallback, this);
 
   /* ROS Publisher */
-  ros_state_pub_ = nh.advertise<std_msgs::Int32>("/ros/state", 10);
-  ros_state_all_pub_ = nh.advertise<std_msgs::Int32MultiArray>("/ros/state_all", 10);
+  ros_state_pub_ = nh.advertise<std_msgs::Int32>("/ros/state", 10, true);
+  ros_state_all_pub_ = nh.advertise<std_msgs::Int32MultiArray>("/ros/state_all", 10, true);
+  ros_state_agents_pub_ =
+      nh.advertise<std_msgs::Int32MultiArray>("/ros/state_agents", 10, true);
   expl_state_pub_ = nh.advertise<std_msgs::Int32>("/ros/expl_state", 10);
   expl_result_pub_ = nh.advertise<std_msgs::Int32>("/ros/expl_result", 10);
   for (int i = 0; i < NUM_AGENTS; ++i) {
@@ -53,7 +61,125 @@ void ExplorationFSM::init(ros::NodeHandle& nh)
         "/habitat/plan_action_agent_" + std::to_string(i), 10);
     robot_marker_pub_[i] = nh.advertise<visualization_msgs::Marker>(
         "/robot_agent_" + std::to_string(i), 10);
+    mode_debug_pub_[i] =
+        nh.advertise<std_msgs::String>("/planner/agent_" + std::to_string(i) + "/mode_debug", 10);
+    exploration_mode_pub_[i] = nh.advertise<std_msgs::String>(
+        "/planner/agent_" + std::to_string(i) + "/exploration_mode", 10, true);
   }
+}
+
+string ExplorationFSM::rosStateName(ROS_STATE state) const
+{
+  switch (state) {
+    case ROS_STATE::INIT:
+      return "INIT";
+    case ROS_STATE::WAIT_TRIGGER:
+      return "WAIT_TRIGGER";
+    case ROS_STATE::PLAN_ACTION:
+      return "PLAN_ACTION";
+    case ROS_STATE::WAIT_ACTION_FINISH:
+      return "WAIT_ACTION_FINISH";
+    case ROS_STATE::PUB_ACTION:
+      return "PUB_ACTION";
+    case ROS_STATE::FINISH:
+      return "FINISH";
+    default:
+      return "UNKNOWN_STATE";
+  }
+}
+
+string ExplorationFSM::finalResultName(int final_result) const
+{
+  switch (final_result) {
+    case FINAL_RESULT::EXPLORE:
+      return "FRONTIER";
+    case FINAL_RESULT::SEARCH_OBJECT:
+      return "STRICT_TARGET";
+    case FINAL_RESULT::STUCKING:
+      return "STUCKING";
+    case FINAL_RESULT::NO_FRONTIER:
+      return "NO_FRONTIER";
+    case FINAL_RESULT::REACH_OBJECT:
+      return "REACH_OBJECT";
+    default:
+      return "UNKNOWN_FINAL";
+  }
+}
+
+string ExplorationFSM::explorationResultName(int expl_result) const
+{
+  switch (expl_result) {
+    case EXPL_RESULT::EXPLORATION:
+      return "FRONTIER";
+    case EXPL_RESULT::SEARCH_BEST_OBJECT:
+      return "STRICT_TARGET";
+    case EXPL_RESULT::SEARCH_OVER_DEPTH_OBJECT:
+      return "OVER_DEPTH";
+    case EXPL_RESULT::SEARCH_SUSPICIOUS_OBJECT:
+      return "SUSPICIOUS";
+    case EXPL_RESULT::NO_PASSABLE_FRONTIER:
+      return "NO_PASSABLE_FRONTIER";
+    case EXPL_RESULT::NO_COVERABLE_FRONTIER:
+      return "NO_COVERABLE_FRONTIER";
+    case EXPL_RESULT::SEARCH_EXTREME:
+      return "EXTREME";
+    default:
+      return "UNKNOWN_EXPL";
+  }
+}
+
+string ExplorationFSM::formatModeRecord(
+    int agent_idx, const string& mode, const ros::Time& stamp) const
+{
+  std::ostringstream oss;
+  oss << "stamp_sec=" << stamp.sec
+      << " stamp_nsec=" << stamp.nsec
+      << " agent_id=" << agent_idx
+      << " state=" << rosStateName(state_[agent_idx])
+      << " mode=" << mode;
+  return oss.str();
+}
+
+bool ExplorationFSM::shouldPublishModeRecord(ros::WallTime& last_publish_time) const
+{
+  const ros::WallTime now = ros::WallTime::now();
+  if (last_publish_time.isZero() || (now - last_publish_time).toSec() >= 1.0) {
+    last_publish_time = now;
+    return true;
+  }
+  return false;
+}
+
+void ExplorationFSM::publishModeDebug(int agent_idx, const string& mode, const ros::Time& stamp)
+{
+  if (agent_idx < 0 || agent_idx >= NUM_AGENTS)
+    return;
+  if (!shouldPublishModeRecord(last_mode_debug_publish_time_[agent_idx]))
+    return;
+
+  std_msgs::String msg;
+  msg.data = formatModeRecord(agent_idx, mode, stamp);
+  mode_debug_pub_[agent_idx].publish(msg);
+}
+
+void ExplorationFSM::setExplorationMode(int agent_idx, const string& mode)
+{
+  if (agent_idx < 0 || agent_idx >= NUM_AGENTS)
+    return;
+
+  exploration_mode_[agent_idx] = mode;
+}
+
+void ExplorationFSM::publishExplorationMode(int agent_idx, const ros::Time& stamp)
+{
+  if (agent_idx < 0 || agent_idx >= NUM_AGENTS)
+    return;
+  if (!shouldPublishModeRecord(last_exploration_mode_publish_time_[agent_idx]))
+    return;
+
+  std_msgs::String msg;
+  msg.data = formatModeRecord(agent_idx, exploration_mode_[agent_idx], stamp);
+  exploration_mode_pub_[agent_idx].publish(msg);
 }
 
 // FSM between ROS and Habitat for action planning and execution (round-robin over agents)
@@ -64,6 +190,16 @@ void ExplorationFSM::FSMCallback(const ros::TimerEvent& e)
 
   std_msgs::Int32MultiArray state_all_msg;
   state_all_msg.data.resize(NUM_AGENTS);
+  std_msgs::Int32MultiArray state_agents_msg;
+  state_agents_msg.layout.dim.resize(2);
+  state_agents_msg.layout.dim[0].label = "agents";
+  state_agents_msg.layout.dim[0].size = NUM_AGENTS;
+  state_agents_msg.layout.dim[0].stride = NUM_AGENTS * 4;
+  state_agents_msg.layout.dim[1].label = "stamp_sec_stamp_nsec_agent_id_state";
+  state_agents_msg.layout.dim[1].size = 4;
+  state_agents_msg.layout.dim[1].stride = 4;
+  state_agents_msg.data.reserve(NUM_AGENTS * 4);
+  const ros::Time state_stamp = ros::Time::now();
 
   for (int agent_idx = 0; agent_idx < NUM_AGENTS; ++agent_idx) {
     auto& ad = fd_->agent_[agent_idx];
@@ -71,11 +207,13 @@ void ExplorationFSM::FSMCallback(const ros::TimerEvent& e)
 
     switch (state_[agent_idx]) {
       case ROS_STATE::INIT: {
+        setExplorationMode(agent_idx, "INIT");
+        publishModeDebug(agent_idx, "INIT", state_stamp);
         // Wait for odometry and target confidence threshold
         if (!ad.have_odom_ || !fd_->have_confidence_) {
           ROS_WARN_THROTTLE(
               1.0, "Agent %d: No odom || No target confidence threshold.", agent_idx);
-          continue;
+          break;
         }
         // Go to WAIT_TRIGGER when prerequisites are ready
         transitState(agent_idx, ROS_STATE::WAIT_TRIGGER, "FSM");
@@ -83,6 +221,9 @@ void ExplorationFSM::FSMCallback(const ros::TimerEvent& e)
       }
 
       case ROS_STATE::WAIT_TRIGGER: {
+        if (exploration_mode_[agent_idx] == "INIT")
+          setExplorationMode(agent_idx, "WAIT_TRIGGER");
+        publishModeDebug(agent_idx, "WAIT_TRIGGER", state_stamp);
         if (!ad.trigger_) {
           ROS_WARN_THROTTLE(1.0, "Agent %d: Wait for trigger.", agent_idx);
         }
@@ -90,6 +231,8 @@ void ExplorationFSM::FSMCallback(const ros::TimerEvent& e)
       }
 
       case ROS_STATE::FINISH: {
+        setExplorationMode(agent_idx, "FINISH " + finalResultName(ad.final_result_));
+        publishModeDebug(agent_idx, "FINISH " + finalResultName(ad.final_result_), state_stamp);
         if (!ad.have_finished_) {
           ad.have_finished_ = true;
           std_msgs::Int32 action_msg;
@@ -102,6 +245,7 @@ void ExplorationFSM::FSMCallback(const ros::TimerEvent& e)
 
       case ROS_STATE::PLAN_ACTION: {
         if (ad.init_action_count_ < 1 + 12 + 1 + 12) {
+          setExplorationMode(agent_idx, "INIT_SCAN");
           if (ad.init_action_count_ < 1)
             ad.newest_action_ = ACTION::TURN_DOWN;
           else if (ad.init_action_count_ < 1 + 12)
@@ -188,6 +332,13 @@ void ExplorationFSM::FSMCallback(const ros::TimerEvent& e)
         break;
       }
     }
+    state_all_msg.data[agent_idx] = state_[agent_idx];
+    state_agents_msg.data.push_back(state_stamp.sec);
+    state_agents_msg.data.push_back(state_stamp.nsec);
+    state_agents_msg.data.push_back(agent_idx);
+    state_agents_msg.data.push_back(state_[agent_idx]);
+    publishExplorationMode(agent_idx, state_stamp);
+    publishModeDebug(agent_idx, "FSM", state_stamp);
   }
   // Publish legacy single-agent state for backward-compatible consumers
   std_msgs::Int32 ros_state_msg;
@@ -195,6 +346,7 @@ void ExplorationFSM::FSMCallback(const ros::TimerEvent& e)
   ros_state_pub_.publish(ros_state_msg);
   // Publish per-agent state for multi-agent Python to track all agents
   ros_state_all_pub_.publish(state_all_msg);
+  ros_state_agents_pub_.publish(state_agents_msg);
   exec_timer_.start();
 }
 
@@ -225,6 +377,8 @@ int ExplorationFSM::callActionPlanner(int agent_idx)
       (current_pos - ad.planned_next_pos_).norm() < reach_distance) {
     ROS_ERROR("Agent %d: Reach the object successfully!!!", agent_idx);
     final_res = FINAL_RESULT::REACH_OBJECT;
+    setExplorationMode(agent_idx, "REACH_OBJECT");
+    publishModeDebug(agent_idx, "REACH_OBJECT", ros::Time::now());
     return final_res;
   }
 
@@ -236,6 +390,8 @@ int ExplorationFSM::callActionPlanner(int agent_idx)
         (current_pos - ad.planned_next_pos_).norm() < soft_reach_distance) {
       ROS_ERROR("Agent %d: Reach the object successfully!!!", agent_idx);
       final_res = FINAL_RESULT::REACH_OBJECT;
+      setExplorationMode(agent_idx, "REACH_OBJECT");
+      publishModeDebug(agent_idx, "REACH_OBJECT", ros::Time::now());
       return final_res;
     }
 
@@ -265,6 +421,8 @@ int ExplorationFSM::callActionPlanner(int agent_idx)
 
   if (ad.escape_stucking_flag_) {
     ROS_ERROR("Agent %d: Escaping stuck...", agent_idx);
+    setExplorationMode(agent_idx, "STUCKING_RECOVERY");
+    publishModeDebug(agent_idx, "STUCKING_RECOVERY", ros::Time::now());
     if (ad.escape_stucking_count_ == 0)
       ad.newest_action_ = ACTION::TURN_RIGHT;
     else if (ad.escape_stucking_count_ == 1)
@@ -326,6 +484,8 @@ int ExplorationFSM::callActionPlanner(int agent_idx)
 
   expl_res = expl_manager_->planNextBestPoint(
       ad.start_pt_, ad.start_yaw_, agent_idx, ad.planned_next_pos_, ad.planned_next_best_path_);
+  setExplorationMode(agent_idx, explorationResultName(expl_res));
+  publishModeDebug(agent_idx, explorationResultName(expl_res), ros::Time::now());
 
   if (expl_res != EXPL_RESULT::EXPLORATION) {
     ad.replan_flag_ = true;
@@ -355,6 +515,8 @@ int ExplorationFSM::callActionPlanner(int agent_idx)
 
   if (final_res == FINAL_RESULT::NO_FRONTIER || ad.planned_next_best_path_.empty()) {
     ROS_WARN("Agent %d: No (passable) frontier", agent_idx);
+    setExplorationMode(agent_idx, finalResultName(final_res));
+    publishModeDebug(agent_idx, finalResultName(final_res), ros::Time::now());
     return final_res;
   }
 
@@ -407,6 +569,8 @@ int ExplorationFSM::callActionPlanner(int agent_idx)
   if (ad.stucking_action_count_ >= FSMConstants::MAX_STUCKING_COUNT) {
     ROS_ERROR("Agent %d: Stuck for too long, stopping episode.", agent_idx);
     final_res = FINAL_RESULT::STUCKING;
+    setExplorationMode(agent_idx, "STUCKING");
+    publishModeDebug(agent_idx, "STUCKING", ros::Time::now());
     return final_res;
   }
 
@@ -418,6 +582,10 @@ int ExplorationFSM::callActionPlanner(int agent_idx)
     ad.newest_action_ =
         planNextBestAction(current_pos, current_yaw, ad.planned_next_best_path_, true, agent_idx);
 
+  setExplorationMode(agent_idx,
+      final_res == FINAL_RESULT::SEARCH_OBJECT ? explorationResultName(expl_res)
+                                               : finalResultName(final_res));
+  publishModeDebug(agent_idx, finalResultName(final_res), ros::Time::now());
   return final_res;
 }
 
@@ -681,8 +849,12 @@ bool ExplorationFSM::updateFrontierAndObject()
 void ExplorationFSM::resetEpisode()
 {
   // Reset FSM state for all agents
-  for (int i = 0; i < NUM_AGENTS; ++i)
+  for (int i = 0; i < NUM_AGENTS; ++i) {
     state_[i] = ROS_STATE::INIT;
+    exploration_mode_[i] = "INIT";
+    last_mode_debug_publish_time_[i] = ros::WallTime(0);
+    last_exploration_mode_publish_time_[i] = ros::WallTime(0);
+  }
 
   // Reset per-agent FSM data
   fd_.reset(new FSMData);
