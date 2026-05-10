@@ -16,6 +16,7 @@
 #include <algorithm>
 #include <cmath>
 #include <limits>
+#include <string>
 
 namespace apexnav_planner {
 ObjectMap2D::ObjectMap2D(SDFMap2D* sdf_map, ros::NodeHandle& nh)
@@ -203,17 +204,19 @@ void ObjectMap2D::inputObservationObjectsCloud(
   if (fusion_type_ != 1 || !use_observation_)
     return;
 
+  const int object_count = std::min((int)observation_clouds.size(), (int)objects_.size());
+
   // Process each observation cloud against corresponding objects
-  for (int i = 0; i < (int)observation_clouds.size(); i++) {
+  for (int i = 0; i < object_count; i++) {
     auto observation_cloud = observation_clouds[i];
     auto object = objects_[i];
 
-    if (observation_cloud->points.empty())
+    if (!observation_cloud || observation_cloud->points.empty())
       continue;
 
     // Check overlap with each possible object classification
     for (int label = 0; label < (int)object.confidence_scores_.size(); ++label) {
-      if (object.confidence_scores_[label] < 1e-3)
+      if (object.confidence_scores_[label] < 1e-3 || !object.clouds_[label])
         continue;  // Skip labels with negligible confidence
 
       // Setup spatial search for overlap computation
@@ -265,6 +268,9 @@ void ObjectMap2D::inputObservationObjectsCloud(
 int ObjectMap2D::searchSingleObjectCluster(const DetectedObject& detected_object)
 {
   auto object_cloud = detected_object.cloud;
+  if (!object_cloud || object_cloud->points.empty()) {
+    return -1;
+  }
 
   // Initialize clustering analysis variables
   int point_num = object_cloud->points.size();
@@ -277,6 +283,9 @@ int ObjectMap2D::searchSingleObjectCluster(const DetectedObject& detected_object
     Eigen::Vector2i idx;
     Eigen::Vector2d pt_w;
     pt_w << object_cloud->points[i].x, object_cloud->points[i].y;
+    if (!sdf_map_->isInMap(pt_w))
+      continue;
+
     sdf_map_->posToIndex(pt_w, idx);
     int adr = sdf_map_->toAddress(idx);
 
@@ -298,7 +307,9 @@ int ObjectMap2D::searchSingleObjectCluster(const DetectedObject& detected_object
     return -1;
   }
 
-  // Search for existing object clusters in neighborhood
+  // Search for existing object clusters in neighborhood. Spatial contact only proposes a
+  // candidate; label compatibility decides whether this observation may fuse into it.
+  bool found_compatible_cluster = false;
   for (auto pt_w : object_point2Ds) {
     Eigen::Vector2i idx;
     sdf_map_->posToIndex(pt_w, idx);
@@ -309,14 +320,32 @@ int ObjectMap2D::searchSingleObjectCluster(const DetectedObject& detected_object
 
     // Check neighbors for existing object associations
     for (auto nbr : nbrs) {
+      if (!sdf_map_->isInMap(nbr))
+        continue;
       int nbr_adr = sdf_map_->toAddress(nbr);
       if (object_indexs_[nbr_adr] != -1) {
-        // Found existing object cluster - use first match
-        // TODO: Implement multi-object merging for complex scenarios
-        obj_idx = object_indexs_[nbr_adr];
+        const int candidate_idx = object_indexs_[nbr_adr];
+        if (candidate_idx < 0 || candidate_idx >= (int)objects_.size()) {
+          ROS_WARN_THROTTLE(1.0,
+              "[ObjectMap2D] Drop stale object index %d at grid address %d", candidate_idx,
+              nbr_adr);
+          object_indexs_[nbr_adr] = -1;
+          continue;
+        }
+        if (!isLabelCompatibleWithCluster(objects_[candidate_idx], detected_object.label)) {
+          ROS_INFO_THROTTLE(1.0,
+              "[ObjectMap2D] Skip spatial merge: cluster=%d best_label=%d detected_label=%d",
+              candidate_idx, objects_[candidate_idx].best_label_, detected_object.label);
+          continue;
+        }
+
+        obj_idx = candidate_idx;
+        found_compatible_cluster = true;
         break;
       }
     }
+    if (found_compatible_cluster)
+      break;
   }
 
   // Apply voxel grid filtering to reduce point cloud density
@@ -324,17 +353,27 @@ int ObjectMap2D::searchSingleObjectCluster(const DetectedObject& detected_object
   voxel_filter.setInputCloud(object_cloud);
   voxel_filter.setLeafSize(leaf_size_, leaf_size_, leaf_size_);
   voxel_filter.filter(*detected_object.cloud);
+  if (!detected_object.cloud || detected_object.cloud->points.empty()) {
+    ROS_WARN_THROTTLE(1.0, "[ObjectMap2D] Ignore object whose cloud became empty after filtering");
+    return -1;
+  }
 
   // Either merge with existing cluster or create new one
   if (obj_idx != -1) {
     mergeCellsIntoObjectCluster(obj_idx, object_point2Ds, detected_object);
   }
   else {
+    const int object_count_before_create = (int)objects_.size();
     createNewObjectCluster(object_point2Ds, detected_object);
-    obj_idx = object_indexs_[toAdr(object_point2Ds[0])];
+    obj_idx = (int)objects_.size() > object_count_before_create ? (int)objects_.size() - 1 : -1;
   }
 
   // Update classification and visualization
+  if (obj_idx < 0 || obj_idx >= (int)objects_.size()) {
+    ROS_ERROR("[ObjectMap2D] Failed to create or find a valid object cluster");
+    return -1;
+  }
+
   updateObjectBestLabel(obj_idx);
   if (is_vis_cloud_)
     publishObjectClouds();
@@ -367,6 +406,35 @@ void ObjectMap2D::updateObjectBestLabel(int obj_idx)
     }
   }
   objects_[obj_idx].best_label_ = best_label;
+}
+
+vector<int> ObjectMap2D::currentCompatibleLabels(int fallback_label) const
+{
+  vector<int> labels;
+  vector<std::string> categories;
+  if (ros::param::get("/semantic_prior/categories", categories) && !categories.empty() &&
+      fallback_label >= 0 && fallback_label < (int)categories.size()) {
+    labels.reserve(categories.size());
+    for (int label = 0; label < (int)categories.size(); ++label)
+      labels.push_back(label);
+  }
+
+  if (labels.empty() && fallback_label >= 0)
+    labels.push_back(fallback_label);
+
+  return labels;
+}
+
+bool ObjectMap2D::isLabelCompatibleWithCluster(const ObjectCluster& object, int label) const
+{
+  if (label < 0)
+    return false;
+
+  if (object.compatible_labels_.empty())
+    return true;
+
+  return std::find(object.compatible_labels_.begin(), object.compatible_labels_.end(), label) !=
+         object.compatible_labels_.end();
 }
 
 void ObjectMap2D::updateQualityAwareEvidence(
@@ -405,12 +473,38 @@ void ObjectMap2D::ensureObjectLabelCapacity(ObjectCluster& object, int label)
   object.observation_cloud_sums_.resize(new_size, 0);
 }
 
+bool ObjectMap2D::updateObject3DBounds(ObjectCluster& object, int label)
+{
+  if (label < 0 || label >= (int)object.clouds_.size() || !object.clouds_[label] ||
+      object.clouds_[label]->points.empty()) {
+    return false;
+  }
+
+  const auto& first_point = object.clouds_[label]->points.front();
+  object.box_max3d_ = Vector3d(first_point.x, first_point.y, first_point.z);
+  object.box_min3d_ = object.box_max3d_;
+
+  for (const auto& pt : object.clouds_[label]->points) {
+    Vector3d vec_pt(pt.x, pt.y, pt.z);
+    for (int i = 0; i < 3; ++i) {
+      object.box_min3d_[i] = min(object.box_min3d_[i], vec_pt[i]);
+      object.box_max3d_[i] = max(object.box_max3d_[i], vec_pt[i]);
+    }
+  }
+
+  return true;
+}
+
 void ObjectMap2D::createNewObjectCluster(
     const std::vector<Eigen::Vector2d>& cells, const DetectedObject& detected_object)
 {
   int label = detected_object.label;
   if (label < 0) {
     ROS_WARN("[ObjectMap2D] Ignore detected object with invalid label %d", label);
+    return;
+  }
+  if (cells.empty() || !detected_object.cloud || detected_object.cloud->points.empty()) {
+    ROS_WARN_THROTTLE(1.0, "[ObjectMap2D] Ignore empty object cluster candidate");
     return;
   }
 
@@ -421,13 +515,27 @@ void ObjectMap2D::createNewObjectCluster(
   obj.good_cells_.clear();
   obj.seen_counts_.clear();
   obj.best_label_ = -1;
+  obj.compatible_labels_ = currentCompatibleLabels(label);
 
   // Process spatial cells and establish grid associations
   std::vector<Eigen::Vector2d> real_new_cells;
   for (auto cell : cells) {
+    if (!sdf_map_->isInMap(cell))
+      continue;
     int adr = toAdr(cell);
+    if (adr < 0 || adr >= (int)object_indexs_.size())
+      continue;
+    if (object_indexs_[adr] != -1) {
+      ROS_INFO_THROTTLE(1.0,
+          "[ObjectMap2D] New cluster keeps cloud evidence but does not steal occupied cell: "
+          "new_cluster=%d existing_cluster=%d label=%d",
+          obj.id_, object_indexs_[adr], label);
+      continue;
+    }
+
     object_indexs_[adr] = obj.id_;  // Associate grid cell with object
     obj.visited_[adr] = 1;
+    real_new_cells.push_back(cell);
 
     // Track high-confidence observations for label 0
     if (label == 0) {
@@ -438,7 +546,7 @@ void ObjectMap2D::createNewObjectCluster(
   }
 
   // Compute spatial properties of the object cluster
-  obj.cells_ = cells;
+  obj.cells_ = real_new_cells.empty() ? cells : real_new_cells;
   obj.average_.setZero();
   obj.box_max2d_ = obj.cells_.front();
   obj.box_min2d_ = obj.cells_.front();
@@ -457,17 +565,9 @@ void ObjectMap2D::createNewObjectCluster(
   *obj.clouds_[label] = *detected_object.cloud;
 
   // Compute 3D bounding box from point cloud
-  obj.box_max3d_ = Vector3d(obj.clouds_[label]->points[0].x, obj.clouds_[label]->points[0].y,
-      obj.clouds_[label]->points[0].z);
-  obj.box_min3d_ = Vector3d(obj.clouds_[label]->points[0].x, obj.clouds_[label]->points[0].y,
-      obj.clouds_[label]->points[0].z);
-
-  for (auto pt : obj.clouds_[label]->points) {
-    Vector3d vec_pt = Vector3d(pt.x, pt.y, pt.z);
-    for (int i = 0; i < 3; ++i) {
-      obj.box_min3d_[i] = min(obj.box_min3d_[i], vec_pt[i]);
-      obj.box_max3d_[i] = max(obj.box_max3d_[i], vec_pt[i]);
-    }
+  if (!updateObject3DBounds(obj, label)) {
+    ROS_WARN_THROTTLE(1.0, "[ObjectMap2D] Ignore object with empty cloud bounds");
+    return;
   }
 
   // Initialize confidence tracking for this object
@@ -489,6 +589,14 @@ void ObjectMap2D::mergeCellsIntoObjectCluster(const int& merged_object_id,
     ROS_WARN("[ObjectMap2D] Ignore detected object with invalid label %d", label);
     return;
   }
+  if (merged_object_id < 0 || merged_object_id >= (int)objects_.size()) {
+    ROS_WARN_THROTTLE(1.0, "[ObjectMap2D] Ignore stale merge target id %d", merged_object_id);
+    return;
+  }
+  if (!detected_object.cloud || detected_object.cloud->points.empty()) {
+    ROS_WARN_THROTTLE(1.0, "[ObjectMap2D] Ignore empty object cloud for merge");
+    return;
+  }
 
   ensureObjectLabelCapacity(objects_[merged_object_id], label);
   const auto last_objects = objects_;
@@ -498,7 +606,11 @@ void ObjectMap2D::mergeCellsIntoObjectCluster(const int& merged_object_id,
 
   // Process new spatial cells for integration
   for (auto new_cell : new_cells) {
+    if (!sdf_map_->isInMap(new_cell))
+      continue;
     int adr = toAdr(new_cell);
+    if (adr < 0 || adr >= (int)object_indexs_.size())
+      continue;
     object_indexs_[adr] = merged_object_id;  // Associate with this object cluster
 
     // Add only genuinely new cells to avoid duplicates
@@ -535,10 +647,15 @@ void ObjectMap2D::mergeCellsIntoObjectCluster(const int& merged_object_id,
           merged_object.good_cells_.push_back(cell);
       }
     }
-    ROS_ERROR("merged_object good cells size = %ld", merged_object.good_cells_.size());
+    ROS_DEBUG("merged_object good cells size = %ld", merged_object.good_cells_.size());
   }
 
   // Recompute spatial properties
+  if (merged_object.cells_.empty()) {
+    ROS_WARN_THROTTLE(1.0, "[ObjectMap2D] Merge target %d has no valid cells", merged_object_id);
+    return;
+  }
+
   merged_object.average_.setZero();
   merged_object.box_max2d_ = merged_object.cells_.front();
   merged_object.box_min2d_ = merged_object.cells_.front();
@@ -556,6 +673,10 @@ void ObjectMap2D::mergeCellsIntoObjectCluster(const int& merged_object_id,
     // First observation of this label - initialize directly
     merged_object.clouds_[label].reset(new pcl::PointCloud<pcl::PointXYZ>());
     *merged_object.clouds_[label] = *(detected_object.cloud);
+    if (!updateObject3DBounds(merged_object, label)) {
+      ROS_WARN_THROTTLE(1.0, "[ObjectMap2D] Ignore first label merge with empty cloud bounds");
+      return;
+    }
     merged_object.confidence_scores_[label] = detected_object.score;
     merged_object.observation_cloud_sums_[label] = detected_object.cloud->points.size();
     merged_object.observation_nums_[label] = 1;
@@ -563,6 +684,21 @@ void ObjectMap2D::mergeCellsIntoObjectCluster(const int& merged_object_id,
     printFusionInfo(merged_object, label, "[New Label Merged]");
   }
   else {
+    if (!merged_object.clouds_[label] || merged_object.clouds_[label]->points.empty()) {
+      merged_object.clouds_[label].reset(new pcl::PointCloud<pcl::PointXYZ>());
+      *merged_object.clouds_[label] = *(detected_object.cloud);
+      if (!updateObject3DBounds(merged_object, label)) {
+        ROS_WARN_THROTTLE(1.0, "[ObjectMap2D] Ignore merge with empty replacement cloud");
+        return;
+      }
+      merged_object.confidence_scores_[label] = detected_object.score;
+      merged_object.observation_cloud_sums_[label] = detected_object.cloud->points.size();
+      merged_object.observation_nums_[label] = 1;
+      updateQualityAwareEvidence(merged_object, label, detected_object);
+      printFusionInfo(merged_object, label, "[Recovered Label Merged]");
+      return;
+    }
+
     // Merge with existing observations using point cloud fusion
     pcl::PointCloud<pcl::PointXYZ>::Ptr merged_cloud(new pcl::PointCloud<pcl::PointXYZ>());
     *merged_cloud = *(merged_object.clouds_[label]);  // Copy existing cloud
@@ -573,20 +709,16 @@ void ObjectMap2D::mergeCellsIntoObjectCluster(const int& merged_object_id,
     voxel_filter.setInputCloud(merged_cloud);
     voxel_filter.setLeafSize(leaf_size_, leaf_size_, leaf_size_);
     voxel_filter.filter(*merged_cloud);
+    if (merged_cloud->points.empty()) {
+      ROS_WARN_THROTTLE(1.0, "[ObjectMap2D] Skip merge that produced an empty cloud");
+      return;
+    }
     merged_object.clouds_[label] = merged_cloud;
 
     // Update 3D bounding box from merged point cloud
-    merged_object.box_max3d_ = Vector3d(merged_object.clouds_[label]->points[0].x,
-        merged_object.clouds_[label]->points[0].y, merged_object.clouds_[label]->points[0].z);
-    merged_object.box_min3d_ = Vector3d(merged_object.clouds_[label]->points[0].x,
-        merged_object.clouds_[label]->points[0].y, merged_object.clouds_[label]->points[0].z);
-
-    for (auto pt : merged_object.clouds_[label]->points) {
-      Vector3d vec_pt = Vector3d(pt.x, pt.y, pt.z);
-      for (int i = 0; i < 3; ++i) {
-        merged_object.box_min3d_[i] = min(merged_object.box_min3d_[i], vec_pt[i]);
-        merged_object.box_max3d_[i] = max(merged_object.box_max3d_[i], vec_pt[i]);
-      }
+    if (!updateObject3DBounds(merged_object, label)) {
+      ROS_WARN_THROTTLE(1.0, "[ObjectMap2D] Skip merge with invalid cloud bounds");
+      return;
     }
 
     // Update observation tracking

@@ -133,6 +133,7 @@ struct ObjectCluster {
   int max_seen_count_;                   ///< Maximum observation count across all cells
   vector<Vector2d> good_cells_;          ///< High-confidence cells (frequently observed)
   int best_label_;                       ///< Most confident semantic label
+  vector<int> compatible_labels_;        ///< Target + LLM-provided similar labels allowed to share this cluster
 
   /******* 3D Point Cloud Information *******/
   vector<pcl::shared_ptr<pcl::PointCloud<pcl::PointXYZ>>> clouds_;  ///< Point clouds per semantic
@@ -204,6 +205,9 @@ private:
       ObjectCluster& object, int label, const DetectedObject& detected_object);
   void ensureObjectLabelCapacity(ObjectCluster& object, int label);
   void updateObjectBestLabel(int obj_idx);
+  bool updateObject3DBounds(ObjectCluster& object, int label);
+  vector<int> currentCompatibleLabels(int fallback_label) const;
+  bool isLabelCompatibleWithCluster(const ObjectCluster& object, int label) const;
   Eigen::Vector4d getColor(const double& h, double alpha);
 
   bool haveOverlap(
@@ -263,6 +267,9 @@ private:
 
 inline void ObjectMap2D::printFusionInfo(const ObjectCluster& obj, int label, const char* state)
 {
+  if (label < 0 || label >= (int)obj.confidence_scores_.size())
+    return;
+
   // Use purple for high-confidence label 0, green for others
   if (label == 0 && obj.confidence_scores_[label] >= min_confidence_)
     ROS_WARN("%s%s id = %d label = %d confidence score = %.3lf %s", T_COLORS[5], state, obj.id_,
@@ -288,6 +295,8 @@ inline bool ObjectMap2D::isSatisfyObject(const Eigen::Vector2d& pos)
 
 inline bool ObjectMap2D::isObjectClustered(const int& adr)
 {
+  if (adr < 0 || adr >= (int)object_indexs_.size())
+    return false;
   if (object_indexs_[adr] == -1)
     return false;
   return true;
@@ -295,11 +304,15 @@ inline bool ObjectMap2D::isObjectClustered(const int& adr)
 
 inline bool ObjectMap2D::isObjectClustered(const Eigen::Vector2i& idx)
 {
+  if (!sdf_map_->isInMap(idx))
+    return false;
   return isObjectClustered(toAdr(idx));
 }
 
 inline bool ObjectMap2D::isObjectClustered(const Eigen::Vector2d& pos)
 {
+  if (!sdf_map_->isInMap(pos))
+    return false;
   Eigen::Vector2i idx;
   sdf_map_->posToIndex(pos, idx);
   return isObjectClustered(idx);
@@ -405,6 +418,8 @@ inline bool ObjectMap2D::inMap(const Eigen::Vector2i& idx)
 
 inline int ObjectMap2D::getObjectGrid(const int& adr)
 {
+  if (adr < 0 || adr >= (int)object_buffer_.size())
+    return -1;
   return int(object_buffer_[adr]);
 }
 
@@ -482,7 +497,11 @@ inline void ObjectMap2D::publishObjectClouds()
       continue;  // Skip objects without valid classification
 
     // Get the best-confidence point cloud for this object
+    if (object.best_label_ < 0 || object.best_label_ >= (int)object.clouds_.size())
+      continue;
     const auto& cloud = object.clouds_[object.best_label_];
+    if (!cloud)
+      continue;
 
     // Color and transform each point
     for (const auto& point : cloud->points) {
