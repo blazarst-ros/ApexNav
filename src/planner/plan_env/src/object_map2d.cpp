@@ -16,7 +16,6 @@
 #include <algorithm>
 #include <cmath>
 #include <limits>
-#include <string>
 
 namespace apexnav_planner {
 ObjectMap2D::ObjectMap2D(SDFMap2D* sdf_map, ros::NodeHandle& nh)
@@ -307,9 +306,7 @@ int ObjectMap2D::searchSingleObjectCluster(const DetectedObject& detected_object
     return -1;
   }
 
-  // Search for existing object clusters in neighborhood. Spatial contact only proposes a
-  // candidate; label compatibility decides whether this observation may fuse into it.
-  bool found_compatible_cluster = false;
+  // Search for existing object clusters in neighborhood
   for (auto pt_w : object_point2Ds) {
     Eigen::Vector2i idx;
     sdf_map_->posToIndex(pt_w, idx);
@@ -332,19 +329,13 @@ int ObjectMap2D::searchSingleObjectCluster(const DetectedObject& detected_object
           object_indexs_[nbr_adr] = -1;
           continue;
         }
-        if (!isLabelCompatibleWithCluster(objects_[candidate_idx], detected_object.label)) {
-          ROS_INFO_THROTTLE(1.0,
-              "[ObjectMap2D] Skip spatial merge: cluster=%d best_label=%d detected_label=%d",
-              candidate_idx, objects_[candidate_idx].best_label_, detected_object.label);
-          continue;
-        }
-
+        // Found existing object cluster - use first match
+        // TODO: Implement multi-object merging for complex scenarios
         obj_idx = candidate_idx;
-        found_compatible_cluster = true;
         break;
       }
     }
-    if (found_compatible_cluster)
+    if (obj_idx != -1)
       break;
   }
 
@@ -363,9 +354,8 @@ int ObjectMap2D::searchSingleObjectCluster(const DetectedObject& detected_object
     mergeCellsIntoObjectCluster(obj_idx, object_point2Ds, detected_object);
   }
   else {
-    const int object_count_before_create = (int)objects_.size();
     createNewObjectCluster(object_point2Ds, detected_object);
-    obj_idx = (int)objects_.size() > object_count_before_create ? (int)objects_.size() - 1 : -1;
+    obj_idx = object_indexs_[toAdr(object_point2Ds[0])];
   }
 
   // Update classification and visualization
@@ -406,35 +396,6 @@ void ObjectMap2D::updateObjectBestLabel(int obj_idx)
     }
   }
   objects_[obj_idx].best_label_ = best_label;
-}
-
-vector<int> ObjectMap2D::currentCompatibleLabels(int fallback_label) const
-{
-  vector<int> labels;
-  vector<std::string> categories;
-  if (ros::param::get("/semantic_prior/categories", categories) && !categories.empty() &&
-      fallback_label >= 0 && fallback_label < (int)categories.size()) {
-    labels.reserve(categories.size());
-    for (int label = 0; label < (int)categories.size(); ++label)
-      labels.push_back(label);
-  }
-
-  if (labels.empty() && fallback_label >= 0)
-    labels.push_back(fallback_label);
-
-  return labels;
-}
-
-bool ObjectMap2D::isLabelCompatibleWithCluster(const ObjectCluster& object, int label) const
-{
-  if (label < 0)
-    return false;
-
-  if (object.compatible_labels_.empty())
-    return true;
-
-  return std::find(object.compatible_labels_.begin(), object.compatible_labels_.end(), label) !=
-         object.compatible_labels_.end();
 }
 
 void ObjectMap2D::updateQualityAwareEvidence(
@@ -515,27 +476,12 @@ void ObjectMap2D::createNewObjectCluster(
   obj.good_cells_.clear();
   obj.seen_counts_.clear();
   obj.best_label_ = -1;
-  obj.compatible_labels_ = currentCompatibleLabels(label);
 
   // Process spatial cells and establish grid associations
-  std::vector<Eigen::Vector2d> real_new_cells;
   for (auto cell : cells) {
-    if (!sdf_map_->isInMap(cell))
-      continue;
     int adr = toAdr(cell);
-    if (adr < 0 || adr >= (int)object_indexs_.size())
-      continue;
-    if (object_indexs_[adr] != -1) {
-      ROS_INFO_THROTTLE(1.0,
-          "[ObjectMap2D] New cluster keeps cloud evidence but does not steal occupied cell: "
-          "new_cluster=%d existing_cluster=%d label=%d",
-          obj.id_, object_indexs_[adr], label);
-      continue;
-    }
-
     object_indexs_[adr] = obj.id_;  // Associate grid cell with object
     obj.visited_[adr] = 1;
-    real_new_cells.push_back(cell);
 
     // Track high-confidence observations for label 0
     if (label == 0) {
@@ -546,7 +492,7 @@ void ObjectMap2D::createNewObjectCluster(
   }
 
   // Compute spatial properties of the object cluster
-  obj.cells_ = real_new_cells.empty() ? cells : real_new_cells;
+  obj.cells_ = cells;
   obj.average_.setZero();
   obj.box_max2d_ = obj.cells_.front();
   obj.box_min2d_ = obj.cells_.front();

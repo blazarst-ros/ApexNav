@@ -133,7 +133,6 @@ struct ObjectCluster {
   int max_seen_count_;                   ///< Maximum observation count across all cells
   vector<Vector2d> good_cells_;          ///< High-confidence cells (frequently observed)
   int best_label_;                       ///< Most confident semantic label
-  vector<int> compatible_labels_;        ///< Target + LLM-provided similar labels allowed to share this cluster
 
   /******* 3D Point Cloud Information *******/
   vector<pcl::shared_ptr<pcl::PointCloud<pcl::PointXYZ>>> clouds_;  ///< Point clouds per semantic
@@ -206,8 +205,6 @@ private:
   void ensureObjectLabelCapacity(ObjectCluster& object, int label);
   void updateObjectBestLabel(int obj_idx);
   bool updateObject3DBounds(ObjectCluster& object, int label);
-  vector<int> currentCompatibleLabels(int fallback_label) const;
-  bool isLabelCompatibleWithCluster(const ObjectCluster& object, int label) const;
   Eigen::Vector4d getColor(const double& h, double alpha);
 
   bool haveOverlap(
