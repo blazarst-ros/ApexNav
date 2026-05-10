@@ -39,6 +39,12 @@ class KinoAstar;
 struct ExplorationParam;
 struct ExplorationData;
 
+enum MTSP_TASK_TYPE {
+  MTSP_TASK_FRONTIER = 0,
+  MTSP_TASK_STRICT_OBJECT = 1,
+  MTSP_TASK_SUSPICIOUS_OBJECT = 2
+};
+
 struct SemanticFrontier {
   Vector2d position;      ///< 2D position of the frontier
   double semantic_value;  ///< Semantic value at the frontier location
@@ -54,6 +60,13 @@ struct SemanticFrontier {
     // Otherwise, sort by semantic value (descending)
     return semantic_value > other.semantic_value;
   }
+};
+
+struct RoutingTask {
+  Vector2d position = Vector2d::Zero();
+  int type = MTSP_TASK_FRONTIER;
+  double priority_bonus = 0.0;
+  pcl::shared_ptr<pcl::PointCloud<pcl::PointXYZ>> object_cloud;
 };
 
 enum EXPL_RESULT {
@@ -75,6 +88,8 @@ public:
 
   int planNextBestPoint(const Vector3d& pos, const double& yaw, int agent_idx,
       Eigen::Vector2d& out_next_pos, std::vector<Eigen::Vector2d>& out_next_best_path);
+  void planMultiAgentAssignments(
+      const vector<Vector2d>& agent_positions, const vector<bool>& active_agents);
   bool planTrajectory(const Eigen::VectorXd& start, const Eigen::VectorXd& end, const Vector3d& ctrl);
   void getSortedSemanticFrontiers(const Vector2d& cur_pos, const vector<Vector2d>& frontiers,
       vector<SemanticFrontier>& sem_frontiers);
@@ -104,6 +119,11 @@ private:
       vector<Vector2d>& next_best_path, int agent_idx);
   void findTSPTourPolicy(Vector2d cur_pos, vector<Vector2d> frontiers, Vector2d& next_best_pos,
       vector<Vector2d>& next_best_path, int agent_idx);
+  bool consumeAssignedTask(const Vector3d& pos, int agent_idx, Eigen::Vector2d& out_next_pos,
+      std::vector<Eigen::Vector2d>& out_next_best_path, int& result);
+  void buildRoutingTasks(vector<RoutingTask>& tasks);
+  bool refineTaskPath(const Vector3d& start, const RoutingTask& task, Eigen::Vector2d& refined_pos,
+      std::vector<Eigen::Vector2d>& refined_path);
 
   // Path Search Utils
   bool searchObjectPath(const Vector3d& start,

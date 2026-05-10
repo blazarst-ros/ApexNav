@@ -56,6 +56,7 @@ void ExplorationFSM::init(ros::NodeHandle& nh)
       nh.advertise<std_msgs::Int32MultiArray>("/ros/state_agents", 10, true);
   expl_state_pub_ = nh.advertise<std_msgs::Int32>("/ros/expl_state", 10);
   expl_result_pub_ = nh.advertise<std_msgs::Int32>("/ros/expl_result", 10);
+  mtsp_assignment_pub_ = nh.advertise<std_msgs::String>("/planner/mtsp/assignments", 10);
   for (int i = 0; i < NUM_AGENTS; ++i) {
     action_pub_[i] = nh.advertise<std_msgs::Int32>(
         "/habitat/plan_action_agent_" + std::to_string(i), 10);
@@ -482,6 +483,35 @@ int ExplorationFSM::callActionPlanner(int agent_idx)
   if (ad.replan_flag_)
     expl_manager_->frontier_map2d_->releaseClaimByAgent(agent_idx);
 
+  vector<Vector2d> agent_positions(NUM_AGENTS, Vector2d::Zero());
+  vector<bool> active_agents(NUM_AGENTS, false);
+  for (int i = 0; i < NUM_AGENTS; ++i) {
+    const auto& other_ad = fd_->agent_[i];
+    agent_positions[i] = other_ad.have_odom_
+                              ? Vector2d(other_ad.odom_pos_(0), other_ad.odom_pos_(1))
+                              : Vector2d(other_ad.start_pt_(0), other_ad.start_pt_(1));
+    active_agents[i] = state_[i] != ROS_STATE::FINISH && other_ad.have_odom_;
+  }
+  expl_manager_->planMultiAgentAssignments(agent_positions, active_agents);
+
+  std_msgs::String mtsp_msg;
+  std::ostringstream mtsp_oss;
+  mtsp_oss << "stamp_sec=" << ros::Time::now().sec;
+  auto ed = expl_manager_->ed_;
+  for (int i = 0; i < NUM_AGENTS; ++i) {
+    mtsp_oss << " agent_" << i << "_valid="
+             << (i < (int)ed->mtsp_assignment_valid_.size() &&
+                    ed->mtsp_assignment_valid_[i]);
+    if (i < (int)ed->mtsp_assignment_valid_.size() && ed->mtsp_assignment_valid_[i]) {
+      mtsp_oss << " type=" << ed->mtsp_assigned_task_type_[i]
+               << " x=" << ed->mtsp_assigned_task_pos_[i](0)
+               << " y=" << ed->mtsp_assigned_task_pos_[i](1)
+               << " route_size=" << ed->mtsp_tours_[i].size();
+    }
+  }
+  mtsp_msg.data = mtsp_oss.str();
+  mtsp_assignment_pub_.publish(mtsp_msg);
+
   expl_res = expl_manager_->planNextBestPoint(
       ad.start_pt_, ad.start_yaw_, agent_idx, ad.planned_next_pos_, ad.planned_next_best_path_);
   setExplorationMode(agent_idx, explorationResultName(expl_res));
@@ -778,9 +808,19 @@ void ExplorationFSM::visualize()
       agent_vis->drawCubes({}, fp_->vis_scale_, Vector4d(0, 0, 0, 1), "object", i, 4);
     }
 
-    // Draw TSP tour (shared)
-    agent_vis->drawLines(vec2dTo3d(ed_ptr->tsp_tour_), fp_->vis_scale_ / 1.25,
-        Vector4d(0.2, 1, 0.2, 1), "tsp_tour", 0, 6);
+    // Draw this agent's MTSP route.
+    vector<Vector2d> mtsp_route;
+    if (agent_idx < (int)ed_ptr->mtsp_tours_.size())
+      mtsp_route = ed_ptr->mtsp_tours_[agent_idx];
+    agent_vis->drawLines(vec2dTo3d(mtsp_route), fp_->vis_scale_ / 1.15,
+        agent_vis->getColor(double(agent_idx) / NUM_AGENTS, 1.0), "mtsp_route", 0, 6);
+
+    vector<Vector2d> assigned_task;
+    if (agent_idx < (int)ed_ptr->mtsp_assignment_valid_.size() &&
+        ed_ptr->mtsp_assignment_valid_[agent_idx])
+      assigned_task.push_back(ed_ptr->mtsp_assigned_task_pos_[agent_idx]);
+    agent_vis->drawSpheres(vec2dTo3d(assigned_task), fp_->vis_scale_ * 3.5,
+        agent_vis->getColor(double(agent_idx) / NUM_AGENTS, 1.0), "mtsp_assigned_task", 2, 6);
   }
 
   last_ftr2d_num = ed_ptr->frontiers_.size();
@@ -815,9 +855,11 @@ void ExplorationFSM::clearVisMarker()
     for (int i = 0; i < 500; ++i) {
       agent_vis->drawCubes({}, fp_->vis_scale_, Vector4d(0, 0, 0, 1), "frontier", i, 4);
       agent_vis->drawCubes({}, fp_->vis_scale_, Vector4d(0, 0, 0, 1), "dormant_frontier", i, 4);
-      agent_vis->drawCubes({}, fp_->vis_scale_, Vector4d(0, 0, 0, 1), "object", i, 4);
+    agent_vis->drawCubes({}, fp_->vis_scale_, Vector4d(0, 0, 0, 1), "object", i, 4);
     }
     agent_vis->drawLines({}, fp_->vis_scale_, Vector4d(0, 0, 1, 1), "next_path", 1, 6);
+    agent_vis->drawLines({}, fp_->vis_scale_, Vector4d(0, 0, 1, 1), "mtsp_route", 0, 6);
+    agent_vis->drawSpheres({}, fp_->vis_scale_, Vector4d(0, 0, 1, 1), "mtsp_assigned_task", 2, 6);
   }
 }
 

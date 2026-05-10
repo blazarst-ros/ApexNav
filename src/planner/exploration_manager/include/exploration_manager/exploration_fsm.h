@@ -99,7 +99,7 @@ private:
   ros::Publisher action_pub_[NUM_AGENTS], ros_state_pub_, ros_state_all_pub_, ros_state_agents_pub_,
       expl_state_pub_, expl_result_pub_;
   ros::Publisher robot_marker_pub_[NUM_AGENTS], mode_debug_pub_[NUM_AGENTS],
-      exploration_mode_pub_[NUM_AGENTS];
+      exploration_mode_pub_[NUM_AGENTS], mtsp_assignment_pub_;
 
   /* Action Planner */
   int callActionPlanner(int agent_idx);

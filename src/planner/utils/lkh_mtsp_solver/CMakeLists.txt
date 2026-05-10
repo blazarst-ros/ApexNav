@@ -15,6 +15,7 @@ find_package(catkin REQUIRED COMPONENTS
 add_service_files(
   FILES
   SolveMTSP.srv
+  SolveLKH.srv
 )
 
 generate_messages(

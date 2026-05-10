@@ -17,6 +17,10 @@
 #include <path_searching/kino_astar.h>
 #include <trajectory_manager/optimizer.h>
 
+#include <algorithm>
+#include <cmath>
+#include <limits>
+
 using namespace Eigen;
 
 namespace apexnav_planner {
@@ -71,6 +75,299 @@ void ExplorationManager::initialize(ros::NodeHandle& nh)
   ROS_INFO("[ExplorationManager] KinoAstar and GCopter initialized for real-world mode");
 }
 
+void ExplorationManager::buildRoutingTasks(vector<RoutingTask>& tasks)
+{
+  tasks.clear();
+
+  vector<pcl::shared_ptr<pcl::PointCloud<pcl::PointXYZ>>> strict_object_clouds;
+  sdf_map_->object_map2d_->getTopConfidenceObjectCloud(strict_object_clouds);
+  for (const auto& cloud : strict_object_clouds) {
+    if (!cloud || cloud->points.empty())
+      continue;
+    RoutingTask task;
+    task.type = MTSP_TASK_STRICT_OBJECT;
+    task.priority_bonus = 1000.0;
+    task.object_cloud = cloud;
+    task.position.setZero();
+    for (const auto& p : cloud->points) {
+      task.position(0) += p.x;
+      task.position(1) += p.y;
+    }
+    task.position /= double(cloud->points.size());
+    tasks.push_back(task);
+  }
+
+  vector<pcl::shared_ptr<pcl::PointCloud<pcl::PointXYZ>>> suspicious_object_clouds;
+  sdf_map_->object_map2d_->getTopConfidenceObjectCloud(suspicious_object_clouds, false);
+  for (const auto& cloud : suspicious_object_clouds) {
+    if (!cloud || cloud->points.empty())
+      continue;
+    RoutingTask task;
+    task.type = MTSP_TASK_SUSPICIOUS_OBJECT;
+    task.priority_bonus = 250.0;
+    task.object_cloud = cloud;
+    task.position.setZero();
+    for (const auto& p : cloud->points) {
+      task.position(0) += p.x;
+      task.position(1) += p.y;
+    }
+    task.position /= double(cloud->points.size());
+    bool duplicate_object = false;
+    for (const auto& existing : tasks) {
+      if ((existing.type == MTSP_TASK_STRICT_OBJECT ||
+              existing.type == MTSP_TASK_SUSPICIOUS_OBJECT) &&
+          (existing.position - task.position).norm() < 0.5) {
+        duplicate_object = true;
+        break;
+      }
+    }
+    if (duplicate_object)
+      continue;
+    tasks.push_back(task);
+  }
+
+  for (const auto& frontier : ed_->frontier_averages_) {
+    RoutingTask task;
+    task.type = MTSP_TASK_FRONTIER;
+    task.position = frontier;
+
+    Vector2i idx;
+    sdf_map_->posToIndex(frontier, idx);
+    auto nbrs = allNeighbors(idx, 2);
+    double semantic_value = sdf_map_->value_map_->getValue(idx);
+    for (const auto& nbr : nbrs) {
+      if (sdf_map_->getInflateOccupancy(nbr) == 1 ||
+          sdf_map_->getOccupancy(nbr) == SDFMap2D::OCCUPIED)
+        continue;
+      semantic_value = std::max(semantic_value, sdf_map_->value_map_->getValue(nbr));
+    }
+    task.priority_bonus = std::min(100.0, semantic_value * 100.0);
+    tasks.push_back(task);
+  }
+}
+
+bool ExplorationManager::refineTaskPath(const Vector3d& start, const RoutingTask& task,
+    Eigen::Vector2d& refined_pos, std::vector<Eigen::Vector2d>& refined_path)
+{
+  if ((task.type == MTSP_TASK_STRICT_OBJECT || task.type == MTSP_TASK_SUSPICIOUS_OBJECT) &&
+      task.object_cloud && !task.object_cloud->points.empty()) {
+    return searchObjectPath(start, task.object_cloud, refined_pos, refined_path);
+  }
+
+  return searchFrontierPath(Vector2d(start(0), start(1)), task.position, refined_pos, refined_path);
+}
+
+void ExplorationManager::planMultiAgentAssignments(
+    const vector<Vector2d>& agent_positions, const vector<bool>& active_agents)
+{
+  constexpr int TOP_K_REFINE = 5;
+  constexpr double LOCAL_FRONTIER_RADIUS = 4.0;
+  constexpr double HYSTERESIS_KEEP_RATIO = 0.80;
+  constexpr double SAME_TASK_DISTANCE = 0.75;
+  constexpr double UNREACHABLE_COST = 9999.0;
+
+  if ((int)ed_->mtsp_tours_.size() != NUM_AGENTS) {
+    ed_->mtsp_tours_.assign(NUM_AGENTS, std::vector<Vector2d>());
+    ed_->mtsp_assigned_task_pos_.assign(NUM_AGENTS, Vector2d(0, 0));
+    ed_->mtsp_assigned_task_type_.assign(NUM_AGENTS, -1);
+    ed_->mtsp_assignment_valid_.assign(NUM_AGENTS, false);
+  }
+
+  vector<Vector2d> prev_task_pos = ed_->mtsp_assigned_task_pos_;
+  vector<int> prev_task_type = ed_->mtsp_assigned_task_type_;
+  vector<bool> prev_task_valid = ed_->mtsp_assignment_valid_;
+
+  for (int i = 0; i < NUM_AGENTS; ++i) {
+    ed_->mtsp_tours_[i].clear();
+    ed_->mtsp_assigned_task_pos_[i] = Vector2d(0, 0);
+    ed_->mtsp_assigned_task_type_[i] = -1;
+    ed_->mtsp_assignment_valid_[i] = false;
+  }
+
+  vector<RoutingTask> tasks;
+  buildRoutingTasks(tasks);
+  if (tasks.empty() || agent_positions.empty())
+    return;
+
+  vector<int> active_indices;
+  for (int i = 0; i < NUM_AGENTS && i < (int)agent_positions.size() &&
+                  i < (int)active_agents.size();
+       ++i) {
+    if (active_agents[i])
+      active_indices.push_back(i);
+  }
+  if (active_indices.empty())
+    return;
+
+  auto taskTypeRank = [](int type) {
+    if (type == MTSP_TASK_STRICT_OBJECT)
+      return 0;
+    if (type == MTSP_TASK_SUSPICIOUS_OBJECT)
+      return 1;
+    return 2;
+  };
+
+  auto semanticBonus = [](const RoutingTask& task) {
+    if (task.type == MTSP_TASK_FRONTIER)
+      return std::min(1.5, task.priority_bonus * 0.02);
+    if (task.type == MTSP_TASK_SUSPICIOUS_OBJECT)
+      return 0.5;
+    return 0.0;
+  };
+
+  vector<vector<int>> regions(NUM_AGENTS);
+  for (int task_idx = 0; task_idx < (int)tasks.size(); ++task_idx) {
+    int nearest_agent = -1;
+    double nearest_dist = std::numeric_limits<double>::infinity();
+    for (int agent_idx : active_indices) {
+      double dist = (tasks[task_idx].position - agent_positions[agent_idx]).norm();
+      if (dist < nearest_dist) {
+        nearest_dist = dist;
+        nearest_agent = agent_idx;
+      }
+    }
+    if (nearest_agent >= 0)
+      regions[nearest_agent].push_back(task_idx);
+  }
+
+  vector<double> selected_costs(NUM_AGENTS, UNREACHABLE_COST);
+  for (int agent_idx : active_indices) {
+    auto candidates = regions[agent_idx];
+    if (candidates.empty()) {
+      for (int task_idx = 0; task_idx < (int)tasks.size(); ++task_idx)
+        candidates.push_back(task_idx);
+    }
+
+    bool has_local_frontier = false;
+    for (int task_idx : candidates) {
+      if (tasks[task_idx].type == MTSP_TASK_FRONTIER &&
+          (tasks[task_idx].position - agent_positions[agent_idx]).norm() <=
+              LOCAL_FRONTIER_RADIUS) {
+        has_local_frontier = true;
+        break;
+      }
+    }
+    if (has_local_frontier) {
+      candidates.erase(std::remove_if(candidates.begin(), candidates.end(),
+                           [&](int task_idx) {
+                             return tasks[task_idx].type == MTSP_TASK_FRONTIER &&
+                                    (tasks[task_idx].position - agent_positions[agent_idx]).norm() >
+                                        LOCAL_FRONTIER_RADIUS;
+                           }),
+          candidates.end());
+    }
+
+    std::sort(candidates.begin(), candidates.end(), [&](int lhs, int rhs) {
+      int lhs_rank = taskTypeRank(tasks[lhs].type);
+      int rhs_rank = taskTypeRank(tasks[rhs].type);
+      if (lhs_rank != rhs_rank)
+        return lhs_rank < rhs_rank;
+      double lhs_dist = (tasks[lhs].position - agent_positions[agent_idx]).norm();
+      double rhs_dist = (tasks[rhs].position - agent_positions[agent_idx]).norm();
+      double lhs_score = lhs_dist - semanticBonus(tasks[lhs]);
+      double rhs_score = rhs_dist - semanticBonus(tasks[rhs]);
+      if (std::fabs(lhs_score - rhs_score) > 1e-3)
+        return lhs_score < rhs_score;
+      return lhs < rhs;
+    });
+
+    int best_task = -1;
+    double best_score = std::numeric_limits<double>::infinity();
+    double best_cost = UNREACHABLE_COST;
+    const int refine_count = std::min(TOP_K_REFINE, (int)candidates.size());
+    for (int i = 0; i < refine_count; ++i) {
+      int task_idx = candidates[i];
+      double path_cost = computePathCost(agent_positions[agent_idx], tasks[task_idx].position);
+      if (path_cost >= UNREACHABLE_COST)
+        continue;
+      double score = taskTypeRank(tasks[task_idx].type) * 100.0 + path_cost -
+                     semanticBonus(tasks[task_idx]);
+      if (score < best_score) {
+        best_score = score;
+        best_task = task_idx;
+        best_cost = path_cost;
+      }
+    }
+
+    if ((int)prev_task_valid.size() > agent_idx &&
+        (int)prev_task_type.size() > agent_idx &&
+        (int)prev_task_pos.size() > agent_idx &&
+        prev_task_valid[agent_idx]) {
+      int prev_match = -1;
+      for (int task_idx = 0; task_idx < (int)tasks.size(); ++task_idx) {
+        if (tasks[task_idx].type == prev_task_type[agent_idx] &&
+            (tasks[task_idx].position - prev_task_pos[agent_idx]).norm() < SAME_TASK_DISTANCE) {
+          prev_match = task_idx;
+          break;
+        }
+      }
+      if (prev_match >= 0) {
+        double prev_cost = computePathCost(agent_positions[agent_idx], tasks[prev_match].position);
+        if (prev_cost < UNREACHABLE_COST &&
+            (best_task < 0 || prev_cost <= best_cost / HYSTERESIS_KEEP_RATIO)) {
+          best_task = prev_match;
+          best_cost = prev_cost;
+        }
+      }
+    }
+
+    ed_->mtsp_tours_[agent_idx].push_back(agent_positions[agent_idx]);
+    for (int task_idx : candidates)
+      ed_->mtsp_tours_[agent_idx].push_back(tasks[task_idx].position);
+
+    if (best_task >= 0) {
+      ed_->mtsp_assigned_task_pos_[agent_idx] = tasks[best_task].position;
+      ed_->mtsp_assigned_task_type_[agent_idx] = tasks[best_task].type;
+      ed_->mtsp_assignment_valid_[agent_idx] = true;
+      selected_costs[agent_idx] = best_cost;
+    }
+  }
+
+  ROS_WARN("[Voronoi] Assigned local tasks across %zu active agents. Costs: %.2f %.2f %.2f",
+      active_indices.size(), selected_costs[0], selected_costs[1], selected_costs[2]);
+}
+
+bool ExplorationManager::consumeAssignedTask(const Vector3d& pos, int agent_idx,
+    Eigen::Vector2d& out_next_pos, std::vector<Eigen::Vector2d>& out_next_best_path, int& result)
+{
+  if (agent_idx < 0 || agent_idx >= NUM_AGENTS ||
+      agent_idx >= (int)ed_->mtsp_assignment_valid_.size() ||
+      !ed_->mtsp_assignment_valid_[agent_idx])
+    return false;
+
+  vector<RoutingTask> tasks;
+  buildRoutingTasks(tasks);
+  if (tasks.empty())
+    return false;
+
+  const Vector2d assigned_pos = ed_->mtsp_assigned_task_pos_[agent_idx];
+  const int assigned_type = ed_->mtsp_assigned_task_type_[agent_idx];
+  int best_task = -1;
+  double best_dist = std::numeric_limits<double>::infinity();
+  for (int i = 0; i < (int)tasks.size(); ++i) {
+    if (tasks[i].type != assigned_type)
+      continue;
+    double dist = (tasks[i].position - assigned_pos).norm();
+    if (dist < best_dist) {
+      best_dist = dist;
+      best_task = i;
+    }
+  }
+  if (best_task < 0 || best_dist > 0.75)
+    return false;
+
+  if (!refineTaskPath(pos, tasks[best_task], out_next_pos, out_next_best_path))
+    return false;
+
+  if (assigned_type == MTSP_TASK_STRICT_OBJECT)
+    result = SEARCH_BEST_OBJECT;
+  else if (assigned_type == MTSP_TASK_SUSPICIOUS_OBJECT)
+    result = SEARCH_SUSPICIOUS_OBJECT;
+  else
+    result = EXPLORATION;
+  return true;
+}
+
 int ExplorationManager::planNextBestPoint(const Vector3d& pos, const double& yaw, int agent_idx,
     Eigen::Vector2d& out_next_pos, std::vector<Eigen::Vector2d>& out_next_best_path)
 {
@@ -82,6 +379,14 @@ int ExplorationManager::planNextBestPoint(const Vector3d& pos, const double& yaw
   // Clear previous planning results
   ed_->tsp_tour_.clear();
   out_next_best_path.clear();
+
+  int assigned_result = EXPLORATION;
+  if (consumeAssignedTask(pos, agent_idx, out_next_pos, out_next_best_path, assigned_result)) {
+    if (assigned_result == EXPLORATION)
+      frontier_map2d_->claimFrontierByPosition(out_next_pos, agent_idx);
+    return assigned_result;
+  }
+
   vector<pcl::shared_ptr<pcl::PointCloud<pcl::PointXYZ>>> object_clouds;
   sdf_map_->object_map2d_->getTopConfidenceObjectCloud(object_clouds);
 

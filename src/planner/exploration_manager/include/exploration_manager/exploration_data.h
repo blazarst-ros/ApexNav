@@ -142,6 +142,10 @@ struct ExplorationData {
     next_pos_ = Eigen::Vector2d(0, 0);
     next_best_path_.clear();
     tsp_tour_.clear();
+    mtsp_tours_.assign(NUM_AGENTS, std::vector<Eigen::Vector2d>());
+    mtsp_assigned_task_pos_.assign(NUM_AGENTS, Eigen::Vector2d(0, 0));
+    mtsp_assigned_task_type_.assign(NUM_AGENTS, -1);
+    mtsp_assignment_valid_.assign(NUM_AGENTS, false);
   }
   std::vector<std::vector<Eigen::Vector2d>> frontiers_, dormant_frontiers_;
   std::vector<Eigen::Vector2d> frontier_averages_, dormant_frontier_averages_;
@@ -152,6 +156,10 @@ struct ExplorationData {
   Eigen::Vector2d next_local_pos_;  // Local target position along path
   std::vector<Eigen::Vector2d> next_best_path_;
   std::vector<Eigen::Vector2d> tsp_tour_;
+  std::vector<std::vector<Eigen::Vector2d>> mtsp_tours_;
+  std::vector<Eigen::Vector2d> mtsp_assigned_task_pos_;
+  std::vector<int> mtsp_assigned_task_type_;
+  std::vector<bool> mtsp_assignment_valid_;
 };
 
 struct ExplorationParam {
