@@ -336,3 +336,99 @@ Semantic Verification Prior:
   {category: remote, mu_v: 0.60, sigma_v: 0.25, unit: meter, rationale: Remotes are frequently on sofas or side tables; a view from furniture height distinguishes slim form.},
   {category: cup, mu_v: 0.75, sigma_v: 0.20, unit: meter, rationale: Cups are typically on tables or countertops; camera captures cylindrical shape from table height.}
 ]
+gym equipment: Thought: The user provided the label "gym equipment." This is not a standard COCO class. Standard COCO classes include objects like "chair," "couch," "tv," "laptop," "remote," "keyboard," "cell phone," "microwave," "oven," "toaster," "sink," "refrigerator," "book," "clock," "vase," "scissors," "teddy bear," "hair drier," "toothbrush."
+
+Since "gym equipment" is not a COCO class, I need to map it to the most relevant COCO class. The closest would be "sports ball," but that might not capture things like dumbbells, treadmills, or exercise bikes. Another possibility is to default to a generic object like "chair" or "bench" if considering weight benches. However, the instruction says to consider the label provided. To follow the format, I should treat "gym equipment" as the label and provide misdetection labels from COCO classes.
+
+Wait, the instruction says "Based on the labels I provide, you'll give the labels that may cause misdetection, potential room objects, and the confidence threshold." and "the labels should be in COCO classes." This could mean the misdetection labels should be COCO classes, not necessarily the original label. The original label is given by the user.
+
+For the original label "gym equipment," which is not in COCO, I can still provide misdetection labels that are COCO classes that might be confused with gym equipment. For example:
+
+- "dumbbell" is not COCO.
+- "chair" (weight bench shape could be similar to a chair)
+- "tv" (screen on treadmill)
+- "laptop" (if small gym equipment like a fitness tracker)
+- "cell phone" (for similar reason)
+- "sports ball" (various balls are gym equipment)
+
+But these are weak connections. A better approach: Since "gym equipment" encompasses various objects, I can think of COCO classes that share shape or color with typical gym equipment.
+
+Misdetection possibilities:
+- sports ball: A ball is common gym equipment and could be confused with other balls.
+- chair: Weight benches or exercise chairs look like chairs.
+- tv: Treadmills often have screens.
+- book: Not relevant.
+- cell phone: Fitness trackers are small.
+
+More plausible:
+- chair: For weight benches or stationary bikes with seats.
+- tv: For treadmills.
+- sports ball: For training balls.
+- clock: For wall clocks in gym.
+
+Room: Gym equipment is most likely in a "gym" or "fitness room." But the output expects a room like "kitchen," "bedroom," "living room," "bathroom," "dining room," "hallway," "garage," "office," "gym." Since there is a specific "gym" room, I can use that. If not, "garage" or "everywhere" could work. I'll use "gym."
+
+Confidence threshold: Gym equipment can be large (treadmill) or small (dumbbell). A mid-range threshold like 0.40 is reasonable.
+
+Answer: [chair, tv, sports ball, clock, 0.40, gym]
+
+But "gym" is not explicitly in my earlier room list; it should be acceptable. Alternatively, "garage" also fits.
+
+Semantic Verification Prior: For each category, estimate camera height.
+
+- gym equipment: mu_v 0.90, sigma_v 0.30 (various sizes, but often on the ground or table)
+- chair: mu_v 0.85, sigma_v 0.20 (seat height)
+- tv: mu_v 1.20, sigma_v 0.30 (mounted or on stand)
+- sports ball: mu_v 0.50, sigma_v 0.20 (on ground or shelf)
+- clock: mu_v 1.30, sigma_v 0.30 (mounted high on wall)
+
+Let's produce final answer.Answer: [chair, tv, sports ball, clock, 0.40, gym]
+
+Semantic Verification Prior:
+[
+  {category: gym equipment, mu_v: 0.90, sigma_v: 0.30, unit: meter, rationale: Gym equipment varies in size and placement, but a mid-height camera captures both floor-based and table-top items.},
+  {category: chair, mu_v: 0.85, sigma_v: 0.20, unit: meter, rationale: Chairs used as gym seating or weight benches are typically at seat height.},
+  {category: tv, mu_v: 1.20, sigma_v: 0.30, unit: meter, rationale: TVs in gyms are often mounted on walls or stands for workout guidance.},
+  {category: sports ball, mu_v: 0.50, sigma_v: 0.20, unit: meter, rationale: Balls are usually on the floor or low shelves, requiring a lower camera view.},
+  {category: clock, mu_v: 1.30, sigma_v: 0.30, unit: meter, rationale: Clocks are commonly mounted high on walls to be visible during exercise.}
+]
+nightstand: Thought: In the COCO classes, confidence threshold for nightstand: A nightstand is a small, rectangular piece of furniture typically found next to a bed. It's similar in size to other small furniture but not as small as an apple (0.25), nor as large as a bed (0.65). A reasonable threshold is around 0.45.
+
+Misdetection possibilities:
+
+desk: A small desk can resemble a nightstand in shape and size, especially if it's compact with a flat top and possibly a drawer.
+
+dresser: A small dresser, particularly a low one with drawers, can be confused with a nightstand due to similar rectangular form and storage function.
+
+cabinet: A small cabinet, such as a bedside cabinet, is often synonymous with a nightstand, but in COCO classes, "cabinet" can be misdetected for the same reason.
+
+Room where the label may appear: A nightstand is almost exclusively found in a bedroom.
+
+Answer: [desk, dresser, cabinet, 0.45, bedroom]
+
+Semantic Verification Prior:
+[
+  {category: nightstand, mu_v: 0.75, sigma_v: 0.20, unit: meter, rationale: Nightstands are low bedside furniture; a camera at sitting eye level verifies top surface and drawer details.},
+  {category: desk, mu_v: 0.95, sigma_v: 0.25, unit: meter, rationale: Desks are commonly used at seated height; verifying from typical chair height covers the work surface.},
+  {category: dresser, mu_v: 1.05, sigma_v: 0.30, unit: meter, rationale: Dressers are mid-height storage; this viewpoint captures both drawers and top-mounted objects.},
+  {category: cabinet, mu_v: 0.90, sigma_v: 0.25, unit: meter, rationale: Cabinets vary in height indoors, but mid-level view helps confirm the enclosed structure and handle locations.}
+]
+counter: Answer: [dining table, sink, desk, bench, 0.55, kitchen]
+
+Semantic Verification Prior:
+[
+  {category: counter, mu_v: 0.90, sigma_v: 0.15, unit: meter, rationale: Counters are hip-height horizontal surfaces, so robot camera near adult waist height gives best view of top surface for shape verification.},
+  {category: dining table, mu_v: 0.95, sigma_v: 0.20, unit: meter, rationale: Tables are similar flat surfaces but typically higher (standard ~0.75m); viewpoint from mid-height avoids tabletop clutter confusion.},
+  {category: sink, mu_v: 0.85, sigma_v: 0.20, unit: meter, rationale: Sinks are built into counters at same height; lower viewpoint helps see basin depression that distinguishes from flat counter.},
+  {category: desk, mu_v: 0.80, sigma_v: 0.15, unit: meter, rationale: Desks are lower than counters (~0.72m seated height); slightly lower camera helps see desktop surface and distinguish from taller counter.},
+  {category: bench, mu_v: 0.50, sigma_v: 0.15, unit: meter, rationale: Benches are seating surfaces at ~0.45m; low camera height captures seat depth that counters lack.}
+]
+bed: Answer: [couch, sofa, bench, 0.65, bedroom]
+
+Semantic Verification Prior:
+[
+  {category: bed, mu_v: 0.75, sigma_v: 0.35, unit: meter, rationale: Beds are low-to-mid height horizontal surfaces; a low camera verifies mattress edges and blanket patterns.},
+  {category: couch, mu_v: 0.70, sigma_v: 0.30, unit: meter, rationale: Couches are sitting furniture with low height and horizontal seat area, best seen from a low perspective.},
+  {category: sofa, mu_v: 0.70, sigma_v: 0.30, unit: meter, rationale: Sofas are identical in form to couches and share the same low viewpoint requirement.},
+  {category: bench, mu_v: 0.65, sigma_v: 0.25, unit: meter, rationale: Benches have long low horizontal seats, making a low camera height ideal for verification.}
+]

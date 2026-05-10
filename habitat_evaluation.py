@@ -1115,6 +1115,7 @@ def main(cfg: DictConfig) -> None:
                         ast["vis_frames"].append(frame)
 
                 print(f"\n--------------Step: {agent_states[agent_names[0]]['count_steps']}--------------")
+                print(f"  Target object: {label}")
                 print(f"  Best agent: {best_agent} (dist={best_dist:.3f})")
                 publish_int32(state_pub, HABITAT_STATE.ACTION_FINISH)
             else:
