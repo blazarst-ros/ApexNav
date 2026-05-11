@@ -534,68 +534,36 @@ void MapROS::publishSemanticEvidenceDebug(
       observation_rho, detected_object.score, 1, snapshot.beta);
 
   plan_env::SemanticEvidenceDebug msg;
-  msg.header.stamp = ros::Time::now();
-  msg.header.frame_id = frame_id_;
+  msg.stamp = ros::Time::now().toSec();
   msg.agent_id = agent_id;
   msg.cluster_id = has_snapshot ? snapshot.cluster_id : object_cluster_id;
   msg.label = has_snapshot ? snapshot.label : detected_object.label;
   msg.best_label = has_snapshot ? snapshot.best_label : -1;
   msg.stage = stage;
-  msg.status = status;
-  msg.reason = reason;
   msg.accepted = status == "accepted";
-  msg.use_semantic_observability = snapshot.use_semantic_observability;
-  msg.lambda_d = snapshot.lambda_d;
-  msg.r0 = snapshot.r0;
-  msg.mask_sigmoid_k = snapshot.mask_sigmoid_k;
-  msg.beta = snapshot.beta;
-  msg.min_semantic_evidence = snapshot.min_semantic_evidence;
-  msg.min_observation_num = snapshot.min_observation_num;
+  msg.reason = reason;
+  msg.points = has_snapshot ? snapshot.observation_cloud_sum : raw_point_count;
+  msg.confidence = detected_object.score;
+  msg.observability = has_snapshot ? snapshot.observability : observation_rho;
+  msg.evidence = has_snapshot ? snapshot.quality_evidence : observation_evidence;
+  msg.min_evidence = snapshot.min_semantic_evidence;
+  msg.observations = has_snapshot ? snapshot.observation_num : 1;
+  msg.min_observations = snapshot.min_observation_num;
   msg.camera_height = detected_object.camera_height;
-  msg.mu_v = detected_object.mu_v;
-  msg.sigma_v = detected_object.sigma_v;
+  msg.prior_mu = detected_object.mu_v;
+  msg.prior_sigma = detected_object.sigma_v;
   msg.distance = detected_object.distance;
   msg.view_angle = detected_object.view_angle;
   msg.mask_scale = detected_object.mask_scale;
-  msg.raw_confidence = detected_object.score;
-  msg.fused_confidence = has_snapshot ? snapshot.fused_confidence : 0.0;
-  msg.observation_num = has_snapshot ? snapshot.observation_num : 0;
-  msg.observation_cloud_sum =
-      has_snapshot ? snapshot.observation_cloud_sum : raw_point_count;
-  msg.observability = has_snapshot ? snapshot.observability : observation_rho;
-  msg.quality_evidence = has_snapshot ? snapshot.quality_evidence : observation_evidence;
-  msg.target_quality_evidence = has_snapshot ? snapshot.target_quality_evidence : 0.0;
-  msg.target_fused_confidence = has_snapshot ? snapshot.target_fused_confidence : 0.0;
-  msg.target_observation_num = has_snapshot ? snapshot.target_observation_num : 0;
-  msg.target_passes_threshold = has_snapshot ? snapshot.target_passes_threshold : false;
-  msg.target_is_best_label = has_snapshot ? snapshot.target_is_best_label : false;
+  msg.target_evidence = has_snapshot ? snapshot.target_quality_evidence : 0.0;
+  msg.target_observations = has_snapshot ? snapshot.target_observation_num : 0;
+  msg.target_pass = has_snapshot ? snapshot.target_passes_threshold : false;
+  msg.target_best = has_snapshot ? snapshot.target_is_best_label : false;
   msg.top_label = has_snapshot ? snapshot.top_label : detected_object.label;
-  msg.top_quality_evidence =
-      has_snapshot ? snapshot.top_quality_evidence : observation_evidence;
-  msg.top_fused_confidence = has_snapshot ? snapshot.top_fused_confidence : detected_object.score;
-  msg.top_observation_num = has_snapshot ? snapshot.top_observation_num : 1;
-  msg.top_observation_cloud_sum =
-      has_snapshot ? snapshot.top_observation_cloud_sum : raw_point_count;
-  msg.top_observability = has_snapshot ? snapshot.top_observability : observation_rho;
-  msg.top_distance = has_snapshot ? snapshot.top_distance : detected_object.distance;
-  msg.top_view_angle = has_snapshot ? snapshot.top_view_angle : detected_object.view_angle;
-  msg.top_mask_scale = has_snapshot ? snapshot.top_mask_scale : detected_object.mask_scale;
-  msg.top_passes_threshold = has_snapshot ? snapshot.top_passes_threshold : false;
+  msg.top_evidence = has_snapshot ? snapshot.top_quality_evidence : observation_evidence;
   msg.second_label = has_snapshot ? snapshot.second_label : -1;
-  msg.second_quality_evidence = has_snapshot ? snapshot.second_quality_evidence : 0.0;
-  msg.second_fused_confidence = has_snapshot ? snapshot.second_fused_confidence : 0.0;
-  msg.second_observation_num = has_snapshot ? snapshot.second_observation_num : 0;
-  msg.second_observation_cloud_sum =
-      has_snapshot ? snapshot.second_observation_cloud_sum : 0;
-  msg.second_observability = has_snapshot ? snapshot.second_observability : 0.0;
-  msg.second_distance = has_snapshot ? snapshot.second_distance : 0.0;
-  msg.second_view_angle = has_snapshot ? snapshot.second_view_angle : 0.0;
-  msg.second_mask_scale = has_snapshot ? snapshot.second_mask_scale : 0.0;
-  msg.second_passes_threshold = has_snapshot ? snapshot.second_passes_threshold : false;
-  msg.top_second_abs_diff = has_snapshot ? snapshot.top_second_abs_diff
-                                         : std::abs(observation_evidence);
-  msg.target_is_top_label = has_snapshot ? snapshot.target_is_top_label
-                                         : detected_object.label == 0;
+  msg.second_evidence = has_snapshot ? snapshot.second_quality_evidence : 0.0;
+  msg.margin = has_snapshot ? snapshot.top_second_abs_diff : std::abs(observation_evidence);
 
   semantic_evidence_debug_pub_[agent_id].publish(msg);
 }

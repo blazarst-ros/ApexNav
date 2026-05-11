@@ -536,15 +536,33 @@ def main(cfg: DictConfig) -> None:
 
     # ── ROS Setup ──
     agent_actions = {}  # Per-agent action storage (keyed by agent_idx)
+    action_subs = []
+
+    def _reset_multi_agent_action_subscribers():
+        """Drop stale action-topic connections/queues before a new episode trigger."""
+        nonlocal action_subs
+        for sub in action_subs:
+            sub.unregister()
+        action_subs = []
+        agent_actions.clear()
+        for agent_idx in range(num_agents):
+            topic = _get_agent_action_index(agent_idx)
+            action_subs.append(
+                rospy.Subscriber(
+                    topic,
+                    Int32,
+                    _make_agent_action_callback(agent_idx, agent_actions),
+                    queue_size=1,
+                )
+            )
+
     if multi_agent:
         ros_pubs = {}
         for agent_name in agent_names:
             ros_pubs[agent_name] = habitat_publisher.ROSPublisher(
                 agent_name, _get_agent_camera_height(cfg, agent_name)
             )
-        for agent_idx in range(num_agents):
-            topic = _get_agent_action_index(agent_idx)
-            rospy.Subscriber(topic, Int32, _make_agent_action_callback(agent_idx, agent_actions), queue_size=10)
+        _reset_multi_agent_action_subscribers()
         ros_pub = ros_pubs[agent_names[0]]
     else:
         obj_point_cloud_pub = rospy.Publisher(
@@ -791,6 +809,10 @@ def main(cfg: DictConfig) -> None:
 
         print("Agents are ready to go!!!!")
 
+        if multi_agent:
+            _reset_multi_agent_action_subscribers()
+            rospy.sleep(0.05)
+
         # Kick the C++ planner out of WAIT_TRIGGER → PLAN_ACTION
         trigger_pub.publish(PoseStamped())
         rospy.sleep(0.1)
@@ -855,6 +877,16 @@ def main(cfg: DictConfig) -> None:
                 if waiting_action_agents and not all(
                     agent_idx in agent_actions for agent_idx in waiting_action_agents
                 ):
+                    missing_agents = [
+                        agent_idx for agent_idx in waiting_action_agents
+                        if agent_idx not in agent_actions
+                    ]
+                    rospy.logwarn_throttle(
+                        1.0,
+                        "Waiting for planner actions from agents %s; received actions from %s",
+                        missing_agents,
+                        sorted(agent_actions.keys()),
+                    )
                     for agent_name in agent_names:
                         ast = agent_states[agent_name]
                         if ast["finished"]:
