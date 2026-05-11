@@ -432,3 +432,12 @@ Semantic Verification Prior:
   {category: sofa, mu_v: 0.70, sigma_v: 0.30, unit: meter, rationale: Sofas are identical in form to couches and share the same low viewpoint requirement.},
   {category: bench, mu_v: 0.65, sigma_v: 0.25, unit: meter, rationale: Benches have long low horizontal seats, making a low camera height ideal for verification.}
 ]
+potted plant: Answer: [vase, book, bottle, 0.35, everywhere]
+
+Semantic Verification Prior:
+[
+  {category: potted plant, mu_v: 0.65, sigma_v: 0.30, unit: meter, rationale: Potted plants are often placed on the floor or low tables, so a low camera view captures the pot and leaves from a natural perspective.},
+  {category: vase, mu_v: 0.90, sigma_v: 0.30, unit: meter, rationale: Vases are usually placed on tables or countertops, requiring a mid-height view to distinguish from a short plant.},
+  {category: book, mu_v: 0.85, sigma_v: 0.25, unit: meter, rationale: Books lie on tables or shelves, and a front-facing rectangular view at table height helps verify shape.},
+  {category: bottle, mu_v: 0.80, sigma_v: 0.30, unit: meter, rationale: Bottles stand on counters or tables, and a mid-height side view identifies the narrow neck and cylindrical body.}
+]

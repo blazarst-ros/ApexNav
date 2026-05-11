@@ -42,7 +42,17 @@ def _get_num_agents(cfg):
     num = getattr(cfg, "num_agents", 2) if cfg else 2
     return num if num else 2
 
-def inverse_habitat_publisher_transform(sensor_pose_msg):
+def _get_agent_camera_height(cfg: DictConfig, agent_name: str) -> float:
+    try:
+        agent_cfg = cfg.habitat.simulator.agents[agent_name]
+        depth_sensor = agent_cfg.sim_sensors.depth_sensor
+        if "position" in depth_sensor and len(depth_sensor.position) >= 2:
+            return float(depth_sensor.position[1])
+    except Exception:
+        pass
+    return float(getattr(cfg.habitat_sensor, "camera_height", 0.88))
+
+def inverse_habitat_publisher_transform(sensor_pose_msg, camera_height):
     """
     Inverse transform to recover original Habitat gps and compass from ROS sensor_pose.
     """
@@ -50,7 +60,7 @@ def inverse_habitat_publisher_transform(sensor_pose_msg):
     orn = sensor_pose_msg.pose.pose.orientation
 
     # Invert position transform:
-    gps = np.array([-pos.y, pos.z - 0.88, -pos.x], dtype=np.float32)
+    gps = np.array([-pos.y, pos.z - float(camera_height), -pos.x], dtype=np.float32)
 
     # Invert orientation transform:
     euler = tft.euler_from_quaternion([orn.x, orn.y, orn.z, orn.w])
@@ -71,6 +81,11 @@ class AgentPerceptionPipeline:
         self.bridge = CvBridge()
 
         # Agent-namespaced subscribers
+        configured_camera_height = _get_agent_camera_height(cfg, agent_name)
+        self.camera_height = rospy.get_param(
+            f"/habitat/{agent_name}/camera_height",
+            configured_camera_height,
+        )
         self.rgb_sub_ = message_filters.Subscriber(f"/habitat/{agent_name}/camera_rgb", Image)
         self.depth_sub_ = message_filters.Subscriber(f"/habitat/{agent_name}/camera_depth", Image)
         self.sensor_pose_sub_ = message_filters.Subscriber(
@@ -145,7 +160,9 @@ class AgentPerceptionPipeline:
                 self.label, rgb_cv, self.config.detector, self.llm_answer
             )
 
-            gps, compass = inverse_habitat_publisher_transform(sensor_pose_msg)
+            gps, compass = inverse_habitat_publisher_transform(
+                sensor_pose_msg, self.camera_height
+            )
 
             observations = {
                 "depth": depth_cv,

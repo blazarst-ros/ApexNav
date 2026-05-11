@@ -42,6 +42,9 @@ ObjectMap2D::ObjectMap2D(SDFMap2D* sdf_map, ros::NodeHandle& nh)
   nh.param("object/mask_sigmoid_k", mask_sigmoid_k_, 300.0);
   nh.param("object/beta", beta_, 0.5);
   nh.param("object/min_semantic_evidence", min_semantic_evidence_, 0.05);
+  nh.param("object/verification_margin_threshold", verification_margin_threshold_, 0.12);
+  nh.param("object/verification_accept_margin", verification_accept_margin_, 0.18);
+  nh.param("object/verification_max_count", verification_max_count_, 1);
 
   // Setup ROS communication
   object_cloud_pub_ = nh.advertise<sensor_msgs::PointCloud2>("/object/clouds", 10);
@@ -182,6 +185,85 @@ void ObjectMap2D::getSemanticEvidenceConfig(SemanticEvidenceSnapshot& snapshot) 
   snapshot.beta = beta_;
   snapshot.min_semantic_evidence = min_semantic_evidence_;
   snapshot.min_observation_num = min_observation_num_;
+}
+
+void ObjectMap2D::getVerificationCandidates(std::vector<VerificationCandidate>& candidates)
+{
+  candidates.clear();
+
+  double target_mu_v = 1.0;
+  double target_sigma_v = 0.35;
+  ros::param::param("/semantic_prior/label_0/mu_v", target_mu_v, target_mu_v);
+  ros::param::param("/semantic_prior/label_0/sigma_v", target_sigma_v, target_sigma_v);
+
+  for (auto& object : objects_) {
+    updateVerificationState(object);
+    if (object.verification_verified_ ||
+        (!object.verification_pending_ &&
+            object.verification_count_ >= verification_max_count_) ||
+        object.quality_evidence_scores_.size() < 2 ||
+        object.observation_nums_.empty()) {
+      continue;
+    }
+
+    int top_label = -1;
+    int second_label = -1;
+    double top_score = -std::numeric_limits<double>::infinity();
+    double second_score = -std::numeric_limits<double>::infinity();
+    const int label_count = (int)object.quality_evidence_scores_.size();
+    for (int label = 0; label < label_count; ++label) {
+      const double score = object.quality_evidence_scores_[label];
+      if (score > top_score) {
+        second_score = top_score;
+        second_label = top_label;
+        top_score = score;
+        top_label = label;
+      }
+      else if (score > second_score) {
+        second_score = score;
+        second_label = label;
+      }
+    }
+
+    if (top_label != 0 || second_label < 0)
+      continue;
+    if (top_score < min_semantic_evidence_ || object.observation_nums_[0] < min_observation_num_)
+      continue;
+
+    const double margin = top_score - second_score;
+    if (margin >= verification_margin_threshold_)
+      continue;
+
+    VerificationCandidate candidate;
+    candidate.object_id = object.id_;
+    candidate.position = object.average_;
+    candidate.top_score = top_score;
+    candidate.second_score = second_score;
+    candidate.margin = margin;
+    candidate.target_mu_v = target_mu_v;
+    candidate.target_sigma_v = target_sigma_v;
+    candidate.source_agent_id = object.last_observer_agent_;
+    candidate.verify_count = object.verification_count_;
+    candidate.verified = object.verification_verified_;
+    candidate.object_cloud.reset(new pcl::PointCloud<pcl::PointXYZ>());
+    const auto& source_cells = object.good_cells_.empty() ? object.cells_ : object.good_cells_;
+    for (const auto& cell : source_cells) {
+      pcl::PointXYZ point;
+      point.x = cell(0);
+      point.y = cell(1);
+      point.z = 0.0;
+      candidate.object_cloud->push_back(point);
+    }
+    if (candidate.object_cloud->points.empty())
+      continue;
+
+    if (!object.verification_pending_) {
+      object.verification_pending_ = true;
+      object.verification_count_++;
+    }
+    candidate.verify_count = object.verification_count_;
+    candidates.push_back(candidate);
+  }
 }
 
 /**
@@ -396,6 +478,39 @@ void ObjectMap2D::updateObjectBestLabel(int obj_idx)
     }
   }
   objects_[obj_idx].best_label_ = best_label;
+  updateVerificationState(objects_[obj_idx]);
+}
+
+void ObjectMap2D::updateVerificationState(ObjectCluster& object)
+{
+  if (!object.verification_pending_ || object.verification_verified_ ||
+      object.quality_evidence_scores_.size() < 2) {
+    return;
+  }
+
+  int top_label = -1;
+  int second_label = -1;
+  double top_score = -std::numeric_limits<double>::infinity();
+  double second_score = -std::numeric_limits<double>::infinity();
+  for (int label = 0; label < (int)object.quality_evidence_scores_.size(); ++label) {
+    const double score = object.quality_evidence_scores_[label];
+    if (score > top_score) {
+      second_score = top_score;
+      second_label = top_label;
+      top_score = score;
+      top_label = label;
+    }
+    else if (score > second_score) {
+      second_score = score;
+      second_label = label;
+    }
+  }
+
+  if (top_label == 0 && second_label >= 0 &&
+      top_score - second_score >= verification_accept_margin_) {
+    object.verification_verified_ = true;
+    object.verification_pending_ = false;
+  }
 }
 
 void ObjectMap2D::updateQualityAwareEvidence(
@@ -476,6 +591,7 @@ void ObjectMap2D::createNewObjectCluster(
   obj.good_cells_.clear();
   obj.seen_counts_.clear();
   obj.best_label_ = -1;
+  obj.last_observer_agent_ = detected_object.agent_id;
 
   // Process spatial cells and establish grid associations
   for (auto cell : cells) {
@@ -548,6 +664,7 @@ void ObjectMap2D::mergeCellsIntoObjectCluster(const int& merged_object_id,
   const auto last_objects = objects_;
 
   ObjectCluster& merged_object = objects_[merged_object_id];
+  merged_object.last_observer_agent_ = detected_object.agent_id;
   std::vector<Eigen::Vector2d> real_new_cells;
 
   // Process new spatial cells for integration
@@ -785,6 +902,8 @@ void ObjectMap2D::getAllConfidenceObjectClouds(
 
   // Extract high-confidence object cells
   for (auto object : objects_) {
+    if (object.verification_pending_ && !object.verification_verified_)
+      continue;
     if (object.quality_evidence_scores_.empty() || object.confidence_scores_.empty() ||
         object.observation_nums_.empty())
       continue;
@@ -815,6 +934,8 @@ void ObjectMap2D::getTopConfidenceObjectCloud(
   if (!limited_confidence) {
     // Include all objects without confidence filtering
     for (auto object : objects_) {
+      if (object.verification_pending_ && !object.verification_verified_)
+        continue;
       if (object.quality_evidence_scores_.empty() || object.confidence_scores_.empty() ||
           object.observation_nums_.empty())
         continue;
@@ -873,6 +994,8 @@ void ObjectMap2D::getTopConfidenceObjectCloud(
   else {
     // Apply confidence filtering with functional scoring
     for (auto object : objects_) {
+      if (object.verification_pending_ && !object.verification_verified_)
+        continue;
       if (object.quality_evidence_scores_.empty() || object.confidence_scores_.empty() ||
           object.observation_nums_.empty())
         continue;
@@ -927,6 +1050,8 @@ void ObjectMap2D::getTopConfidenceObjectCloud(
 
 bool ObjectMap2D::isConfidenceObject(const ObjectCluster& obj)
 {
+  if (obj.verification_pending_ && !obj.verification_verified_)
+    return false;
   if (obj.quality_evidence_scores_.empty() || obj.confidence_scores_.empty() ||
       obj.observation_nums_.empty())
     return false;

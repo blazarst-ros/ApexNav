@@ -49,6 +49,7 @@ habitat:
             height: 480
             hfov: 79
             position: [0, 0.88, 0]
+            orientation: [0, 0, 0]
           depth_sensor:
             type: HabitatSimDepthSensor
             width: 640
@@ -58,6 +59,7 @@ habitat:
             max_depth: 5.0
             normalize_depth: true
             position: [0, 0.88, 0]
+            orientation: [0, 0, 0]
 
 detector:
   yolo:

@@ -35,7 +35,7 @@ void MapROS::init()
   node_.param("map_ros/depth_filter_mindist", depth_filter_mindist_, -1.0);
   node_.param("map_ros/depth_filter_margin", depth_filter_margin_, -1);
   node_.param("map_ros/filter_min_height", filter_min_height_, 0.5);
-  node_.param("map_ros/filter_max_height", filter_max_height_, 0.88);
+  node_.param("map_ros/filter_max_height", filter_max_height_, 1.30);
   node_.param("map_ros/k_depth_scaling_factor", k_depth_scaling_factor_, -1.0);
   node_.param("map_ros/skip_pixel", skip_pixel_, -1);
   node_.param("map_ros/frame_id", frame_id_, string("world"));
@@ -187,6 +187,7 @@ void MapROS::init()
     init_detection.camera_height = agents_[id].camera_pos_(2);
     init_detection.mu_v = 1.0;
     init_detection.sigma_v = 0.35;
+    init_detection.agent_id = id;
     publishSemanticEvidenceDebug(
         id, init_detection, -1, "init", "waiting", "waiting_for_detection_message");
   }
@@ -261,6 +262,7 @@ void MapROS::detectedObjectCloudCallback(int agent_id, const plan_env::MultipleM
       empty_detection.camera_height = agent.camera_pos_(2);
       empty_detection.mu_v = 1.0;
       empty_detection.sigma_v = 0.35;
+      empty_detection.agent_id = agent_id;
       publishSemanticEvidenceDebug(
           agent_id, empty_detection, -1, "input", "empty", "detection_message_empty");
     }
@@ -297,6 +299,7 @@ void MapROS::detectedObjectCloudCallback(int agent_id, const plan_env::MultipleM
       raw_detection.camera_height = agent.camera_pos_(2);
       raw_detection.mu_v = 1.0;
       raw_detection.sigma_v = 0.35;
+      raw_detection.agent_id = agent_id;
       publishSemanticEvidenceDebug(
           agent_id, raw_detection, -1, "input", "received", "raw_detection_before_filters");
     }
@@ -313,6 +316,7 @@ void MapROS::detectedObjectCloudCallback(int agent_id, const plan_env::MultipleM
     pitch_detection.camera_height = agent.camera_pos_(2);
     pitch_detection.mu_v = 1.0;
     pitch_detection.sigma_v = 0.35;
+    pitch_detection.agent_id = agent_id;
     publishSemanticEvidenceDebug(
         agent_id, pitch_detection, -1, "pitch_gate", "rejected", "camera_pitch_below_1.5");
     return;
@@ -344,6 +348,7 @@ void MapROS::detectedObjectCloudCallback(int agent_id, const plan_env::MultipleM
       invalid_detection.label = label;
       invalid_detection.mask_scale = mask_scale;
       invalid_detection.camera_height = agent.camera_pos_(2);
+      invalid_detection.agent_id = agent_id;
       publishSemanticEvidenceDebug(
           agent_id, invalid_detection, -1, "label_filter", "rejected", "invalid_label");
       continue;
@@ -386,6 +391,7 @@ void MapROS::detectedObjectCloudCallback(int agent_id, const plan_env::MultipleM
       rejected_object.label = label;
       rejected_object.mask_scale = mask_scale;
       rejected_object.camera_height = agent.camera_pos_(2);
+      rejected_object.agent_id = agent_id;
       publishSemanticEvidenceDebug(
           agent_id, rejected_object, -1, "depth_filter", "rejected", "all_points_over_depth");
       continue;
@@ -401,6 +407,7 @@ void MapROS::detectedObjectCloudCallback(int agent_id, const plan_env::MultipleM
       rejected_object.label = label;
       rejected_object.mask_scale = mask_scale;
       rejected_object.camera_height = agent.camera_pos_(2);
+      rejected_object.agent_id = agent_id;
       publishSemanticEvidenceDebug(
           agent_id, rejected_object, -1, "dbscan", "rejected", "no_cluster_found");
       continue;
@@ -414,6 +421,7 @@ void MapROS::detectedObjectCloudCallback(int agent_id, const plan_env::MultipleM
       rejected_object.label = label;
       rejected_object.mask_scale = mask_scale;
       rejected_object.camera_height = agent.camera_pos_(2);
+      rejected_object.agent_id = agent_id;
       publishSemanticEvidenceDebug(
           agent_id, rejected_object, -1, "dbscan", "rejected", "cluster_empty");
       continue;
@@ -452,6 +460,7 @@ void MapROS::detectedObjectCloudCallback(int agent_id, const plan_env::MultipleM
     detected_object.camera_height = agent.camera_pos_(2);
     detected_object.mu_v = mu_v;
     detected_object.sigma_v = sigma_v;
+    detected_object.agent_id = agent_id;
     detected_objects.push_back(detected_object);
   }
 

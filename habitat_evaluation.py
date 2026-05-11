@@ -207,6 +207,23 @@ def _is_multi_agent(cfg: DictConfig) -> bool:
     return cfg.get("num_agents", 1) > 1
 
 
+def _get_agent_camera_height(cfg: DictConfig, agent_name: str) -> float:
+    """Return the configured Habitat camera height for an agent."""
+    try:
+        agent_cfg = cfg.habitat.simulator.agents[agent_name]
+        rgb_sensor = agent_cfg.sim_sensors.rgb_sensor
+        if "position" in rgb_sensor and len(rgb_sensor.position) >= 2:
+            return float(rgb_sensor.position[1])
+        return float(agent_cfg.get("height", 0.88))
+    except Exception:
+        return 0.88
+
+
+def _clamp_camera_pitch(pitch: float) -> float:
+    """Keep the tracked ROS camera pitch within Habitat's one-step look range."""
+    return float(np.clip(pitch, -np.pi / 6.0, np.pi / 6.0))
+
+
 def _setup_multi_agent_env(env, cfg: DictConfig):
     """Assign per-agent start positions.
 
@@ -522,7 +539,9 @@ def main(cfg: DictConfig) -> None:
     if multi_agent:
         ros_pubs = {}
         for agent_name in agent_names:
-            ros_pubs[agent_name] = habitat_publisher.ROSPublisher(agent_name)
+            ros_pubs[agent_name] = habitat_publisher.ROSPublisher(
+                agent_name, _get_agent_camera_height(cfg, agent_name)
+            )
         for agent_idx in range(num_agents):
             topic = _get_agent_action_index(agent_idx)
             rospy.Subscriber(topic, Int32, _make_agent_action_callback(agent_idx, agent_actions), queue_size=10)
@@ -531,7 +550,9 @@ def main(cfg: DictConfig) -> None:
         obj_point_cloud_pub = rospy.Publisher(
             "habitat/object_point_cloud", PointCloud2, queue_size=10
         )
-        ros_pub = habitat_publisher.ROSPublisher()
+        ros_pub = habitat_publisher.ROSPublisher(
+            agent_names[0], _get_agent_camera_height(cfg, agent_names[0])
+        )
         # Single-agent: subscribe to the default action topic
         rospy.Subscriber(
             _get_agent_action_index(0), Int32, ros_action_callback, queue_size=10
@@ -914,13 +935,17 @@ def main(cfg: DictConfig) -> None:
                         single_action_changes_viewpoint = True
                 elif g_action == ACTION.TURN_DOWN:
                     action = HabitatSimActions.look_down
-                    ast["camera_pitch"] -= np.pi / 6.0
+                    ast["camera_pitch"] = _clamp_camera_pitch(
+                        ast["camera_pitch"] - np.pi / 6.0
+                    )
                     viewpoint_action_agents.add(agent_name)
                     if not multi_agent:
                         single_action_changes_viewpoint = True
                 elif g_action == ACTION.TURN_UP:
                     action = HabitatSimActions.look_up
-                    ast["camera_pitch"] += np.pi / 6.0
+                    ast["camera_pitch"] = _clamp_camera_pitch(
+                        ast["camera_pitch"] + np.pi / 6.0
+                    )
                     viewpoint_action_agents.add(agent_name)
                     if not multi_agent:
                         single_action_changes_viewpoint = True

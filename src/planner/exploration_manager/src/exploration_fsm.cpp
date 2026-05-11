@@ -116,6 +116,8 @@ string ExplorationFSM::explorationResultName(int expl_result) const
       return "STRICT_TARGET";
     case EXPL_RESULT::SEARCH_OVER_DEPTH_OBJECT:
       return "OVER_DEPTH";
+    case EXPL_RESULT::SEARCH_VERIFY_OBJECT:
+      return "VERIFY_OBJECT";
     case EXPL_RESULT::SEARCH_SUSPICIOUS_OBJECT:
       return "SUSPICIOUS";
     case EXPL_RESULT::NO_PASSABLE_FRONTIER:
@@ -245,17 +247,10 @@ void ExplorationFSM::FSMCallback(const ros::TimerEvent& e)
       }
 
       case ROS_STATE::PLAN_ACTION: {
-        if (ad.init_action_count_ < 1 + 12 + 1 + 12) {
+        if (ad.init_action_count_ < 12) {
           setExplorationMode(agent_idx, "INIT_SCAN");
-          if (ad.init_action_count_ < 1)
-            ad.newest_action_ = ACTION::TURN_DOWN;
-          else if (ad.init_action_count_ < 1 + 12)
-            ad.newest_action_ = ACTION::TURN_LEFT;
-          else if (ad.init_action_count_ < 1 + 12 + 1)
-            ad.newest_action_ = ACTION::TURN_UP;
-          else
-            ad.newest_action_ = ACTION::TURN_LEFT;
-          ROS_WARN("Agent %d Init Mode Process -----> (%d/26)", agent_idx, ad.init_action_count_);
+          ad.newest_action_ = ACTION::TURN_LEFT;
+          ROS_WARN("Agent %d Init Mode Process -----> (%d/12)", agent_idx, ad.init_action_count_);
           ad.init_action_count_++;
           transitState(agent_idx, ROS_STATE::PUB_ACTION, "FSM");
           updateFrontierAndObject();
@@ -484,15 +479,21 @@ int ExplorationFSM::callActionPlanner(int agent_idx)
     expl_manager_->frontier_map2d_->releaseClaimByAgent(agent_idx);
 
   vector<Vector2d> agent_positions(NUM_AGENTS, Vector2d::Zero());
+  vector<double> agent_heights(NUM_AGENTS, 1.0);
   vector<bool> active_agents(NUM_AGENTS, false);
   for (int i = 0; i < NUM_AGENTS; ++i) {
     const auto& other_ad = fd_->agent_[i];
     agent_positions[i] = other_ad.have_odom_
                               ? Vector2d(other_ad.odom_pos_(0), other_ad.odom_pos_(1))
                               : Vector2d(other_ad.start_pt_(0), other_ad.start_pt_(1));
+    const double fallback_height =
+        other_ad.have_odom_ ? other_ad.odom_pos_(2) : other_ad.start_pt_(2);
+    ros::param::param(
+        "/habitat/agent_" + std::to_string(i) + "/camera_height", agent_heights[i],
+        fallback_height);
     active_agents[i] = state_[i] != ROS_STATE::FINISH && other_ad.have_odom_;
   }
-  expl_manager_->planMultiAgentAssignments(agent_positions, active_agents);
+  expl_manager_->planMultiAgentAssignments(agent_positions, agent_heights, active_agents);
 
   std_msgs::String mtsp_msg;
   std::ostringstream mtsp_oss;
@@ -531,7 +532,8 @@ int ExplorationFSM::callActionPlanner(int agent_idx)
   expl_result_msg.data = expl_res;
   expl_result_pub_.publish(expl_result_msg);
 
-  if (expl_res == EXPL_RESULT::EXPLORATION)
+  if (expl_res == EXPL_RESULT::EXPLORATION ||
+      expl_res == EXPL_RESULT::SEARCH_VERIFY_OBJECT)
     final_res = FINAL_RESULT::EXPLORE;
   else if (expl_res == EXPL_RESULT::NO_COVERABLE_FRONTIER ||
            expl_res == EXPL_RESULT::NO_PASSABLE_FRONTIER)

@@ -64,6 +64,19 @@ def signal_handler(sig, frame):
 def transform_rgb_bgr(image):
     return image[:, :, [2, 1, 0]]
 
+def _get_agent_camera_height(cfg: DictConfig, agent_name: str = "agent_0") -> float:
+    try:
+        agent_cfg = cfg.habitat.simulator.agents[agent_name]
+        rgb_sensor = agent_cfg.sim_sensors.rgb_sensor
+        if "position" in rgb_sensor and len(rgb_sensor.position) >= 2:
+            return float(rgb_sensor.position[1])
+        return float(agent_cfg.get("height", 0.88))
+    except Exception:
+        return 0.88
+
+def _clamp_camera_pitch(pitch: float) -> float:
+    return float(np.clip(pitch, -np.pi / 6.0, np.pi / 6.0))
+
 def publish_float64(publisher, data: float):
     msg = Float64()
     msg.data = data
@@ -142,7 +155,9 @@ def main(cfg: DictConfig) -> None:
     observations["camera_pitch"] = camera_pitch
     msg_observations = deepcopy(observations)
 
-    ros_pub = habitat_publisher.ROSPublisher()
+    ros_pub = habitat_publisher.ROSPublisher(
+        camera_height=_get_agent_camera_height(cfg)
+    )
     timer = rospy.Timer(rospy.Duration(0.1), publish_observations)
     itm_score_pub = rospy.Publisher("/blip2/cosine_score", Float64, queue_size=10)
     cld_with_score_pub = rospy.Publisher("/detector/clouds_with_scores", MultipleMasksWithConfidence, queue_size=10)
@@ -179,10 +194,10 @@ def main(cfg: DictConfig) -> None:
             action = HabitatSimActions.move_forward
         elif keystroke == ord(LOOK_UP_KEY):
             action = HabitatSimActions.look_up
-            camera_pitch += np.pi / 6.0
+            camera_pitch = _clamp_camera_pitch(camera_pitch + np.pi / 6.0)
         elif keystroke == ord(LOOK_DOWN_KEY):
             action = HabitatSimActions.look_down
-            camera_pitch -= np.pi / 6.0
+            camera_pitch = _clamp_camera_pitch(camera_pitch - np.pi / 6.0)
         elif keystroke == ord(LEFT_KEY):
             action = HabitatSimActions.turn_left
         elif keystroke == ord(RIGHT_KEY):

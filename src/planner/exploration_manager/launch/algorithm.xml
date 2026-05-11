@@ -58,7 +58,7 @@
         <param name="map_ros/depth_filter_mindist" value="0.0"/>
         <param name="map_ros/depth_filter_margin" value="2"/>
         <param name="map_ros/filter_min_height" value="0.28"/>
-        <param name="map_ros/filter_max_height" value="1.18"/>
+        <param name="map_ros/filter_max_height" value="1.30"/>
         <param name="map_ros/k_depth_scaling_factor" value="65535.0"/>
         <param name="map_ros/skip_pixel" value="1"/>
         <param name="map_ros/frame_id" value="world"/>
@@ -88,6 +88,9 @@
         <param name="object/mask_sigmoid_k" value="300.0" type="double"/>
         <param name="object/beta" value="0.5" type="double"/>
         <param name="object/min_semantic_evidence" value="0.15" type="double"/>
+        <param name="object/verification_margin_threshold" value="0.12" type="double"/>
+        <param name="object/verification_accept_margin" value="0.18" type="double"/>
+        <param name="object/verification_max_count" value="1" type="int"/>
 
         <!-- Perception utils -->
         <param name="perception_utils/left_angle" value="$(eval 30 * 3.1415926 / 180.0)" type="double"/>

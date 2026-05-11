@@ -68,6 +68,19 @@ def signal_handler(sig, frame):
 def transform_rgb_bgr(image):
     return image[:, :, [2, 1, 0]]
 
+def _get_agent_camera_height(cfg: DictConfig, agent_name: str) -> float:
+    try:
+        agent_cfg = cfg.habitat.simulator.agents[agent_name]
+        rgb_sensor = agent_cfg.sim_sensors.rgb_sensor
+        if "position" in rgb_sensor and len(rgb_sensor.position) >= 2:
+            return float(rgb_sensor.position[1])
+        return float(agent_cfg.get("height", 0.88))
+    except Exception:
+        return 0.88
+
+def _clamp_camera_pitch(pitch: float) -> float:
+    return float(np.clip(pitch, -np.pi / 6.0, np.pi / 6.0))
+
 def publish_float64(publisher, data: float):
     msg = Float64()
     msg.data = data
@@ -179,7 +192,9 @@ def main(cfg: DictConfig) -> None:
     # Setup per-agent publishers and state
     ros_pubs = {}
     for agent_name in agent_names:
-        ros_pubs[agent_name] = habitat_publisher.ROSPublisher(agent_name)
+        ros_pubs[agent_name] = habitat_publisher.ROSPublisher(
+            agent_name, _get_agent_camera_height(cfg, agent_name)
+        )
 
     agent_states = {}
     for agent_name in agent_names:
@@ -255,10 +270,10 @@ def main(cfg: DictConfig) -> None:
             action = HabitatSimActions.move_forward
         elif action_key == "up":
             action = HabitatSimActions.look_up
-            ast["camera_pitch"] += np.pi / 6.0
+            ast["camera_pitch"] = _clamp_camera_pitch(ast["camera_pitch"] + np.pi / 6.0)
         elif action_key == "down":
             action = HabitatSimActions.look_down
-            ast["camera_pitch"] -= np.pi / 6.0
+            ast["camera_pitch"] = _clamp_camera_pitch(ast["camera_pitch"] - np.pi / 6.0)
         elif action_key == "left":
             action = HabitatSimActions.turn_left
         elif action_key == "right":

@@ -43,6 +43,17 @@ def transform_rgb_bgr(image):#图像格式转换
     return image[:, :, [2, 1, 0]]
 
 
+def _get_agent_camera_height(cfg: DictConfig, agent_name: str = "agent_0") -> float:
+    try:
+        agent_cfg = cfg.habitat.simulator.agents[agent_name]
+        rgb_sensor = agent_cfg.sim_sensors.rgb_sensor
+        if "position" in rgb_sensor and len(rgb_sensor.position) >= 2:
+            return float(rgb_sensor.position[1])
+        return float(agent_cfg.get("height", 0.88))
+    except Exception:
+        return 0.88
+
+
 def publish_observations(event):#ROS 数据发布
     global msg_observations, fusion_score
     global ros_pub, confidence_threshold_pub
@@ -151,7 +162,9 @@ def main(cfg: DictConfig) -> None:
     observations["angular_velocity"] = 0.0
     msg_observations = deepcopy(observations)
 
-    ros_pub = habitat_publisher.ROSPublisher()
+    ros_pub = habitat_publisher.ROSPublisher(
+        camera_height=_get_agent_camera_height(cfg)
+    )
     cmd_sub = rospy.Subscriber("/cmd_vel", Twist, cmd_vel_callback, queue_size=10)
     timer = rospy.Timer(rospy.Duration(0.1), publish_observations)
     itm_score_pub = rospy.Publisher("/blip2/cosine_score", Float64, queue_size=10)

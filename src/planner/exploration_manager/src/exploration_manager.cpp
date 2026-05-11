@@ -79,6 +79,24 @@ void ExplorationManager::buildRoutingTasks(vector<RoutingTask>& tasks)
 {
   tasks.clear();
 
+  vector<VerificationCandidate> verification_candidates;
+  sdf_map_->object_map2d_->getVerificationCandidates(verification_candidates);
+  for (const auto& candidate : verification_candidates) {
+    if (!candidate.object_cloud || candidate.object_cloud->points.empty())
+      continue;
+    RoutingTask task;
+    task.type = MTSP_TASK_VERIFY_OBJECT;
+    task.priority_bonus = 600.0;
+    task.object_id = candidate.object_id;
+    task.position = candidate.position;
+    task.target_mu_v = candidate.target_mu_v;
+    task.target_sigma_v = candidate.target_sigma_v;
+    task.verification_margin = candidate.margin;
+    task.source_agent_id = candidate.source_agent_id;
+    task.object_cloud = candidate.object_cloud;
+    tasks.push_back(task);
+  }
+
   vector<pcl::shared_ptr<pcl::PointCloud<pcl::PointXYZ>>> strict_object_clouds;
   sdf_map_->object_map2d_->getTopConfidenceObjectCloud(strict_object_clouds);
   for (const auto& cloud : strict_object_clouds) {
@@ -149,7 +167,8 @@ void ExplorationManager::buildRoutingTasks(vector<RoutingTask>& tasks)
 bool ExplorationManager::refineTaskPath(const Vector3d& start, const RoutingTask& task,
     Eigen::Vector2d& refined_pos, std::vector<Eigen::Vector2d>& refined_path)
 {
-  if ((task.type == MTSP_TASK_STRICT_OBJECT || task.type == MTSP_TASK_SUSPICIOUS_OBJECT) &&
+  if ((task.type == MTSP_TASK_STRICT_OBJECT || task.type == MTSP_TASK_VERIFY_OBJECT ||
+          task.type == MTSP_TASK_SUSPICIOUS_OBJECT) &&
       task.object_cloud && !task.object_cloud->points.empty()) {
     return searchObjectPath(start, task.object_cloud, refined_pos, refined_path);
   }
@@ -157,8 +176,8 @@ bool ExplorationManager::refineTaskPath(const Vector3d& start, const RoutingTask
   return searchFrontierPath(Vector2d(start(0), start(1)), task.position, refined_pos, refined_path);
 }
 
-void ExplorationManager::planMultiAgentAssignments(
-    const vector<Vector2d>& agent_positions, const vector<bool>& active_agents)
+void ExplorationManager::planMultiAgentAssignments(const vector<Vector2d>& agent_positions,
+    const vector<double>& agent_heights, const vector<bool>& active_agents)
 {
   constexpr int TOP_K_REFINE = 5;
   constexpr double LOCAL_FRONTIER_RADIUS = 4.0;
@@ -202,25 +221,61 @@ void ExplorationManager::planMultiAgentAssignments(
   auto taskTypeRank = [](int type) {
     if (type == MTSP_TASK_STRICT_OBJECT)
       return 0;
-    if (type == MTSP_TASK_SUSPICIOUS_OBJECT)
+    if (type == MTSP_TASK_VERIFY_OBJECT)
       return 1;
-    return 2;
+    if (type == MTSP_TASK_SUSPICIOUS_OBJECT)
+      return 2;
+    return 3;
   };
 
   auto semanticBonus = [](const RoutingTask& task) {
     if (task.type == MTSP_TASK_FRONTIER)
       return std::min(1.5, task.priority_bonus * 0.02);
+    if (task.type == MTSP_TASK_VERIFY_OBJECT)
+      return 0.75;
     if (task.type == MTSP_TASK_SUSPICIOUS_OBJECT)
       return 0.5;
     return 0.0;
+  };
+
+  auto verificationFitness = [&](int agent_idx, const RoutingTask& task, double distance) {
+    constexpr double HEIGHT_WEIGHT = 0.75;
+    constexpr double DISTANCE_DECAY = 0.25;
+    const double agent_height =
+        agent_idx < (int)agent_heights.size() ? agent_heights[agent_idx] : task.target_mu_v;
+    const double sigma = std::max(1e-3, task.target_sigma_v);
+    const double height_diff = agent_height - task.target_mu_v;
+    const double height_fitness = std::exp(-(height_diff * height_diff) / (2.0 * sigma * sigma));
+    const double distance_fitness = std::exp(-DISTANCE_DECAY * std::max(0.0, distance));
+    return HEIGHT_WEIGHT * height_fitness + (1.0 - HEIGHT_WEIGHT) * distance_fitness;
+  };
+  auto verificationBonus = [&](int agent_idx, const RoutingTask& task, double distance) {
+    constexpr double VERIFY_FITNESS_BONUS = 5.0;
+    if (task.type != MTSP_TASK_VERIFY_OBJECT)
+      return 0.0;
+    return VERIFY_FITNESS_BONUS * verificationFitness(agent_idx, task, distance);
   };
 
   vector<vector<int>> regions(NUM_AGENTS);
   for (int task_idx = 0; task_idx < (int)tasks.size(); ++task_idx) {
     int nearest_agent = -1;
     double nearest_dist = std::numeric_limits<double>::infinity();
+    double best_verify_fitness = -1.0;
     for (int agent_idx : active_indices) {
+      if (tasks[task_idx].type == MTSP_TASK_VERIFY_OBJECT &&
+          tasks[task_idx].source_agent_id == agent_idx)
+        continue;
       double dist = (tasks[task_idx].position - agent_positions[agent_idx]).norm();
+      if (tasks[task_idx].type == MTSP_TASK_VERIFY_OBJECT) {
+        const double fitness = verificationFitness(agent_idx, tasks[task_idx], dist);
+        if (fitness > best_verify_fitness + 1e-6 ||
+            (std::fabs(fitness - best_verify_fitness) <= 1e-6 && dist < nearest_dist)) {
+          best_verify_fitness = fitness;
+          nearest_dist = dist;
+          nearest_agent = agent_idx;
+        }
+        continue;
+      }
       if (dist < nearest_dist) {
         nearest_dist = dist;
         nearest_agent = agent_idx;
@@ -266,6 +321,8 @@ void ExplorationManager::planMultiAgentAssignments(
       double rhs_dist = (tasks[rhs].position - agent_positions[agent_idx]).norm();
       double lhs_score = lhs_dist - semanticBonus(tasks[lhs]);
       double rhs_score = rhs_dist - semanticBonus(tasks[rhs]);
+      lhs_score -= verificationBonus(agent_idx, tasks[lhs], lhs_dist);
+      rhs_score -= verificationBonus(agent_idx, tasks[rhs], rhs_dist);
       if (std::fabs(lhs_score - rhs_score) > 1e-3)
         return lhs_score < rhs_score;
       return lhs < rhs;
@@ -277,11 +334,15 @@ void ExplorationManager::planMultiAgentAssignments(
     const int refine_count = std::min(TOP_K_REFINE, (int)candidates.size());
     for (int i = 0; i < refine_count; ++i) {
       int task_idx = candidates[i];
+      if (tasks[task_idx].type == MTSP_TASK_VERIFY_OBJECT &&
+          tasks[task_idx].source_agent_id == agent_idx)
+        continue;
       double path_cost = computePathCost(agent_positions[agent_idx], tasks[task_idx].position);
       if (path_cost >= UNREACHABLE_COST)
         continue;
       double score = taskTypeRank(tasks[task_idx].type) * 100.0 + path_cost -
                      semanticBonus(tasks[task_idx]);
+      score -= verificationBonus(agent_idx, tasks[task_idx], path_cost);
       if (score < best_score) {
         best_score = score;
         best_task = task_idx;
@@ -353,6 +414,13 @@ bool ExplorationManager::consumeAssignedTask(const Vector3d& pos, int agent_idx,
       best_task = i;
     }
   }
+  if (best_task < 0 && assigned_type == MTSP_TASK_VERIFY_OBJECT) {
+    if (!searchFrontierPath(Vector2d(pos(0), pos(1)), assigned_pos, out_next_pos,
+            out_next_best_path))
+      return false;
+    result = SEARCH_VERIFY_OBJECT;
+    return true;
+  }
   if (best_task < 0 || best_dist > 0.75)
     return false;
 
@@ -361,6 +429,8 @@ bool ExplorationManager::consumeAssignedTask(const Vector3d& pos, int agent_idx,
 
   if (assigned_type == MTSP_TASK_STRICT_OBJECT)
     result = SEARCH_BEST_OBJECT;
+  else if (assigned_type == MTSP_TASK_VERIFY_OBJECT)
+    result = SEARCH_VERIFY_OBJECT;
   else if (assigned_type == MTSP_TASK_SUSPICIOUS_OBJECT)
     result = SEARCH_SUSPICIOUS_OBJECT;
   else

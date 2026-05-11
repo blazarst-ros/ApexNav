@@ -41,7 +41,7 @@ habitat:
       - agent_2
     agents:
       agent_0:
-        height: 0.88
+        height: 0.60
         radius: 0.18
         sim_sensors:
           rgb_sensor:
@@ -50,7 +50,8 @@ habitat:
             width: 640
             height: 480
             hfov: 79
-            position: [0, 0.88, 0]
+            position: [0, 0.60, 0]
+            orientation: [0, 0, 0]
           depth_sensor:
             type: HabitatSimDepthSensor
             uuid: agent_0_depth
@@ -60,7 +61,8 @@ habitat:
             min_depth: 0.0
             max_depth: 5.0
             normalize_depth: true
-            position: [0, 0.88, 0]
+            position: [0, 0.60, 0]
+            orientation: [0, 0, 0]
       agent_1:
         height: 0.88
         radius: 0.18
@@ -72,6 +74,7 @@ habitat:
             height: 480
             hfov: 79
             position: [0, 0.88, 0]
+            orientation: [0, 0, 0]
           depth_sensor:
             type: HabitatSimDepthSensor
             uuid: agent_1_depth
@@ -82,8 +85,9 @@ habitat:
             max_depth: 5.0
             normalize_depth: true
             position: [0, 0.88, 0]
+            orientation: [0, 0, 0]
       agent_2:
-        height: 0.88
+        height: 1.20
         radius: 0.18
         sim_sensors:
           rgb_sensor:
@@ -92,7 +96,8 @@ habitat:
             width: 640
             height: 480
             hfov: 79
-            position: [0, 0.88, 0]
+            position: [0, 1.20, 0]
+            orientation: [0, 0, 0]
           depth_sensor:
             type: HabitatSimDepthSensor
             uuid: agent_2_depth
@@ -102,7 +107,8 @@ habitat:
             min_depth: 0.0
             max_depth: 5.0
             normalize_depth: true
-            position: [0, 0.88, 0]
+            position: [0, 1.20, 0]
+            orientation: [0, 0, 0]
 
 num_agents: 3
 

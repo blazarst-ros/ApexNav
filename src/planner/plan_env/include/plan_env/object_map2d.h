@@ -61,6 +61,7 @@ struct DetectedObject {
   double camera_height = 1.0;                             ///< Camera height for this observation
   double mu_v = 1.0;                                      ///< LLM prior recommended height
   double sigma_v = 0.35;                                  ///< LLM prior height tolerance
+  int agent_id = -1;                                      ///< Source observer agent id
 };
 
 struct SemanticEvidenceSnapshot {
@@ -108,6 +109,20 @@ struct SemanticEvidenceSnapshot {
   bool target_is_top_label = false;
 };
 
+struct VerificationCandidate {
+  int object_id = -1;
+  Vector2d position = Vector2d::Zero();
+  double top_score = 0.0;
+  double second_score = 0.0;
+  double margin = 0.0;
+  double target_mu_v = 1.0;
+  double target_sigma_v = 0.35;
+  int source_agent_id = -1;
+  int verify_count = 0;
+  bool verified = false;
+  pcl::shared_ptr<pcl::PointCloud<pcl::PointXYZ>> object_cloud;
+};
+
 struct Viewpoint2D {
   Vector2d pos_;   ///< 2D position of viewpoint in world coordinates
   double yaw_;     ///< Heading angle in radians
@@ -133,6 +148,10 @@ struct ObjectCluster {
   int max_seen_count_;                   ///< Maximum observation count across all cells
   vector<Vector2d> good_cells_;          ///< High-confidence cells (frequently observed)
   int best_label_;                       ///< Most confident semantic label
+  int verification_count_ = 0;            ///< Number of cross-agent verification exports
+  bool verification_pending_ = false;     ///< Waiting for verification before strict reach
+  bool verification_verified_ = false;    ///< Verification margin has been satisfied
+  int last_observer_agent_ = -1;          ///< Last agent that contributed target evidence
 
   /******* 3D Point Cloud Information *******/
   vector<pcl::shared_ptr<pcl::PointCloud<pcl::PointXYZ>>> clouds_;  ///< Point clouds per semantic
@@ -177,6 +196,7 @@ public:
   void setConfidenceThreshold(double val);
   bool getSemanticEvidenceSnapshot(int object_id, int label, SemanticEvidenceSnapshot& snapshot);
   void getSemanticEvidenceConfig(SemanticEvidenceSnapshot& snapshot) const;
+  void getVerificationCandidates(std::vector<VerificationCandidate>& candidates);
 
   void getAllConfidenceObjectClouds(pcl::shared_ptr<pcl::PointCloud<pcl::PointXYZ>>& object_clouds);
   void getTopConfidenceObjectCloud(
@@ -204,6 +224,7 @@ private:
       ObjectCluster& object, int label, const DetectedObject& detected_object);
   void ensureObjectLabelCapacity(ObjectCluster& object, int label);
   void updateObjectBestLabel(int obj_idx);
+  void updateVerificationState(ObjectCluster& object);
   bool updateObject3DBounds(ObjectCluster& object, int label);
   Eigen::Vector4d getColor(const double& h, double alpha);
 
@@ -250,6 +271,9 @@ private:
   int min_observation_num_;  ///< Minimum observations required for confidence
   double min_confidence_;    ///< Minimum confidence threshold for object acceptance
   double min_semantic_evidence_;  ///< Minimum quality-aware evidence threshold
+  double verification_margin_threshold_;  ///< Ambiguous top-second margin for verification
+  double verification_accept_margin_;  ///< Margin needed to release pending verification
+  int verification_max_count_;  ///< Max verification exports for one object
   double lambda_d_;          ///< Distance decay coefficient
   double r0_;                ///< Mask sigmoid midpoint
   double mask_sigmoid_k_;    ///< Mask sigmoid slope

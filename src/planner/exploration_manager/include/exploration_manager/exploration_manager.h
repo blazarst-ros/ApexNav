@@ -42,7 +42,8 @@ struct ExplorationData;
 enum MTSP_TASK_TYPE {
   MTSP_TASK_FRONTIER = 0,
   MTSP_TASK_STRICT_OBJECT = 1,
-  MTSP_TASK_SUSPICIOUS_OBJECT = 2
+  MTSP_TASK_VERIFY_OBJECT = 2,
+  MTSP_TASK_SUSPICIOUS_OBJECT = 3
 };
 
 struct SemanticFrontier {
@@ -66,6 +67,11 @@ struct RoutingTask {
   Vector2d position = Vector2d::Zero();
   int type = MTSP_TASK_FRONTIER;
   double priority_bonus = 0.0;
+  int object_id = -1;
+  double target_mu_v = 1.0;
+  double target_sigma_v = 0.35;
+  double verification_margin = 0.0;
+  int source_agent_id = -1;
   pcl::shared_ptr<pcl::PointCloud<pcl::PointXYZ>> object_cloud;
 };
 
@@ -73,6 +79,7 @@ enum EXPL_RESULT {
   EXPLORATION,               ///< Normal exploration mode
   SEARCH_BEST_OBJECT,        ///< Found high-confidence object
   SEARCH_OVER_DEPTH_OBJECT,  ///< Searching over-depth object
+  SEARCH_VERIFY_OBJECT,      ///< Cross-agent verification target
   SEARCH_SUSPICIOUS_OBJECT,  ///< Investigating suspicious object
   NO_PASSABLE_FRONTIER,      ///< No reachable frontiers available
   NO_COVERABLE_FRONTIER,     ///< No coverable frontiers found
@@ -88,8 +95,8 @@ public:
 
   int planNextBestPoint(const Vector3d& pos, const double& yaw, int agent_idx,
       Eigen::Vector2d& out_next_pos, std::vector<Eigen::Vector2d>& out_next_best_path);
-  void planMultiAgentAssignments(
-      const vector<Vector2d>& agent_positions, const vector<bool>& active_agents);
+  void planMultiAgentAssignments(const vector<Vector2d>& agent_positions,
+      const vector<double>& agent_heights, const vector<bool>& active_agents);
   bool planTrajectory(const Eigen::VectorXd& start, const Eigen::VectorXd& end, const Vector3d& ctrl);
   void getSortedSemanticFrontiers(const Vector2d& cur_pos, const vector<Vector2d>& frontiers,
       vector<SemanticFrontier>& sem_frontiers);
