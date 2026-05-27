@@ -12,6 +12,12 @@ Astar2D::~Astar2D()
 
 void Astar2D::init(ros::NodeHandle& nh, const SDFMap2D::Ptr& sdf_map)
 {
+  // Free existing node pool before reallocation to prevent leak on re-init
+  for (auto* node : path_node_pool_) {
+    delete node;
+  }
+  path_node_pool_.clear();
+
   nh.param("astar/resolution_astar", resolution_, -1.0);
   nh.param("astar/lambda_heu", lambda_heu_, -1.0);
   allocate_num_ = 1000000;
