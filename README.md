@@ -42,6 +42,15 @@
 
 </div>
 
+## Branch Scope
+
+- **Branch:** `main`
+- **Functions:**
+  1. Fetch the newest STAR-LAB codebase and work as a template/reference for all ablation studies.
+  2. Act as the baseline for single-agent experiments.
+- **Not included:** Any changes or modifications.
+- **Corresponding mode:** Single-Mode.
+
 ## 📢 News
 
 - **[27/04/2026]**: 🌟 A **lightweight version** is now available! Thanks to [TracyLucia](https://github.com/TracyLucia) for contributing the lightweight version. Check out the [Lite-Apexnav](https://github.com/Robotics-STAR-Lab/ApexNav/tree/Lite-Apexnav) branch.
