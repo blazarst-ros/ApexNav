@@ -40,6 +40,15 @@
 
 </div>
 
+## Branch Scope
+
+- **Branch:** `Menv`
+- **Functions:**
+  1. Implement a three-agent environment numbered `agent_0`, `agent_1`, and `agent_2`.
+  2. Three agents explore independently without any cooperation, such as Voronoi-based coordination.
+- **Not included:** Cooperation, topic output, or parameter refactor.
+- **Corresponding mode:** Multi-Mode.
+
 ## 📢 News
 - **[10/12/2025]**: ApexNav released real world test example code. Check out the [Real World README](./real_world_test_example/README.md) for more details.
 - **[07/09/2025]**: ApexNav has been published in the Early Access area on [IEEE Xplore](https://ieeexplore.ieee.org/document/11150727).
