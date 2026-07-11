@@ -40,6 +40,15 @@
 
 </div>
 
+## Branch Scope
+
+- **Branch:** `ICUS2026`
+- **Functions:**
+  1. Height-aware detection for three agents.
+  2. Cross-agent verification demo (not tested).
+- **Not included:** Reliable results or ORACLE HERDROOM analysis.
+- **Corresponding mode:** Multi-Mode.
+
 ## 📢 News
 - **[10/12/2025]**: ApexNav released real world test example code. Check out the [Real World README](./real_world_test_example/README.md) for more details.
 - **[07/09/2025]**: ApexNav has been published in the Early Access area on [IEEE Xplore](https://ieeexplore.ieee.org/document/11150727).
