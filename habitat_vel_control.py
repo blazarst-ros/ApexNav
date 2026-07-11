@@ -43,9 +43,19 @@ def transform_rgb_bgr(image):#图像格式转换
     return image[:, :, [2, 1, 0]]
 
 
-def _get_agent_camera_height(cfg: DictConfig, agent_name: str = "agent_0") -> float:
+def _get_primary_agent_cfg(cfg: DictConfig):
+    agents_cfg = cfg.habitat.simulator.agents
+    agents_order = cfg.habitat.simulator.get("agents_order", [])
+    if agents_order:
+        first_agent_name = agents_order[0]
+    else:
+        first_agent_name = next(iter(agents_cfg.keys()))
+    return agents_cfg[first_agent_name]
+
+
+def _get_agent_camera_height(cfg: DictConfig) -> float:
     try:
-        agent_cfg = cfg.habitat.simulator.agents[agent_name]
+        agent_cfg = _get_primary_agent_cfg(cfg)
         rgb_sensor = agent_cfg.sim_sensors.rgb_sensor
         if "position" in rgb_sensor and len(rgb_sensor.position) >= 2:
             return float(rgb_sensor.position[1])
@@ -100,7 +110,7 @@ def main(cfg: DictConfig) -> None:
     cfg = patch_config(cfg)
     env_count = cfg.test_epi_num
     print(env_count)
-    cfg_rgb_sensor = cfg.habitat.simulator.agents.agent_0.sim_sensors.rgb_sensor
+    cfg_rgb_sensor = _get_primary_agent_cfg(cfg).sim_sensors.rgb_sensor
 
     height = cfg_rgb_sensor["height"]
     width = cfg_rgb_sensor["width"]

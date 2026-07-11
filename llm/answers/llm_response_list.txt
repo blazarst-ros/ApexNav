@@ -441,3 +441,12 @@ Semantic Verification Prior:
   {category: book, mu_v: 0.85, sigma_v: 0.25, unit: meter, rationale: Books lie on tables or shelves, and a front-facing rectangular view at table height helps verify shape.},
   {category: bottle, mu_v: 0.80, sigma_v: 0.30, unit: meter, rationale: Bottles stand on counters or tables, and a mid-height side view identifies the narrow neck and cylindrical body.}
 ]
+pillow: Answer: [couch, bed, blanket, 0.35, bedroom]
+
+Semantic Verification Prior:
+[
+  {category: pillow, mu_v: 0.90, sigma_v: 0.30, unit: meter, rationale: Pillows are on beds or sofas, so a mid-height view verifies shape and squishiness from a typical seated/lying height.},
+  {category: couch, mu_v: 0.80, sigma_v: 0.25, unit: meter, rationale: Couches are low seating furniture, requiring a lower camera height to clearly see cushions and shape.},
+  {category: bed, mu_v: 0.85, sigma_v: 0.30, unit: meter, rationale: Beds have a relatively low profile; a camera at mattress height differentiates pillows from the bed surface.},
+  {category: blanket, mu_v: 0.75, sigma_v: 0.20, unit: meter, rationale: Blankets are thin and lie flat on surfaces, so a moderately low camera angle best captures their draped texture.}
+]

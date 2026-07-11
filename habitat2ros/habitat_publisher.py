@@ -30,6 +30,14 @@ class ROSPublisher:
         self.camera_height = float(camera_height)
         rospy.set_param(f"/habitat/{ns}/camera_height", self.camera_height)
 
+    def _gps_to_xyz(self, gps):
+        gps = np.asarray(gps, dtype=float).reshape(-1)
+        if gps.size >= 3:
+            return gps[0], gps[1], gps[2]
+        if gps.size == 2:
+            return gps[0], 0.0, gps[1]
+        raise ValueError(f"Expected gps observation with 2 or 3 values, got {gps.size}")
+
     def publish_depth(self, ros_time, depth_image):
         depth_msg = self.bridge.cv2_to_imgmsg(depth_image, encoding="passthrough")
         depth_msg.header.stamp = ros_time
@@ -44,12 +52,13 @@ class ROSPublisher:
 
     def publish_robot_odom(self, ros_time, gps, compass):
         copy_compass = deepcopy(compass)
+        gps_x, gps_y, gps_z = self._gps_to_xyz(gps)
         odom = Odometry()
         odom.header.stamp = ros_time
         odom.header.frame_id = "world"
         odom.child_frame_id = "base_link"
         odom.pose.pose = Pose(
-            position=Point(-gps[2], -gps[0], gps[1]),
+            position=Point(-gps_z, -gps_x, gps_y),
             orientation=Quaternion(*quaternion_from_euler(0, 0, copy_compass)),
         )
         self.odom_pub.publish(odom)
@@ -57,12 +66,13 @@ class ROSPublisher:
     def publish_camera_odom(self, ros_time, gps, compass, pitch):
         copy_compass = deepcopy(compass)
         copy_pitch = deepcopy(pitch)
+        gps_x, gps_y, gps_z = self._gps_to_xyz(gps)
         sensor_pose = Odometry()
         sensor_pose.header.stamp = ros_time
         sensor_pose.header.frame_id = "world"
         sensor_pose.child_frame_id = "base_link"
         sensor_pose.pose.pose = Pose(
-            position=Point(-gps[2], -gps[0], gps[1] + self.camera_height),
+            position=Point(-gps_z, -gps_x, gps_y + self.camera_height),
             orientation=Quaternion(
                 *quaternion_from_euler(
                     copy_pitch + np.pi / 2.0, np.pi, copy_compass + np.pi / 2.0
