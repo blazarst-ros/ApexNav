@@ -650,9 +650,9 @@ bool ExplorationFSM::updateFrontierAndObject()
   change_flag = frt_map->isAnyFrontierChanged();
   frt_map->searchFrontiers();
   for (int i = 0; i < NUM_AGENTS; ++i) {
-    Eigen::Vector2d agent_pos2d = Eigen::Vector2d(
-        fd_->agent_[i].start_pt_(0), fd_->agent_[i].start_pt_(1));
-    change_flag |= frt_map->dormantSeenFrontiers(agent_pos2d, fd_->agent_[i].start_yaw_);
+    const Eigen::Vector2d sensor_pos(
+        fd_->agent_[i].odom_pos_(0), fd_->agent_[i].odom_pos_(1));
+    change_flag |= frt_map->dormantSeenFrontiers(sensor_pos, fd_->agent_[i].odom_yaw_);
   }
   frt_map->getFrontiers(ed->frontiers_, ed->frontier_averages_);
   frt_map->getDormantFrontiers(ed->dormant_frontiers_, ed->dormant_frontier_averages_);
