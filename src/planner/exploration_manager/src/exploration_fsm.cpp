@@ -650,6 +650,8 @@ bool ExplorationFSM::updateFrontierAndObject()
   change_flag = frt_map->isAnyFrontierChanged();
   frt_map->searchFrontiers();
   for (int i = 0; i < NUM_AGENTS; ++i) {
+    if (!fd_->agent_[i].have_odom_)
+      continue;
     const Eigen::Vector2d sensor_pos(
         fd_->agent_[i].odom_pos_(0), fd_->agent_[i].odom_pos_(1));
     change_flag |= frt_map->dormantSeenFrontiers(sensor_pos, fd_->agent_[i].odom_yaw_);
