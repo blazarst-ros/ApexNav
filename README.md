@@ -1,4 +1,6 @@
-<span style="color:red">Synchronized with latest STAR_lAB (commit 049971b613fcd2554b034bd4a853d79cc1e61613)</span>
+Branch: I2
+Functions: Provide a pure multi-agent environment for exploration
+Update to: 049971b613fcd2554b034bd4a853d79cc1e61613
 
 <div align="center">
     <img src="assets/apexnav_logo_white.png" alt="ApexNav Logo" width="200">
