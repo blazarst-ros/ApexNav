@@ -1,3 +1,5 @@
+<span style="color:red">Synchronized with latest STAR_lAB (commit 049971b613fcd2554b034bd4a853d79cc1e61613)</span>
+
 <div align="center">
     <img src="assets/apexnav_logo_white.png" alt="ApexNav Logo" width="200">
     <h2>An Adaptive Exploration Strategy for Zero-Shot Object Navigation with Target-centric Semantic Fusion</h2>
