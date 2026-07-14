@@ -34,6 +34,12 @@ Config key:
 success_distance: 0.5
 ```
 
+The maximum episode length for evaluation is:
+
+```yaml
+max_episode_steps: 200
+```
+
 These values are applied consistently in:
 
 - `config/habitat_eval_hm3dv1.yaml`

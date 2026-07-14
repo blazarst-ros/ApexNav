@@ -15,7 +15,7 @@ habitat:
     split: val
     data_path: data/datasets/objectnav/mp3d/v1/{split}/{split}.json.gz
   environment:
-    max_episode_steps: 500
+    max_episode_steps: 200
     iterator_options:
       cycle: false
       shuffle: false

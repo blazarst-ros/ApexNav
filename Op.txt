@@ -138,6 +138,7 @@ export LD_PRELOAD=/usr/lib/x86_64-linux-gnu/libffi.so.7
 python habitat_evaluation.py --dataset hm3dv2
 
 
+
 被选区：
   python habitat_evaluation.py --dataset hm3dv2 'habitat.dataset.content_scenes=[TbHJrupSAjP]'  test_epi_num=1
   2azQ1b91cZZ.json.gz
