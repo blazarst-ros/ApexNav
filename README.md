@@ -28,6 +28,12 @@ The evaluation success distance is:
 0.5 m
 ```
 
+Config key:
+
+```yaml
+success_distance: 0.5
+```
+
 These values are applied consistently in:
 
 - `config/habitat_eval_hm3dv1.yaml`

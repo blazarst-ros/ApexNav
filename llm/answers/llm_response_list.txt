@@ -1,134 +1,209 @@
-
-nightstand: 
-nightstand: 
-cabinet: 
-cabinet: 
-cabinet: 
-cabinet: 
-cabinet: 
-cabinet: Thought: In the COCO classes, confidence threshold for cabinet: A cabinet is typically rectangular, with flat surfaces, often in the form of a box or with shelves inside. It's smaller than larger furniture pieces like beds or dining tables (0.60) but still sizable compared to smaller household objects. The confidence threshold for a cabinet should be around 0.50, which is in [0.25, 0.65].
-
-Misdetection possibilities:
-
-bookshelf: A bookshelf can be similar in shape and size to a cabinet, with a flat surface and storage space, which may lead to confusion.
-
-dresser: A dresser, especially one with drawers, could resemble a cabinet because of the similar rectangular shape and flat surfaces.
-
-closet: A closet, particularly a small one, can resemble a cabinet in terms of its rectangular form and purpose for storage.
-
-Room where the label may appear: A cabinet is most likely to appear in a kitchen, bathroom, or hallway for storage purposes. It could also be found in a living room, depending on the layout of the space. Since it can appear in multiple rooms with similar probability, but kitchen is a common location, I'll choose "kitchen" as it has a significantly higher probability than other rooms.
-
-Answer: [bookshelf, dresser, closet, 0.50, kitchen]
-cabinet: Thought: In the COCO classes, confidence threshold for cabinet: A cabinet is typically rectangular, with flat surfaces, often in the form of a box or with shelves inside. It's smaller than larger furniture pieces like beds or dining tables (0.60) but still sizable compared to smaller household objects. The confidence threshold for a cabinet should be around 0.50, which is in [0.25, 0.65].
-
-Misdetection possibilities:
-
-bookshelf: A bookshelf can be similar in shape and size to a cabinet, with a flat surface and storage space, which may lead to confusion.
-
-dresser: A dresser, especially one with drawers, could resemble a cabinet because of the similar rectangular shape and flat surfaces.
-
-closet: A closet, particularly a small one, can resemble a cabinet in terms of its rectangular form and purpose for storage.
-
-Room where the label may appear: A cabinet is most likely to appear in a kitchen, bathroom, or hallway for storage purposes. It could also be found in a living room, depending on the layout of the space. However, the probability is significantly higher in a kitchen or bathroom compared to other rooms. Since it's more common in specific rooms, I'll choose "kitchen" as the most likely.
-
-Answer: [bookshelf, dresser, closet, 0.50, kitchen]
-cabinet: Thought: In the COCO classes, confidence threshold for cabinet: A cabinet is typically rectangular, with flat surfaces, often in the form of a box or with shelves inside. It's smaller than larger furniture pieces like beds or dining tables (0.60) but still sizable compared to smaller household objects. The confidence threshold for a cabinet should be around 0.50, which is in [0.25, 0.65].
-
-Misdetection possibilities:
-- bookshelf: A bookshelf can be similar in shape and size to a cabinet, with a flat surface and storage space, which may lead to confusion.
-- dresser: A dresser, especially one with drawers, could resemble a cabinet because of the similar rectangular shape and flat surfaces.
-- closet: A closet, particularly a small one, can resemble a cabinet in terms of its rectangular form and purpose for storage.
-- refrigerator: A refrigerator might be misdetected as a cabinet due to its large, boxy shape and similar placement in a kitchen.
-
-Room where the label may appear: A cabinet is most likely to appear in a kitchen, bathroom, or hallway for storage purposes. It could also be found in a living room, depending on the layout of the space. However, the kitchen is a common location for cabinets, significantly higher than other rooms.
-
-Answer: [bookshelf, dresser, closet, refrigerator, 0.50, kitchen]
-counter: Thought: In the COCO classes, confidence threshold for counter: A counter is typically a flat, horizontal surface, often in kitchens or bathrooms, used for preparing food or placing items. It's similar in size to a table but often attached to walls or cabinets. The confidence threshold should be moderate, around 0.45, which is in [0.25, 0.65].
-
-Misdetection possibilities:
-
-table: A table can be misdetected as a counter because both have flat surfaces and similar shapes, especially if the table is against a wall.
-
-desk: A desk, like a counter, has a flat working surface and may be attached or freestanding, leading to potential confusion.
-
-shelf: A shelf, particularly a wide one, might resemble a counter in terms of its flat surface and placement.
-
-Room where the label may appear: A counter is most likely to appear in a kitchen or bathroom, where it's used for preparation or hygiene. It could also be in a laundry room or workshop, but kitchen is the most common.
-
-Answer: [table, desk, shelf, 0.45, kitchen]
-potted plant: Thought: In the COCO classes, confidence threshold for potted plant: A potted plant is typically a plant in a container, often with leaves or flowers. 
-
-It's smaller than furniture like a bed (0.65) but larger than very small objects like an apple (0.25). The confidence threshold should be around 0.35, which is in [0.25, 0.65].
-
-Misdetection possibilities:
-
-vase: A vase, especially one with flowers or decorative elements, can resemble a potted plant because of the plant-like appearance and container.
-
-lamp: A lamp, particularly a floor lamp with a base that might look like a pot, could be misdetected as a potted plant due to similar shapes.
-
-chair: A chair, especially one with a backrest that might resemble plant stems or leaves in certain angles, could be confused.
-
-Room where the label may appear: A potted plant can be found in various rooms, but it is most likely in a living room, bedroom, or office. 
-
-Given that it can appear in multiple rooms with similar probability, it should be "everywhere."
-
-Answer: [vase, lamp, chair, 0.35, everywhere]
-counter: Thought: In the COCO classes, confidence threshold for counter: A counter is typically a flat, horizontal surface, often found in kitchens or bathrooms, used for preparation or display. It's similar in size to a table but often attached to cabinets or walls. The confidence threshold should be moderate, around 0.45, which is in [0.25, 0.65].
-
-Misdetection possibilities:
-
-table: A table can be misdetected as a counter because both are flat surfaces used for various purposes, and they share similar shapes and sizes.
-
-desk: A desk, especially a work desk, can resemble a counter in terms of its flat surface and functional use.
-
-shelf: A shelf, particularly a wide one, might be confused with a counter due to its flat, horizontal surface.
-
-Room where the label may appear: A counter is most likely to appear in a kitchen or bathroom, where it is used for preparation and storage. It could also be in a laundry room or workshop, but the probability is significantly higher in the kitchen.
-
-Answer: [table, desk, shelf, 0.45, kitchen]
-cabinet: 
-couch: 
-couch: Thought: In the COCO classes, confidence threshold for couch: A couch is a large, soft, rectangular piece of furniture with backrest and armrests. It is a significant piece of furniture, similar to a bed but generally smaller. The confidence threshold should be high, around 0.55, which is in [0.25, 0.65].
-
-Misdetection possibilities:
-- bench: A bench can have a similar rectangular seating shape and could be confused with a couch, especially if it has a backrest.
-- chair: A large, padded armchair might resemble a single-seater couch.
-- sofa: The terms "couch" and "sofa" are often used interchangeably in COCO datasets, but "sofa" is the standard COCO class for this object, so the misdetection is less about label confusion and more about distinguishing from similar seating.
-- ottoman: A large, padded ottoman could be misdetected as a couch if it has a backrest or is seen from an angle.
-
-Room where the label may appear: A couch is most likely to appear in a living room, den, or family room. It can appear in bedrooms or waiting rooms, but the probability is highest in a living room.
-
-Answer: [bench, chair, ottoman, 0.55, living room]
+chair: Answer: [stool, couch, dining table, 0.45, everywhere]
 
 Semantic Verification Prior:
 [
-  {category: couch, mu_v: 0.85, sigma_v: 0.25, unit: meter, rationale: Couches are low-profile seating; a lower camera height helps verify the seat and backrest shape.},
-  {category: bench, mu_v: 0.85, sigma_v: 0.25, unit: meter, rationale: Benches are also low seating; a similar camera height verifies the seating surface and legs.},
-  {category: chair, mu_v: 0.85, sigma_v: 0.25, unit: meter, rationale: Chairs are small seating objects; a lower camera verifies seat shape and backrest geometry.},
-  {category: ottoman, mu_v: 0.75, sigma_v: 0.20, unit: meter, rationale: Ottomans are low padded objects; a lower camera height verifies the top surface and edges.}
+  {category: chair, mu_v: 1.20, sigma_v: 0.35, unit: meter, rationale: Chairs are medium-height seating; the 1.2 m viewpoint captures the backrest, seat, and legs while retaining floor context.},
+  {category: couch, mu_v: 0.70, sigma_v: 0.30, unit: meter, rationale: Couches are low seating objects; the 0.7 m camera height highlights cushions, arms, and backrest geometry.},
+  {category: dining table, mu_v: 1.20, sigma_v: 0.35, unit: meter, rationale: Dining tables are tabletop-height objects best verified from the 1.2 m viewpoint.},
+  {category: stool, mu_v: 0.70, sigma_v: 0.30, unit: meter, rationale: Stools are low compact seating; the 0.7 m viewpoint best verifies seat top and legs.}
 ]
-couch: Answer: [bench, chair, sofa, 0.45, living_room]
+
+table | dining table | coffee table | desk: Answer: [counter, desk, bench, 0.5, dining room]
 
 Semantic Verification Prior:
 [
-  {category: couch, mu_v: 0.80, sigma_v: 0.35, unit: meter, rationale: Couches are low-lying seating furniture; a camera height near seat level verifies cushion and backrest shape.},
-  {category: bench, mu_v: 0.75, sigma_v: 0.30, unit: meter, rationale: Benches are similar low seating objects and best viewed from sitting height.},
-  {category: chair, mu_v: 0.80, sigma_v: 0.30, unit: meter, rationale: Chairs have similar seat height to couches and are verified from a moderate low viewpoint.},
-  {category: sofa, mu_v: 0.80, sigma_v: 0.35, unit: meter, rationale: Sofa is synonymous with couch, requiring identical verification parameters.}
+  {category: bench, mu_v: 0.70, sigma_v: 0.30, unit: meter, rationale: Benches are low seating surfaces, best verified from the 0.7 m camera height.},
+  {category: counter, mu_v: 1.20, sigma_v: 0.25, unit: meter, rationale: Counters sit around working height; 1.2 m verifies the horizontal surface and attached cabinetry.},
+  {category: desk, mu_v: 1.20, sigma_v: 0.35, unit: meter, rationale: Desks expose their working surface and legs most clearly from 1.2 m.},
+  {category: table | dining table | coffee table | desk, mu_v: 1.20, sigma_v: 0.35, unit: meter, rationale: Tables and desks are best verified from the middle camera height because the tabletop plane and supporting legs are visible together.}
 ]
-couch: Answer: [bench, sofa, bed, chair, 0.50, living_room]
+
+picture | framed photograph: Answer: [tv, window, mirror, 0.4, everywhere]
 
 Semantic Verification Prior:
 [
-  {category: couch, mu_v: 0.60, sigma_v: 0.25, unit: meter, rationale: Couches are low-lying seating furniture, best viewed from a downward angle to capture cushion layout and depth.},
-  {category: bench, mu_v: 0.65, sigma_v: 0.25, unit: meter, rationale: Benches are similar seated objects at ground level, requiring a similar low viewing height.},
-  {category: sofa, mu_v: 0.60, sigma_v: 0.25, unit: meter, rationale: Sofas are a direct synonym and share the same low structure verification needs.},
-  {category: bed, mu_v: 0.70, sigma_v: 0.30, unit: meter, rationale: Beds are low flat surfaces but slightly taller than couches; a low view distinguishes from couch.},
-  {category: chair, mu_v: 0.70, sigma_v: 0.25, unit: meter, rationale: Chairs are short objects often near couches, verified best from a similar low height.}
+  {category: mirror, mu_v: 1.70, sigma_v: 0.35, unit: meter, rationale: Mirrors are vertical wall objects and are best checked from 1.7 m.},
+  {category: picture | framed photograph, mu_v: 1.70, sigma_v: 0.30, unit: meter, rationale: Pictures are usually wall-mounted; the 1.7 m viewpoint aligns with wall objects and improves frame verification.},
+  {category: tv, mu_v: 1.70, sigma_v: 0.35, unit: meter, rationale: TVs are commonly wall-mounted or elevated on stands; 1.7 m aligns with the screen plane and rectangular silhouette.},
+  {category: window, mu_v: 1.70, sigma_v: 0.35, unit: meter, rationale: Windows are wall-mounted and usually high, matching the 1.7 m viewpoint.}
 ]
-couch: Answer: [bench, chair, sofa bed, 0.55, living room]
+
+cabinet: Answer: [bookshelf, dresser, refrigerator, 0.5, kitchen]
 
 Semantic Verification Prior:
 [
-  {category: couch, mu_v: 0.60, sigma_v: 0.20, unit: meter, rationale: Couches are low-profile seating; a lower camera height captures the cushion and backrest shape well.}
+  {category: bookshelf, mu_v: 1.70, sigma_v: 0.45, unit: meter, rationale: Bookshelves are tall storage objects; 1.7 m captures vertical structure.},
+  {category: cabinet, mu_v: 1.20, sigma_v: 0.40, unit: meter, rationale: Cabinets are storage furniture with handles and panels around mid height; 1.2 m balances lower doors and upper surfaces.},
+  {category: dresser, mu_v: 1.20, sigma_v: 0.35, unit: meter, rationale: Dressers are mid-height storage furniture and fit the 1.2 m viewpoint.},
+  {category: refrigerator, mu_v: 1.70, sigma_v: 0.40, unit: meter, rationale: Refrigerators are tall appliances best verified at the high viewpoint.}
+]
+
+pillow: Answer: [cushion, blanket, clothes, 0.4, bedroom]
+
+Semantic Verification Prior:
+[
+  {category: blanket, mu_v: 0.70, sigma_v: 0.35, unit: meter, rationale: Blankets lie over low furniture or floors and fit the 0.7 m viewpoint.},
+  {category: clothes, mu_v: 0.70, sigma_v: 0.45, unit: meter, rationale: Clothes are often on beds, chairs, or floors; 0.7 m captures low clutter and fabric boundaries.},
+  {category: cushion, mu_v: 0.70, sigma_v: 0.30, unit: meter, rationale: Cushions are low soft objects typically on beds or seating.},
+  {category: pillow, mu_v: 0.70, sigma_v: 0.30, unit: meter, rationale: Pillows usually lie on beds or couches; the low 0.7 m viewpoint captures soft edges and surface placement.}
+]
+
+couch: Answer: [bench, chair, bed, 0.55, living room]
+
+Semantic Verification Prior:
+[
+  {category: bed, mu_v: 0.70, sigma_v: 0.30, unit: meter, rationale: Beds are broad low horizontal surfaces; 0.7 m gives a useful view of mattress edges and bedding texture.},
+  {category: bench, mu_v: 0.70, sigma_v: 0.30, unit: meter, rationale: Benches are low seating surfaces, best verified from the 0.7 m camera height.},
+  {category: chair, mu_v: 1.20, sigma_v: 0.35, unit: meter, rationale: Chairs are medium-height seating; the 1.2 m viewpoint captures the backrest, seat, and legs while retaining floor context.},
+  {category: couch, mu_v: 0.70, sigma_v: 0.30, unit: meter, rationale: Couches are low seating objects; the 0.7 m camera height highlights cushions, arms, and backrest geometry.}
+]
+
+bed: Answer: [couch, bench, table, 0.6, bedroom]
+
+Semantic Verification Prior:
+[
+  {category: bed, mu_v: 0.70, sigma_v: 0.30, unit: meter, rationale: Beds are broad low horizontal surfaces; 0.7 m gives a useful view of mattress edges and bedding texture.},
+  {category: bench, mu_v: 0.70, sigma_v: 0.30, unit: meter, rationale: Benches are low seating surfaces, best verified from the 0.7 m camera height.},
+  {category: couch, mu_v: 0.70, sigma_v: 0.30, unit: meter, rationale: Couches are low seating objects; the 0.7 m camera height highlights cushions, arms, and backrest geometry.},
+  {category: table, mu_v: 1.20, sigma_v: 0.35, unit: meter, rationale: Tables expose their top surface and legs most reliably from 1.2 m.}
+]
+
+nightstand: Answer: [cabinet, dresser, desk, 0.45, bedroom]
+
+Semantic Verification Prior:
+[
+  {category: cabinet, mu_v: 1.20, sigma_v: 0.40, unit: meter, rationale: Cabinets are storage furniture with handles and panels around mid height; 1.2 m balances lower doors and upper surfaces.},
+  {category: desk, mu_v: 1.20, sigma_v: 0.35, unit: meter, rationale: Desks expose their working surface and legs most clearly from 1.2 m.},
+  {category: dresser, mu_v: 1.20, sigma_v: 0.35, unit: meter, rationale: Dressers are mid-height storage furniture and fit the 1.2 m viewpoint.},
+  {category: nightstand, mu_v: 0.70, sigma_v: 0.25, unit: meter, rationale: Nightstands are low bedside storage; the 0.7 m viewpoint sees drawers, handles, and tabletop relation to beds.}
+]
+
+potted plant: Answer: [vase, lamp, tree, 0.35, everywhere]
+
+Semantic Verification Prior:
+[
+  {category: lamp, mu_v: 1.20, sigma_v: 0.45, unit: meter, rationale: Lamps vary from table to floor placement; 1.2 m is a balanced viewpoint.},
+  {category: potted plant, mu_v: 1.20, sigma_v: 0.45, unit: meter, rationale: Potted plants vary from floor pots to tabletop plants; 1.2 m captures both pot and foliage while tolerating size variation.},
+  {category: tree, mu_v: 1.70, sigma_v: 0.50, unit: meter, rationale: Tall indoor plants extend upward and benefit from a higher viewpoint.},
+  {category: vase, mu_v: 1.20, sigma_v: 0.35, unit: meter, rationale: Vases are often on tables or shelves and are best checked at 1.2 m.}
+]
+
+sink: Answer: [counter, toilet, bathtub, 0.5, bathroom]
+
+Semantic Verification Prior:
+[
+  {category: bathtub, mu_v: 0.70, sigma_v: 0.35, unit: meter, rationale: Bathtubs are low basin-like fixtures; 0.7 m emphasizes rim shape and floor-level placement.},
+  {category: counter, mu_v: 1.20, sigma_v: 0.25, unit: meter, rationale: Counters sit around working height; 1.2 m verifies the horizontal surface and attached cabinetry.},
+  {category: sink, mu_v: 1.20, sigma_v: 0.30, unit: meter, rationale: Sinks are mounted around counter height; 1.2 m helps verify basin shape, faucet, and surrounding counter.},
+  {category: toilet, mu_v: 0.70, sigma_v: 0.30, unit: meter, rationale: Toilets are low bathroom fixtures; 0.7 m captures the bowl, base, and tank without over-emphasizing walls.}
+]
+
+toilet: Answer: [chair, stool, sink, 0.45, bathroom]
+
+Semantic Verification Prior:
+[
+  {category: chair, mu_v: 1.20, sigma_v: 0.35, unit: meter, rationale: Chairs are medium-height seating; the 1.2 m viewpoint captures the backrest, seat, and legs while retaining floor context.},
+  {category: sink, mu_v: 1.20, sigma_v: 0.30, unit: meter, rationale: Sinks are mounted around counter height; 1.2 m helps verify basin shape, faucet, and surrounding counter.},
+  {category: stool, mu_v: 0.70, sigma_v: 0.30, unit: meter, rationale: Stools are low compact seating; the 0.7 m viewpoint best verifies seat top and legs.},
+  {category: toilet, mu_v: 0.70, sigma_v: 0.30, unit: meter, rationale: Toilets are low bathroom fixtures; 0.7 m captures the bowl, base, and tank without over-emphasizing walls.}
+]
+
+stool: Answer: [chair, table, ottoman, 0.4, everywhere]
+
+Semantic Verification Prior:
+[
+  {category: chair, mu_v: 1.20, sigma_v: 0.35, unit: meter, rationale: Chairs are medium-height seating; the 1.2 m viewpoint captures the backrest, seat, and legs while retaining floor context.},
+  {category: ottoman, mu_v: 0.70, sigma_v: 0.25, unit: meter, rationale: Ottomans are low padded furniture verified best at 0.7 m.},
+  {category: stool, mu_v: 0.70, sigma_v: 0.30, unit: meter, rationale: Stools are low compact seating; the 0.7 m viewpoint best verifies seat top and legs.},
+  {category: table, mu_v: 1.20, sigma_v: 0.35, unit: meter, rationale: Tables expose their top surface and legs most reliably from 1.2 m.}
+]
+
+towel: Answer: [clothes, curtain, blanket, 0.35, bathroom]
+
+Semantic Verification Prior:
+[
+  {category: blanket, mu_v: 0.70, sigma_v: 0.35, unit: meter, rationale: Blankets lie over low furniture or floors and fit the 0.7 m viewpoint.},
+  {category: clothes, mu_v: 0.70, sigma_v: 0.45, unit: meter, rationale: Clothes are often on beds, chairs, or floors; 0.7 m captures low clutter and fabric boundaries.},
+  {category: curtain, mu_v: 1.70, sigma_v: 0.45, unit: meter, rationale: Curtains are tall vertical fabric objects best seen at 1.7 m.},
+  {category: towel, mu_v: 1.20, sigma_v: 0.45, unit: meter, rationale: Towels may hang at mid height or lie low; 1.2 m covers rails, racks, and folded towels with moderate tolerance.}
+]
+
+tv: Answer: [picture, monitor, window, 0.5, living room]
+
+Semantic Verification Prior:
+[
+  {category: monitor, mu_v: 1.20, sigma_v: 0.35, unit: meter, rationale: Monitors are rectangular screens often on desks or stands around mid height.},
+  {category: picture, mu_v: 1.20, sigma_v: 0.45, unit: meter, rationale: Fallback prior for visually similar indoor objects under the 0.7/1.2/1.7 m height setup.},
+  {category: tv, mu_v: 1.70, sigma_v: 0.35, unit: meter, rationale: TVs are commonly wall-mounted or elevated on stands; 1.7 m aligns with the screen plane and rectangular silhouette.},
+  {category: window, mu_v: 1.70, sigma_v: 0.35, unit: meter, rationale: Windows are wall-mounted and usually high, matching the 1.7 m viewpoint.}
+]
+
+shower: Answer: [bathtub, door, curtain, 0.45, bathroom]
+
+Semantic Verification Prior:
+[
+  {category: bathtub, mu_v: 0.70, sigma_v: 0.35, unit: meter, rationale: Bathtubs are low basin-like fixtures; 0.7 m emphasizes rim shape and floor-level placement.},
+  {category: curtain, mu_v: 1.70, sigma_v: 0.45, unit: meter, rationale: Curtains are tall vertical fabric objects best seen at 1.7 m.},
+  {category: door, mu_v: 1.70, sigma_v: 0.45, unit: meter, rationale: Doors are tall vertical structures and match the high viewpoint.},
+  {category: shower, mu_v: 1.70, sigma_v: 0.40, unit: meter, rationale: Showers are tall vertical bathroom structures; 1.7 m captures doors, curtains, and wall-mounted fixtures.}
+]
+
+bathtub: Answer: [sink, shower, bed, 0.45, bathroom]
+
+Semantic Verification Prior:
+[
+  {category: bathtub, mu_v: 0.70, sigma_v: 0.35, unit: meter, rationale: Bathtubs are low basin-like fixtures; 0.7 m emphasizes rim shape and floor-level placement.},
+  {category: bed, mu_v: 0.70, sigma_v: 0.30, unit: meter, rationale: Beds are broad low horizontal surfaces; 0.7 m gives a useful view of mattress edges and bedding texture.},
+  {category: shower, mu_v: 1.70, sigma_v: 0.40, unit: meter, rationale: Showers are tall vertical bathroom structures; 1.7 m captures doors, curtains, and wall-mounted fixtures.},
+  {category: sink, mu_v: 1.20, sigma_v: 0.30, unit: meter, rationale: Sinks are mounted around counter height; 1.2 m helps verify basin shape, faucet, and surrounding counter.}
+]
+
+counter: Answer: [table, desk, sink, 0.5, kitchen]
+
+Semantic Verification Prior:
+[
+  {category: counter, mu_v: 1.20, sigma_v: 0.25, unit: meter, rationale: Counters sit around working height; 1.2 m verifies the horizontal surface and attached cabinetry.},
+  {category: desk, mu_v: 1.20, sigma_v: 0.35, unit: meter, rationale: Desks expose their working surface and legs most clearly from 1.2 m.},
+  {category: sink, mu_v: 1.20, sigma_v: 0.30, unit: meter, rationale: Sinks are mounted around counter height; 1.2 m helps verify basin shape, faucet, and surrounding counter.},
+  {category: table, mu_v: 1.20, sigma_v: 0.35, unit: meter, rationale: Tables expose their top surface and legs most reliably from 1.2 m.}
+]
+
+fireplace: Answer: [tv, cabinet, picture, 0.4, living room]
+
+Semantic Verification Prior:
+[
+  {category: cabinet, mu_v: 1.20, sigma_v: 0.40, unit: meter, rationale: Cabinets are storage furniture with handles and panels around mid height; 1.2 m balances lower doors and upper surfaces.},
+  {category: fireplace, mu_v: 1.20, sigma_v: 0.40, unit: meter, rationale: Fireplaces span low hearth and mid wall; 1.2 m balances the opening, mantle, and surrounding frame.},
+  {category: picture, mu_v: 1.20, sigma_v: 0.45, unit: meter, rationale: Fallback prior for visually similar indoor objects under the 0.7/1.2/1.7 m height setup.},
+  {category: tv, mu_v: 1.70, sigma_v: 0.35, unit: meter, rationale: TVs are commonly wall-mounted or elevated on stands; 1.7 m aligns with the screen plane and rectangular silhouette.}
+]
+
+gym equipment: Answer: [chair, bench, tv, 0.4, gym]
+
+Semantic Verification Prior:
+[
+  {category: bench, mu_v: 0.70, sigma_v: 0.30, unit: meter, rationale: Benches are low seating surfaces, best verified from the 0.7 m camera height.},
+  {category: chair, mu_v: 1.20, sigma_v: 0.35, unit: meter, rationale: Chairs are medium-height seating; the 1.2 m viewpoint captures the backrest, seat, and legs while retaining floor context.},
+  {category: gym equipment, mu_v: 1.20, sigma_v: 0.50, unit: meter, rationale: Gym equipment varies from floor machines to tall frames; 1.2 m is the most robust central viewpoint across forms.},
+  {category: tv, mu_v: 1.70, sigma_v: 0.35, unit: meter, rationale: TVs are commonly wall-mounted or elevated on stands; 1.7 m aligns with the screen plane and rectangular silhouette.}
+]
+
+seating: Answer: [chair, couch, bench, 0.45, living room]
+
+Semantic Verification Prior:
+[
+  {category: bench, mu_v: 0.70, sigma_v: 0.30, unit: meter, rationale: Benches are low seating surfaces, best verified from the 0.7 m camera height.},
+  {category: chair, mu_v: 1.20, sigma_v: 0.35, unit: meter, rationale: Chairs are medium-height seating; the 1.2 m viewpoint captures the backrest, seat, and legs while retaining floor context.},
+  {category: couch, mu_v: 0.70, sigma_v: 0.30, unit: meter, rationale: Couches are low seating objects; the 0.7 m camera height highlights cushions, arms, and backrest geometry.},
+  {category: seating, mu_v: 0.70, sigma_v: 0.35, unit: meter, rationale: Generic seating is usually low to mid height; 0.7 m helps confirm seat surfaces and support structure.}
+]
+
+clothes: Answer: [towel, blanket, pillow, 0.35, bedroom]
+
+Semantic Verification Prior:
+[
+  {category: blanket, mu_v: 0.70, sigma_v: 0.35, unit: meter, rationale: Blankets lie over low furniture or floors and fit the 0.7 m viewpoint.},
+  {category: clothes, mu_v: 0.70, sigma_v: 0.45, unit: meter, rationale: Clothes are often on beds, chairs, or floors; 0.7 m captures low clutter and fabric boundaries.},
+  {category: pillow, mu_v: 0.70, sigma_v: 0.30, unit: meter, rationale: Pillows usually lie on beds or couches; the low 0.7 m viewpoint captures soft edges and surface placement.},
+  {category: towel, mu_v: 1.20, sigma_v: 0.45, unit: meter, rationale: Towels may hang at mid height or lie low; 1.2 m covers rails, racks, and folded towels with moderate tolerance.}
 ]

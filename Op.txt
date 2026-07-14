@@ -1,0 +1,247 @@
+**************编译环境进行：**************
+# 终端0
+cd ApexNav
+conda deactivate
+rm -rf build/ devel/
+unset LD_LIBRARY_PATH
+catkin_make -DPYTHON_EXECUTABLE=/usr/bin/python3
+
+（可以在最后关闭）
+
+
+*************务必记得启动ROS核心****************************
+source /opt/ros/noetic/setup.bash
+roscore
+
+***************开启VLM必要的库****************
+
+# 终端 1
+cd ApexNav
+conda activate apexnav
+#export no_proxy="localhost,127.0.0.1"
+export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+python -m vlm.detector.grounding_dino --port 12181
+# 终端 2
+cd ApexNav
+conda activate apexnav
+#export no_proxy="localhost,127.0.0.1"
+export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+python -m vlm.itm.blip2itm --port 12182
+# 终端 3
+cd ApexNav
+conda activate apexnav
+#export no_proxy="localhost,127.0.0.1"
+export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+python -m vlm.segmentor.sam --port 12183
+# 终端 4
+cd ApexNav
+conda activate apexnav
+#export no_proxy="localhost,127.0.0.1"
+export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+python -m vlm.detector.yolov7 --port 12184
+
+
+
+
+
+**************Rviz可视化模型的启动**************
+终端 5：新开终端，确保前面没有 (apexnav) 括号
+
+source /opt/ros/noetic/setup.bash
+cd ~/ApexNav
+source ./devel/setup.bash
+roslaunch exploration_manager rviz_traj.launch
+
+
+
+
+
+************自动推理（大脑）**************************
+conda activate apexnav
+cd ~/ApexNav
+source ./devel/setup.bash
+
+
+export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+export LD_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu:/opt/ros/noetic/lib:$LD_LIBRARY_PATH
+
+roslaunch exploration_manager exploration_traj.launch
+(*自主導航與軌跡展示)
+
+
+*************启动导航（身体）***************************
+
+
+conda activate apexnav
+cd ~/ApexNav
+source ./devel/setup.bash
+
+export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+export LD_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu:/opt/ros/noetic/lib:$LD_LIBRARY_PATH
+export LD_PRELOAD=/usr/lib/x86_64-linux-gnu/libffi.so.7
+
+
+python habitat_vel_control.py \
+  habitat.dataset.data_path="data/datasets/objectnav/hm3d/v1/val/content/TbHJrupSAjP.json.gz" \
+  test_epi_num=1
+
+python habitat_vel_control.py test_epi_num=8
+(*自主導航與軌跡展示)
+
+
+
+
+
+
+
+********真实世界节点启动（桥联节点）(测评模式切忌使用！！！！否则话题将会被覆盖)************************
+conda activate apexnav
+cd ~/ApexNav
+source ./devel/setup.bash
+
+export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+export LD_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu:/opt/ros/noetic/lib:$LD_LIBRARY_PATH
+export LD_PRELOAD=/usr/lib/x86_64-linux-gnu/libffi.so.7
+
+
+
+python ./real_world_test_example/real_world_test_habitat.py # 3. 執行橋接節點
+
+
+
+
+
+
+
+
+******************************* Multi_agent test example**************************************************
+
+############################                #################################################
+conda activate apexnav
+cd ~/ApexNav
+source ./devel/setup.bash
+
+
+export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+export LD_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu:/opt/ros/noetic/lib:$LD_LIBRARY_PATH
+roslaunch exploration_manager exploration.launch
+
+################################              #############################################33
+
+conda activate apexnav
+cd ~/ApexNav
+source ./devel/setup.bash
+
+export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+export LD_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu:/opt/ros/noetic/lib:$LD_LIBRARY_PATH
+export LD_PRELOAD=/usr/lib/x86_64-linux-gnu/libffi.so.7
+python habitat_evaluation.py --dataset hm3dv2
+
+
+被选区：
+  python habitat_evaluation.py --dataset hm3dv2 'habitat.dataset.content_scenes=[TbHJrupSAjP]'  test_epi_num=1
+  2azQ1b91cZZ.json.gz
+  8194nk5LbLH.json.gz
+  EU6Fwq7SyZv.json.gz
+  QUCTc6BB5sX.json.gz
+  TbHJrupSAjP.json.gz
+  X7HyMhZNoso.json.gz
+  Z6MFQCViBuw.json.gz
+  oLBMNvg9in8.json.gz
+  pLe4wQe7qrG.json.gz
+  x8F5xyUWy9e.json.gz
+  zsNo4HB9uLZ.json.gz
+
+ continue.txt path =/home/blazarst/ApexNav/videos/test_hm3dv2_multiagent_val/continue.txt
+
+
+
+
+
+#########################################################################################
+
+******************************************************************
+1.具体内容见---/home/blazarst/图片/2026-01-28 23-32-34 的屏幕截图.png
+2./home/blazarst/ApexNav/llm/client/deepseek_answer.py中进行API设置
+3.显存管理监视： watch -n 0.1 nvidia-smi
+4.rosrun rqt_graph rqt_graph 查看节点通信图
+5.find ~/ApexNav -name "__pycache__" -type d -exec rm -rf {} +    清除旧的缓存文件(务必在更改之后清楚缓存)
+6.
+export http_proxy=http://127.0.0.1:7890
+export https_proxy=http://127.0.0.1:7890
+
+
+#######################################################################################
+source devel/setup.bash
+rostopic echo /detector/agent_0/clouds_with_scores
+
+source devel/setup.bash
+rostopic echo /detector/agent_1/clouds_with_scores
+
+source devel/setup.bash
+rostopic echo /detector/agent_2/clouds_with_scores
+
+cd ApexNav
+source devel/setup.bash
+rostopic echo /semantic_observability/agent_0/evidence_debug >RuntimeData/Crossing-data/01Group/Debug01.md
+
+
+cd ApexNav
+source devel/setup.bash
+rostopic echo /semantic_observability/agent_1/evidence_debug >RuntimeData/Crossing-data/01Group/Debug02.md
+
+
+
+cd ApexNav
+source devel/setup.bash
+rostopic echo /semantic_observability/agent_2/evidence_debug >RuntimeData/Crossing-data/01Group/Debug03.md
+
+
+
+cd ApexNav
+source devel/setup.bash
+rostopic echo /planner/agent_0/exploration_mode
+
+cd ApexNav
+source devel/setup.bash
+rostopic echo /planner/agent_1/exploration_mode
+
+cd ApexNav
+source devel/setup.bash
+rostopic echo /planner/agent_2/exploration_mode
+
+
+cd ApexNav
+source devel/setup.bash
+rostopic echo /cross_agent_check/tuning_debug > RuntimeData/Crossing-data/01Group/tuning.txt
+
+source devel/setup.bash
+rostopic echo /cross_agent_check/pending_object> /home/blazarst/ApexNav/RuntimeData/Crossing-data/01Group/object.txt
+
+
+#  rostopic echo /cross_agent_check/tuning_debug | grep -E "stage|reason|object_id|evaluated_agent_id|verification_score|selected
+#  rostopic echo /cross_agent_check/pending_object | grep -E "event|reason|object_id|margin|assigned_verifier_id|blocked_agent_ids"
+
+
+
+################   PROMPT    SET   001     ##################################################
+  First, when refactoring codebase ,remember to pricisely log your changes in  /home/blazarst/桌面/Notebook_ICUS/Working_log/LOG.md with precise time
+  Then, do not compile any files after refactoring
+  Last, be precise and brief when answeing questions.Be explicit and systematically when giving refactoring scheme/plan.
+
+
+################### PROMPT  SET  002  #######################################################
+ When analysing data, you should do a Code-Path Root-Cause Analysis like Processed_5.md Point 11. Have a comprehensive and concise response.It is better to have a infer to the episode.
+ Furthurmore,you should list all need parameters in this dataset for me to compare
+
+ #################$
+
+› In RuntimeData/Crossing-data/01Group,
+    Debug0x.md shows /semantic_observability/
+    agent_x/evidence_debug,tuning.txt shows /
+    semantic_observability/agent_x/
+    evidence_debug.  Analyze the data.Export in /home/blazarst/ApexNav/
+  RuntimeData/Crossing-data/01Group/Processed.md
+
+
+python habitat_manual_control_multiagent.py --dataset hm3dv2
