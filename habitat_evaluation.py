@@ -919,8 +919,10 @@ def main(cfg: DictConfig) -> None:
             any_agent_acting = False
             movement_action_agents = set()
             viewpoint_action_agents = set()
+            action_count_agents = set()
             single_action_is_movement = False
             single_action_changes_viewpoint = False
+            single_action_counted = False
 
             for agent_name in agent_names:
                 ast = agent_states[agent_name]
@@ -932,6 +934,7 @@ def main(cfg: DictConfig) -> None:
                     continue
 
                 any_agent_acting = True
+                action_count_agents.add(agent_name)
                 action = None
 
                 if g_action == ACTION.MOVE_FORWARD:
@@ -941,31 +944,38 @@ def main(cfg: DictConfig) -> None:
                     if not multi_agent:
                         single_action_is_movement = True
                         single_action_changes_viewpoint = True
+                        single_action_counted = True
                 elif g_action == ACTION.TURN_LEFT:
                     action = HabitatSimActions.turn_left
                     viewpoint_action_agents.add(agent_name)
                     if not multi_agent:
                         single_action_changes_viewpoint = True
+                        single_action_counted = True
                 elif g_action == ACTION.TURN_RIGHT:
                     action = HabitatSimActions.turn_right
                     viewpoint_action_agents.add(agent_name)
                     if not multi_agent:
                         single_action_changes_viewpoint = True
+                        single_action_counted = True
                 elif g_action == ACTION.TURN_DOWN:
                     action = HabitatSimActions.look_down
                     ast["camera_pitch"] -= np.pi / 6.0
                     viewpoint_action_agents.add(agent_name)
                     if not multi_agent:
                         single_action_changes_viewpoint = True
+                        single_action_counted = True
                 elif g_action == ACTION.TURN_UP:
                     action = HabitatSimActions.look_up
                     ast["camera_pitch"] += np.pi / 6.0
                     viewpoint_action_agents.add(agent_name)
                     if not multi_agent:
                         single_action_changes_viewpoint = True
+                        single_action_counted = True
                 elif g_action == ACTION.STOP:
                     action = HabitatSimActions.stop
                     ast["finished"] = True
+                    if not multi_agent:
+                        single_action_counted = True
 
                 if multi_agent:
                     action_dict[agent_name] = action
@@ -1048,7 +1058,7 @@ def main(cfg: DictConfig) -> None:
 
                 for agent_name in agent_names:
                     ast = agent_states[agent_name]
-                    if agent_name in movement_action_agents:
+                    if agent_name in action_count_agents:
                         ast["count_steps"] += 1
                     if agent_name in viewpoint_action_agents:
                         ast["viewpoint_steps_since_perception"] += 1
@@ -1172,7 +1182,7 @@ def main(cfg: DictConfig) -> None:
             else:
                 # ── Single-agent processing ──
                 ast = agent_states[agent_names[0]]
-                if single_action_is_movement:
+                if single_action_counted:
                     ast["count_steps"] += 1
                 if single_action_changes_viewpoint:
                     ast["viewpoint_steps_since_perception"] += 1

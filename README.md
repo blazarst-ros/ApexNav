@@ -37,8 +37,18 @@ success_distance: 0.5
 The maximum episode length for evaluation is:
 
 ```yaml
-max_episode_steps: 200
+max_episode_steps: 500
 ```
+
+Step counting policy:
+
+```text
+Every executed Habitat action increments the per-agent step counter.
+```
+
+This matches the original single-agent counting semantics: forward motion,
+turning, looking up/down, and stop actions all count as one step for the agent
+that executed the action.
 
 These values are applied consistently in:
 

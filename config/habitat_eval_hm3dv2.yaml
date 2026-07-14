@@ -16,7 +16,7 @@ habitat:
     split: val
     data_path: data/datasets/objectnav/hm3d/v2/{split}/{split}.json.gz
   environment:
-    max_episode_steps: 200
+    max_episode_steps: 500
     iterator_options:
       cycle: false
       shuffle: false
