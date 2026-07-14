@@ -10,13 +10,14 @@ from copy import deepcopy
 
 
 class ROSPublisher:
-    def __init__(self, agent_name: str = "agent_0"):
+    def __init__(self, agent_name: str = "agent_0", camera_height: float = 0.88):
         """
         Create ROS publishers with namespaced topics for a specific agent.
 
         Args:
             agent_name: Name of the agent (e.g., "agent_0", "agent_1", "agent_2").
                         This becomes the namespace between /habitat/ and the topic name.
+            camera_height: Camera z-offset in meters for the sensor pose.
         """
         ns = agent_name
         # Create ROS publishers (namespaced by agent)
@@ -27,6 +28,7 @@ class ROSPublisher:
         # Create cv_bridge object
         self.bridge = CvBridge()
         self.agent_name = ns
+        self.camera_height = camera_height
 
     def publish_depth(self, ros_time, depth_image):
         depth_msg = self.bridge.cv2_to_imgmsg(depth_image, encoding="passthrough")
@@ -60,7 +62,7 @@ class ROSPublisher:
         sensor_pose.header.frame_id = "world"
         sensor_pose.child_frame_id = "base_link"
         sensor_pose.pose.pose = Pose(
-            position=Point(-gps[2], -gps[0], gps[1] + 0.88),
+            position=Point(-gps[2], -gps[0], gps[1] + self.camera_height),
             orientation=Quaternion(
                 *quaternion_from_euler(
                     copy_pitch + np.pi / 2.0, np.pi, copy_compass + np.pi / 2.0

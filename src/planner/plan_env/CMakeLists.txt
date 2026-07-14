@@ -26,6 +26,7 @@ find_package(PCL 1.7 REQUIRED)
 add_message_files(
   FILES
   MultipleMasksWithConfidence.msg
+  Stage1Detection.msg
 )
 
 generate_messages(

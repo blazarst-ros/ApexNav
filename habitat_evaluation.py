@@ -67,7 +67,7 @@ from habitat.utils.visualizations.utils import (
 )
 
 # ROS message imports
-from plan_env.msg import MultipleMasksWithConfidence
+from plan_env.msg import MultipleMasksWithConfidence, Stage1Detection
 
 # Local project imports
 from basic_utils.failure_check.count_files import count_files_in_directory
@@ -80,6 +80,12 @@ from basic_utils.record_episode.write_record import write_record
 from habitat2ros import habitat_publisher
 from llm.answer_reader.answer_reader import read_answer
 from params import HABITAT_STATE, ROS_STATE, ACTION, RESULT_TYPES, FINAL_RESULT
+from stage1_detection_logging import (
+    build_stage1_detection_records,
+    ensure_stage1_detection_storage,
+    get_stage1_detection_output_dir,
+    write_stage1_detection_records,
+)
 from vlm.Labels import MP3D_ID_TO_NAME
 from vlm.utils.get_itm_message import get_itm_message_cosine
 from vlm.utils.get_object_utils import get_object
@@ -204,6 +210,74 @@ def _parse_dataset_arg():
 def _is_multi_agent(cfg: DictConfig) -> bool:
     """Check if the configuration is for multi-agent mode."""
     return cfg.get("num_agents", 1) > 1
+
+
+def _get_agent_camera_height(cfg: DictConfig, agent_name: str) -> float:
+    """Return configured camera height for Stage 1 detection records."""
+    try:
+        agent_cfg = cfg.habitat.simulator.agents[agent_name]
+        rgb_sensor = agent_cfg.sim_sensors.rgb_sensor
+        if "position" in rgb_sensor and len(rgb_sensor.position) >= 2:
+            return float(rgb_sensor.position[1])
+        return float(agent_cfg.get("height", 0.88))
+    except Exception:
+        return 0.88
+
+
+def _publish_stage1_detection_records(publisher, records):
+    for record in records:
+        msg = Stage1Detection()
+        msg.header.stamp = rospy.Time.from_sec(record["stamp_sec"])
+        msg.episode_id = record["episode_id"]
+        msg.step_index = record["step_index"]
+        msg.detection_id = record["detection_id"]
+        msg.robot_id = record["robot_id"]
+        msg.target_label = record["target_label"]
+        msg.top1_label = record["top1_label"]
+        msg.top1_score = record["top1_score"]
+        msg.top2_label = record["top2_label"]
+        msg.top2_score = record["top2_score"]
+        msg.camera_height = record["camera_height"]
+        msg.object_distance = record["object_distance"]
+        msg.mask_area_ratio = record["mask_area_ratio"]
+        msg.height_utility = record["height_utility"]
+        msg.final_utility = record["final_utility"]
+        publisher.publish(msg)
+
+
+def _record_stage1_detections(
+    *,
+    publisher,
+    output_dir: str,
+    episode_id: str,
+    step_index: int,
+    robot_id: int,
+    target_label: str,
+    score_list,
+    object_masks_list,
+    label_list,
+    depth,
+    camera_height: float,
+    confusion_labels,
+):
+    stamp_sec = rospy.Time.now().to_sec()
+    records = build_stage1_detection_records(
+        episode_id=episode_id,
+        step_index=step_index,
+        robot_id=robot_id,
+        target_label=target_label,
+        score_list=score_list,
+        object_masks_list=object_masks_list,
+        label_list=label_list,
+        depth=depth,
+        camera_height=camera_height,
+        confusion_labels=confusion_labels,
+        stamp_sec=stamp_sec,
+    )
+    if not records:
+        return
+    write_stage1_detection_records(output_dir, episode_id, records)
+    _publish_stage1_detection_records(publisher, records)
 
 
 def _setup_multi_agent_env(env, cfg: DictConfig):
@@ -464,6 +538,7 @@ def main(cfg: DictConfig) -> None:
 
     os.makedirs(os.path.dirname(llm_answer_path), exist_ok=True)
     os.makedirs(video_output_path, exist_ok=True)
+    stage1_detection_output_dir = get_stage1_detection_output_dir()
 
     # Add measurements
     with habitat.config.read_write(cfg):
@@ -521,7 +596,9 @@ def main(cfg: DictConfig) -> None:
     if multi_agent:
         ros_pubs = {}
         for agent_name in agent_names:
-            ros_pubs[agent_name] = habitat_publisher.ROSPublisher(agent_name)
+            ros_pubs[agent_name] = habitat_publisher.ROSPublisher(
+                agent_name, _get_agent_camera_height(cfg, agent_name)
+            )
         for agent_idx in range(num_agents):
             topic = _get_agent_action_index(agent_idx)
             rospy.Subscriber(topic, Int32, _make_agent_action_callback(agent_idx, agent_actions), queue_size=10)
@@ -530,7 +607,9 @@ def main(cfg: DictConfig) -> None:
         obj_point_cloud_pub = rospy.Publisher(
             "habitat/object_point_cloud", PointCloud2, queue_size=10
         )
-        ros_pub = habitat_publisher.ROSPublisher()
+        ros_pub = habitat_publisher.ROSPublisher(
+            agent_names[0], _get_agent_camera_height(cfg, agent_names[0])
+        )
         # Single-agent: subscribe to the default action topic
         rospy.Subscriber(
             _get_agent_action_index(0), Int32, ros_action_callback, queue_size=10
@@ -553,6 +632,9 @@ def main(cfg: DictConfig) -> None:
     )
     cld_with_score_pub = rospy.Publisher(
         "/detector/clouds_with_scores", MultipleMasksWithConfidence, queue_size=10
+    )
+    stage1_detection_pub = rospy.Publisher(
+        "/stage1/detector/detection", Stage1Detection, queue_size=10
     )
 
     def _finish_episode_handshake():
@@ -625,6 +707,7 @@ def main(cfg: DictConfig) -> None:
         llm_answer, room, fusion_threshold = read_answer(
             llm_answer_path, llm_response_path, label, llm_client
         )
+        ensure_stage1_detection_storage(stage1_detection_output_dir)
 
         # ── Episode init ──
         observations = env.reset()
@@ -1057,6 +1140,20 @@ def main(cfg: DictConfig) -> None:
                             cld_pub_name, MultipleMasksWithConfidence, queue_size=10
                         )
                     _cld_pubs[cld_pub_name].publish(cld_msg)
+                    _record_stage1_detections(
+                        publisher=stage1_detection_pub,
+                        output_dir=stage1_detection_output_dir,
+                        episode_id=env.current_episode.episode_id,
+                        step_index=ast["count_steps"],
+                        robot_id=agent_names.index(agent_name),
+                        target_label=label,
+                        score_list=score_list,
+                        object_masks_list=object_masks_list,
+                        label_list=label_list,
+                        depth=agent_obs.get("depth"),
+                        camera_height=_get_agent_camera_height(cfg, agent_name),
+                        confusion_labels=llm_answer,
+                    )
 
                     # Video
                     if need_video:
@@ -1111,6 +1208,20 @@ def main(cfg: DictConfig) -> None:
                     cld_msg.confidence_scores = score_list
                     cld_msg.label_indices = label_list
                     cld_with_score_pub.publish(cld_msg)
+                    _record_stage1_detections(
+                        publisher=stage1_detection_pub,
+                        output_dir=stage1_detection_output_dir,
+                        episode_id=env.current_episode.episode_id,
+                        step_index=ast["count_steps"],
+                        robot_id=0,
+                        target_label=label,
+                        score_list=score_list,
+                        object_masks_list=object_masks_list,
+                        label_list=label_list,
+                        depth=observations.get("depth"),
+                        camera_height=_get_agent_camera_height(cfg, agent_names[0]),
+                        confusion_labels=llm_answer,
+                    )
 
                 ast["distance_to_goal"] = info["distance_to_goal"]
                 if ast["distance_to_goal"] <= success_distance and ast["pass_object"] == 0:
