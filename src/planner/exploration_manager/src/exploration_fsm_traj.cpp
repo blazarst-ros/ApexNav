@@ -4,6 +4,7 @@
 #include <vis_utils/planning_visualization.h>
 #include <geometry_msgs/PoseWithCovarianceStamped.h>
 #include <tf/transform_datatypes.h>
+#include <algorithm>
 
 namespace apexnav_planner {
 
@@ -429,17 +430,22 @@ void ExplorationFSMReal::visualize()  // 实现探索过程的可视化,RVIZ查�
   }
   last_dftr2d_num = ed_ptr->dormant_frontiers_.size();
 
-  // Draw objects
+  const size_t object_count = std::min(ed_ptr->objects_.size(), ed_ptr->object_labels_.size());
+  if (ed_ptr->objects_.size() != ed_ptr->object_labels_.size()) {
+    ROS_ERROR_THROTTLE(1.0, "object label count mismatch: objects=%zu labels=%zu",
+        ed_ptr->objects_.size(), ed_ptr->object_labels_.size());
+  }
+  // Draw objects only where geometry and semantic labels agree.
   static int last_obj_num = 0;
-  for (int i = 0; i < (int)ed_ptr->objects_.size(); ++i) {
+  for (size_t i = 0; i < object_count; ++i) {
     int label = ed_ptr->object_labels_[i];
     visualization_->drawCubes(vec2dTo3d(ed_ptr->objects_[i]), fp_->vis_scale_,
         visualization_->getColor(double(label) / 5.0, 1.0), "object", i, 4);
   }
-  for (int i = ed_ptr->objects_.size(); i < last_obj_num; ++i) {
+  for (int i = object_count; i < last_obj_num; ++i) {
     visualization_->drawCubes({}, fp_->vis_scale_, Eigen::Vector4d(0, 0, 0, 1), "object", i, 4);
   }
-  last_obj_num = ed_ptr->objects_.size();
+  last_obj_num = object_count;
 
   // Draw next best path
   visualization_->drawLines(vec2dTo3d(ed_ptr->next_best_path_), fp_->vis_scale_,

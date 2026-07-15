@@ -617,10 +617,22 @@ def main(cfg: DictConfig) -> None:
     # ROS state callbacks for multi-agent tracking
     # Match C++ NUM_AGENTS in simulation mode so readiness checks include all planner agents.
     ros_all_states = [ROS_STATE.INIT] * max(num_agents, 3)
+    last_ros_state_update_time = time.monotonic()
+
     def ros_all_state_callback(msg):
+        nonlocal last_ros_state_update_time
         for i, s in enumerate(msg.data):
             if i < len(ros_all_states):
                 ros_all_states[i] = s
+        last_ros_state_update_time = time.monotonic()
+
+    def _require_fresh_planner_state():
+        if time.monotonic() - last_ros_state_update_time > 5.0:
+            raise RuntimeError(
+                "Planner state feedback is stale for more than 5 seconds; "
+                "the exploration_node may have exited."
+            )
+
     rospy.Subscriber("/ros/state_all", Int32MultiArray, ros_all_state_callback, queue_size=10)
     rospy.Subscriber("/ros/expl_state", Int32, ros_final_state_callback, queue_size=10)
     rospy.Subscriber("/ros/expl_result", Int32, ros_expl_result_callback, queue_size=10)
@@ -652,9 +664,11 @@ def main(cfg: DictConfig) -> None:
             global_action = None
 
         for attempt in range(3):
+            _require_fresh_planner_state()
             publish_int32(state_pub, HABITAT_STATE.EPISODE_FINISH)
             wait_begin = rospy.Time.now()
             while (rospy.Time.now() - wait_begin).to_sec() < 3.0:
+                _require_fresh_planner_state()
                 if all(
                     ros_all_states[i] in (ROS_STATE.INIT, ROS_STATE.WAIT_TRIGGER)
                     for i in range(num_agents)
@@ -760,6 +774,7 @@ def main(cfg: DictConfig) -> None:
 
         rate = rospy.Rate(10)
         while True:
+            _require_fresh_planner_state()
             all_init = all(ros_all_states[i] == ROS_STATE.INIT for i in range(num_agents))
             any_init = any(ros_all_states[i] == ROS_STATE.INIT for i in range(num_agents))
             all_wait_trigger = all(ros_all_states[i] == ROS_STATE.WAIT_TRIGGER for i in range(num_agents))

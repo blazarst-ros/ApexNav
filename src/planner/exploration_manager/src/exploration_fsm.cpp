@@ -5,6 +5,7 @@
 #include <vis_utils/planning_visualization.h>
 #include <std_msgs/Int32MultiArray.h>
 #include <boost/bind/bind.hpp>
+#include <algorithm>
 
 namespace apexnav_planner {
 void ExplorationFSM::init(ros::NodeHandle& nh)
@@ -176,6 +177,12 @@ void ExplorationFSM::FSMCallback(const ros::TimerEvent& e)
       }
     }
   }
+  // State transitions above happen within this callback; publish the final
+  // state rather than the value captured before each switch statement.
+  for (int agent_idx = 0; agent_idx < NUM_AGENTS; ++agent_idx) {
+    state_all_msg.data[agent_idx] = state_[agent_idx];
+  }
+
   // Publish legacy single-agent state for backward-compatible consumers
   std_msgs::Int32 ros_state_msg;
   ros_state_msg.data = state_[0];
@@ -563,6 +570,11 @@ void ExplorationFSM::visualize()
   static int last_ftr2d_num = 0;
   static int last_dftr2d_num = 0;
   static int last_obj_num = 0;
+  const size_t object_count = std::min(ed_ptr->objects_.size(), ed_ptr->object_labels_.size());
+  if (ed_ptr->objects_.size() != ed_ptr->object_labels_.size()) {
+    ROS_ERROR_THROTTLE(1.0, "object label count mismatch: objects=%zu labels=%zu",
+        ed_ptr->objects_.size(), ed_ptr->object_labels_.size());
+  }
 
   // Publish shared map markers (frontiers, objects, TSP tour) to EVERY agent's topic
   // so each agent's RViz panel receives them under its own topic namespace
@@ -587,8 +599,8 @@ void ExplorationFSM::visualize()
       agent_vis->drawCubes({}, fp_->vis_scale_, Vector4d(0, 0, 0, 1), "dormant_frontier", i, 4);
     }
 
-    // Draw object
-    for (int i = 0; i < (int)ed_ptr->objects_.size(); ++i) {
+    // Draw object only where geometry and semantic labels agree.
+    for (size_t i = 0; i < object_count; ++i) {
       int label = ed_ptr->object_labels_[i];
       agent_vis->drawCubes(vec2dTo3d(ed_ptr->objects_[i]), fp_->vis_scale_,
           agent_vis->getColor(double(label) / 5.0, 1.0), "object", i, 4);
@@ -604,7 +616,7 @@ void ExplorationFSM::visualize()
 
   last_ftr2d_num = ed_ptr->frontiers_.size();
   last_dftr2d_num = ed_ptr->dormant_frontiers_.size();
-  last_obj_num = ed_ptr->objects_.size();
+  last_obj_num = object_count;
 
   // Draw per-agent trajectories and paths
   for (int agent_idx = 0; agent_idx < NUM_AGENTS; ++agent_idx) {
@@ -682,6 +694,7 @@ void ExplorationFSM::resetEpisode()
   expl_manager_->sdf_map_->resetMap();
   expl_manager_->frontier_map2d_->reset();
   expl_manager_->ed_.reset(new ExplorationData);
+  expl_manager_->resetEpisodeState();
 
   clearVisMarker();
   ROS_WARN("Episode reset — FSM back to INIT, maps cleared.");

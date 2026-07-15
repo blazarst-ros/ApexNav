@@ -75,6 +75,7 @@ public:
   // Core interface functions
   void setMap(SDFMap2D* map);
   void init();
+  void resetEpisodeState();
 
 private:
   // ROS callback functions (each receives agent_id as first argument)

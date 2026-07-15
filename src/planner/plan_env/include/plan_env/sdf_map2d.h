@@ -88,6 +88,9 @@ public:
   shared_ptr<ValueMap> value_map_;
 
 private:
+  // Called by MapROS while its mutex excludes all sensor and visualization callbacks.
+  void resetMapData();
+
   // Internal map processing functions
   void clearAndInflateLocalMap();
   void inflatePoint(const Eigen::Vector2i& pt, int step, vector<Eigen::Vector2i>& pts);

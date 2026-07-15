@@ -22,6 +22,13 @@ SDFMap2D::~SDFMap2D() = default;
 
 void SDFMap2D::resetMap()
 {
+  // MapROS owns the mutex shared by all map writers. Reset through it so an
+  // in-flight sensor callback cannot access buffers while they are replaced.
+  map_ros_->resetEpisodeState();
+}
+
+void SDFMap2D::resetMapData()
+{
   // Reset occupancy and distance buffers to initial unknown state
   md_->occupancy_buffer_.assign(mp_->buffer_size_, mp_->clamp_min_log_ - mp_->unknown_flag_);
   md_->occupancy_buffer_inflate_.assign(mp_->buffer_size_, 0);
@@ -47,8 +54,6 @@ void SDFMap2D::resetMap()
   object_map2d_->reset();
   value_map_->reset();
 
-  map_ros_->local_updated_ = false;
-  map_ros_->esdf_need_update_ = false;
   ROS_WARN("SDFMap2D::resetMap() — all buffers cleared, sub-maps reset.");
 }
 

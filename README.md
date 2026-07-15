@@ -71,3 +71,45 @@ and written as JSONL files under:
 ```text
 /media/blazarst/Getea/RuntimeData/Stage1_detector
 ```
+
+## Multi-Agent Episode Reset Fix
+
+The multi-agent branch can keep ROS subscribers and timers alive across
+episodes while only resetting internal planner state. This differs from the
+single-agent `main` branch, which rebuilds the planner interface on episode
+finish. In the multi-agent path, stale per-agent buffers and concurrent writes
+to the shared map can therefore survive into the next episode.
+
+The observed failure mode was a C++ `exploration_node` crash after episode
+reset, followed by Python repeatedly waiting in `WAIT_ACTION_FINISH`. The
+Python wait state is a downstream symptom: planner state feedback becomes stale
+after the C++ node exits.
+
+This branch now resets episode-owned planner state explicitly:
+
+- `MapROS::resetEpisodeState()` clears all per-agent camera, depth, object, ITM,
+  over-depth, and shared map state under `map_mutex_`.
+- `SDFMap2D::resetMap()` routes through `MapROS` so sensor callbacks cannot
+  access map buffers while reset replaces them.
+- Per-agent depth clouds are re-preallocated after reset to avoid indexed writes
+  into an empty point cloud.
+- Per-frame virtual-ground buffers are cleared before each depth update.
+- Object visualization uses bounded object/label counts to avoid out-of-range
+  access when semantic labels lag object geometry.
+- The over-depth object cache is an `ExplorationManager` member and is cleared
+  between episodes instead of remaining as a function-local static.
+- `/ros/state_all` is republished after FSM transitions so Python observes the
+  current multi-agent state.
+- `habitat_evaluation.py` now fails fast if planner state feedback is stale,
+  making a dead `exploration_node` visible instead of masking it as an action
+  wait loop.
+- ATSP tour parsing now guards invalid or out-of-range solver output.
+
+Validation used for this change:
+
+```bash
+python3 -c "import importlib.util; spec=importlib.util.spec_from_file_location('t','tests/test_episode_reset_lifecycle.py'); m=importlib.util.module_from_spec(spec); spec.loader.exec_module(m); tests=[getattr(m,n) for n in dir(m) if n.startswith('test_')]; [test() for test in tests]; print(f'{len(tests)} episode-reset regression checks passed')"
+python3 -m py_compile habitat_evaluation.py tests/test_episode_reset_lifecycle.py
+source /opt/ros/noetic/setup.bash && catkin_make --pkg exploration_manager -j2
+git diff --check
+```

@@ -196,12 +196,39 @@ void MapROS::visCallback(const ros::TimerEvent& /*event*/)
 void MapROS::itmScoreCallback(int agent_id, const std_msgs::Float64ConstPtr& msg)
 {
   if (agent_id < 0 || agent_id >= NUM_AGENTS_) return;
+  std::lock_guard<std::mutex> lock(map_mutex_);
   agents_[agent_id].itm_score_ = msg->data;
+}
+
+void MapROS::resetEpisodeState()
+{
+  std::lock_guard<std::mutex> lock(map_mutex_);
+
+  for (auto& agent : agents_) {
+    agent.camera_pos_.setZero();
+    agent.camera_q_ = Eigen::Quaterniond::Identity();
+    agent.depth_image_.reset(new cv::Mat);
+    agent.proj_points_cnt_ = 0;
+    agent.depth_cloud_.reset(new PointCloud3D());
+    agent.depth_cloud_->points.resize(640 * 480 / (skip_pixel_ * skip_pixel_));
+    agent.filtered_depth_cloud2d_.reset(new PointCloud2D());
+    agent.under_ground_cloud2d_.reset(new PointCloud2D());
+    agent.over_depth_object_cloud_.reset(new PointCloud3D());
+    agent.continue_over_depth_count_ = -1;
+    agent.itm_score_ = -1.0;
+  }
+
+  local_updated_ = false;
+  esdf_need_update_ = false;
+  map_->resetMapData();
 }
 
 void MapROS::detectedObjectCloudCallback(int agent_id, const plan_env::MultipleMasksWithConfidenceConstPtr& msg)
 {
   if (agent_id < 0 || agent_id >= NUM_AGENTS_) return;
+  // Agent state and all shared maps must remain stable for the entire
+  // callback; episode reset uses this same mutex as an exclusive barrier.
+  std::lock_guard<std::mutex> lock(map_mutex_);
   AgentState& agent = agents_[agent_id];
 
   // Validate message structure consistency
@@ -293,39 +320,31 @@ void MapROS::detectedObjectCloudCallback(int agent_id, const plan_env::MultipleM
     detected_objects.push_back(detected_object);
   }
 
-  {
-    std::lock_guard<std::mutex> lock(map_mutex_);
-
-    // Maintain per-agent over-depth consistency, then merge into shared cloud
-    if (agent.continue_over_depth_count_ == -1 &&
-        !agent.over_depth_object_cloud_->points.empty())
-      agent.continue_over_depth_count_ = 0;
-    else if (agent.continue_over_depth_count_ <= 4 && agent.continue_over_depth_count_ >= 0) {
-      agent.continue_over_depth_count_++;
-      agent.over_depth_object_cloud_ = last_over_depth_cloud;
-    }
-    else {
-      agent.continue_over_depth_count_ = -1;
-    }
-
-    // Merge all agents' over-depth clouds into the shared visualization cloud
-    map_->object_map2d_->over_depth_object_cloud_.reset(new PointCloud3D());
-    for (int i = 0; i < NUM_AGENTS_; ++i)
-      *map_->object_map2d_->over_depth_object_cloud_ += *agents_[i].over_depth_object_cloud_;
-
-    // Publish visualization
-    publishPointCloud(filtered_object_cloud_pub_, filtered_all_object_cloud);
-    publishPointCloud(all_object_cloud_pub_, all_object_cloud);
-    publishPointCloud(over_depth_object_cloud_pub_, map_->object_map2d_->over_depth_object_cloud_);
-
-    // Update object map
-    *map_->object_map2d_->all_object_clouds_ = *filtered_all_object_cloud;
-    vector<int> detected_object_cluster_ids;
-    map_->inputObjectCloud2D(detected_objects, detected_object_cluster_ids);
-
-    // Extract observation objects not detected by vision
-    getObservationObjectsCloud(agent_id, detected_object_cluster_ids);
+  // Maintain per-agent over-depth consistency, then merge into shared cloud.
+  if (agent.continue_over_depth_count_ == -1 &&
+      !agent.over_depth_object_cloud_->points.empty())
+    agent.continue_over_depth_count_ = 0;
+  else if (agent.continue_over_depth_count_ <= 4 && agent.continue_over_depth_count_ >= 0) {
+    agent.continue_over_depth_count_++;
+    agent.over_depth_object_cloud_ = last_over_depth_cloud;
   }
+  else {
+    agent.continue_over_depth_count_ = -1;
+  }
+
+  // Merge all agents' over-depth clouds into the shared visualization cloud.
+  map_->object_map2d_->over_depth_object_cloud_.reset(new PointCloud3D());
+  for (int i = 0; i < NUM_AGENTS_; ++i)
+    *map_->object_map2d_->over_depth_object_cloud_ += *agents_[i].over_depth_object_cloud_;
+
+  publishPointCloud(filtered_object_cloud_pub_, filtered_all_object_cloud);
+  publishPointCloud(all_object_cloud_pub_, all_object_cloud);
+  publishPointCloud(over_depth_object_cloud_pub_, map_->object_map2d_->over_depth_object_cloud_);
+
+  *map_->object_map2d_->all_object_clouds_ = *filtered_all_object_cloud;
+  vector<int> detected_object_cluster_ids;
+  map_->inputObjectCloud2D(detected_objects, detected_object_cluster_ids);
+  getObservationObjectsCloud(agent_id, detected_object_cluster_ids);
 
   double object_map_process_time = (ros::Time::now() - t1).toSec();
   ROS_INFO_THROTTLE(
@@ -357,6 +376,7 @@ void MapROS::depthPoseCallback(
     int agent_id, const sensor_msgs::ImageConstPtr& img, const nav_msgs::OdometryConstPtr& pose)
 {
   if (agent_id < 0 || agent_id >= NUM_AGENTS_) return;
+  std::lock_guard<std::mutex> lock(map_mutex_);
   AgentState& agent = agents_[agent_id];
 
   // Extract camera pose from odometry message
@@ -388,9 +408,6 @@ void MapROS::depthPoseCallback(
 
   processDepthImage(agent_id);
   filterPointCloudToXY(agent_id);
-
-  // Update shared map data (requires mutex �?? write to shared map)
-  std::lock_guard<std::mutex> lock(map_mutex_);
 
   // Virtual ground ground points collected in filterPointCloudToXY
   if (!agent.under_ground_cloud2d_->empty())
@@ -462,6 +479,7 @@ void MapROS::filterPointCloudToXY(int agent_id)
   PointCloud2D::Ptr under_ground_cloud_2d(new PointCloud2D());
 
   agent.filtered_depth_cloud2d_->clear();
+  agent.under_ground_cloud2d_->clear();
 
   // Downsample
   pcl::VoxelGrid<Point3D> voxel_filter;

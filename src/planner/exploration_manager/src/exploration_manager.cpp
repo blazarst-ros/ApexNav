@@ -57,6 +57,7 @@ void ExplorationManager::initialize(ros::NodeHandle& nh)
   // Initialize ray caster for collision checking and TSP service client
   ray_caster2d_.reset(new RayCaster2D);
   ray_caster2d_->setParams(resolution, origin);
+  last_over_depth_object_cloud_.reset(new pcl::PointCloud<pcl::PointXYZ>);
   tsp_client_ =
       nh.serviceClient<lkh_mtsp_solver::SolveMTSP>("/solve_tsp", true);  // TSP 求解服务客户端
 
@@ -69,6 +70,11 @@ void ExplorationManager::initialize(ros::NodeHandle& nh)
   gcopter_.reset(new Gcopter(gcopter_config, nh, sdf_map_, kinoastar_));
 
   ROS_INFO("[ExplorationManager] KinoAstar and GCopter initialized for real-world mode");
+}
+
+void ExplorationManager::resetEpisodeState()
+{
+  last_over_depth_object_cloud_.reset(new pcl::PointCloud<pcl::PointXYZ>);
 }
 
 int ExplorationManager::planNextBestPoint(const Vector3d& pos, const double& yaw, int agent_idx,
@@ -148,13 +154,12 @@ int ExplorationManager::planNextBestPoint(const Vector3d& pos, const double& yaw
           return SEARCH_EXTREME;
       }
 
-      static auto last_over_depth_object_cloud = object_map2d_->over_depth_object_cloud_;
       if (!object_map2d_->over_depth_object_cloud_->points.empty())
-        last_over_depth_object_cloud = object_map2d_->over_depth_object_cloud_;
+        last_over_depth_object_cloud_ = object_map2d_->over_depth_object_cloud_;
 
-      if (!last_over_depth_object_cloud->points.empty() &&
+      if (!last_over_depth_object_cloud_->points.empty() &&
           searchObjectPathExtreme(
-              pos, last_over_depth_object_cloud, out_next_pos, out_next_best_path)) {
+              pos, last_over_depth_object_cloud_, out_next_pos, out_next_best_path)) {
         return SEARCH_EXTREME;
       }
     }
@@ -485,6 +490,10 @@ void ExplorationManager::computeATSPTour(
 
   // Read optimal tour from the tour section of result file
   ifstream res_file(ep_->tsp_dir_ + "/atsp_tour.tour");
+  if (!res_file.is_open()) {
+    ROS_ERROR("Failed to open ATSP tour result.");
+    return;
+  }
   string res;
   while (getline(res_file, res)) {
     // Go to tour section
@@ -495,12 +504,26 @@ void ExplorationManager::computeATSPTour(
   // Read path for ATSP formulation
   while (getline(res_file, res)) {
     // Read indices of frontiers in optimal tour
-    int id = stoi(res);
+    int id = 0;
+    try {
+      id = stoi(res);
+    }
+    catch (const std::exception&) {
+      ROS_ERROR("Invalid ATSP tour entry: %s", res.c_str());
+      indices.clear();
+      return;
+    }
     if (id == 1)  // Ignore the current state
       continue;
     if (id == -1)
       break;
-    indices.push_back(id - 2);  // Idx of solver-2 == Idx of frontier
+    const int frontier_idx = id - 2;
+    if (frontier_idx < 0 || frontier_idx >= static_cast<int>(frontiers.size())) {
+      ROS_ERROR("ATSP tour index %d is outside frontier range.", frontier_idx);
+      indices.clear();
+      return;
+    }
+    indices.push_back(frontier_idx);  // Idx of solver-2 == Idx of frontier
   }
 
   res_file.close();

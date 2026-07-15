@@ -72,6 +72,7 @@ public:
   ~ExplorationManager();  // Explicit destructor declaration for shared_ptr with forward declaration
 
   void initialize(ros::NodeHandle& nh);
+  void resetEpisodeState();
 
   int planNextBestPoint(const Vector3d& pos, const double& yaw, int agent_idx,
       Eigen::Vector2d& out_next_pos, std::vector<Eigen::Vector2d>& out_next_best_path);
@@ -133,6 +134,7 @@ private:
 
   ros::ServiceClient tsp_client_;         ///< ROS service client for TSP solver
   unique_ptr<RayCaster2D> ray_caster2d_;  ///< Ray casting for collision checking
+  pcl::shared_ptr<pcl::PointCloud<pcl::PointXYZ>> last_over_depth_object_cloud_;
 };
 
 inline bool ExplorationManager::searchFrontierPath(const Vector2d& start, const Vector2d& end,
