@@ -212,6 +212,11 @@ def _is_multi_agent(cfg: DictConfig) -> bool:
     return cfg.get("num_agents", 1) > 1
 
 
+def _is_successful_stop(distance_to_goal: float, success_distance: float, stop_called: bool) -> bool:
+    """Match Habitat ObjectNav success: STOP called while strictly within range."""
+    return bool(stop_called) and distance_to_goal < success_distance
+
+
 def _get_agent_camera_height(cfg: DictConfig, agent_name: str) -> float:
     """Return configured camera height for Stage 1 detection records."""
     try:
@@ -709,6 +714,7 @@ def main(cfg: DictConfig) -> None:
                 "distance_to_goal_reward": 0.0,
                 "vis_frames": [],
                 "finished": False,
+                "stop_called": False,
                 "viewpoint_steps_since_perception": perception_interval_steps,
             }
 
@@ -840,7 +846,15 @@ def main(cfg: DictConfig) -> None:
         def _stop_all_agents_for_evaluation():
             print("Goal claim received from one agent; stopping all agents for evaluation.")
             for stop_agent_name in agent_names:
-                agent_states[stop_agent_name]["finished"] = True
+                ast = agent_states[stop_agent_name]
+                dtg = _get_agent_distance_to_goal(env, agent_names.index(stop_agent_name))
+                ast["distance_to_goal"] = min(ast["distance_to_goal"], dtg)
+                if dtg <= success_distance:
+                    ast["near_object"] = 1
+                    ast["pass_object"] = max(ast["pass_object"], 1)
+                ast["stop_called"] = True
+                ast["success"] = int(_is_successful_stop(dtg, success_distance, ast["stop_called"]))
+                ast["finished"] = True
             agent_actions.clear()
 
         while not rospy.is_shutdown():
@@ -988,6 +1002,7 @@ def main(cfg: DictConfig) -> None:
                         single_action_counted = True
                 elif g_action == ACTION.STOP:
                     action = HabitatSimActions.stop
+                    ast["stop_called"] = True
                     ast["finished"] = True
                     if not multi_agent:
                         single_action_counted = True
@@ -1087,9 +1102,9 @@ def main(cfg: DictConfig) -> None:
                     if dtg <= success_distance:
                         ast["near_object"] = 1
                         ast["pass_object"] = max(ast["pass_object"], 1)
-                        if dtg <= success_distance:
-                            ast["success"] = 1
-                            ast["finished"] = True
+                    ast["success"] = int(_is_successful_stop(dtg, success_distance, ast["stop_called"]))
+                    if ast["success"] == 1:
+                        ast["finished"] = True
 
                     # Use task metrics (from default agent) as approximation for spl/soft_spl
                     ast["spl"] = metrics.get("spl", 0.0) if isinstance(metrics, dict) else 0.0
