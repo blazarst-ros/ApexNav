@@ -91,6 +91,11 @@ from vlm.utils.get_itm_message import get_itm_message_cosine
 from vlm.utils.get_object_utils import get_object
 
 
+PLANNER_STALE_TIMEOUT_SEC = 5.0
+RESET_ACK_TIMEOUT_SEC = 10.0
+RESET_STALE_TIMEOUT_SEC = 15.0
+
+
 def publish_int32(publisher, data):
     msg = Int32()
     msg.data = data
@@ -631,10 +636,10 @@ def main(cfg: DictConfig) -> None:
                 ros_all_states[i] = s
         last_ros_state_update_time = time.monotonic()
 
-    def _require_fresh_planner_state():
-        if time.monotonic() - last_ros_state_update_time > 5.0:
+    def _require_fresh_planner_state(wait_for_stale=PLANNER_STALE_TIMEOUT_SEC):
+        if time.monotonic() - last_ros_state_update_time > wait_for_stale:
             raise RuntimeError(
-                "Planner state feedback is stale for more than 5 seconds; "
+                f"Planner state feedback is stale for more than {wait_for_stale:.1f} seconds; "
                 "the exploration_node may have exited."
             )
 
@@ -669,11 +674,11 @@ def main(cfg: DictConfig) -> None:
             global_action = None
 
         for attempt in range(3):
-            _require_fresh_planner_state()
+            _require_fresh_planner_state(wait_for_stale=RESET_STALE_TIMEOUT_SEC)
             publish_int32(state_pub, HABITAT_STATE.EPISODE_FINISH)
             wait_begin = rospy.Time.now()
-            while (rospy.Time.now() - wait_begin).to_sec() < 3.0:
-                _require_fresh_planner_state()
+            while (rospy.Time.now() - wait_begin).to_sec() < RESET_ACK_TIMEOUT_SEC:
+                _require_fresh_planner_state(wait_for_stale=RESET_STALE_TIMEOUT_SEC)
                 if all(
                     ros_all_states[i] in (ROS_STATE.INIT, ROS_STATE.WAIT_TRIGGER)
                     for i in range(num_agents)

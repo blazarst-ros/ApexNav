@@ -80,10 +80,18 @@ single-agent `main` branch, which rebuilds the planner interface on episode
 finish. In the multi-agent path, stale per-agent buffers and concurrent writes
 to the shared map can therefore survive into the next episode.
 
-The observed failure mode was a C++ `exploration_node` crash after episode
-reset, followed by Python repeatedly waiting in `WAIT_ACTION_FINISH`. The
-Python wait state is a downstream symptom: planner state feedback becomes stale
-after the C++ node exits.
+The original observed failure mode was a C++ `exploration_node` crash after
+episode reset, followed by Python repeatedly waiting in `WAIT_ACTION_FINISH`.
+The Python wait state is a downstream symptom: planner state feedback becomes
+stale after the C++ node exits.
+
+The overstep path has a separate reset-handshake failure mode. When an episode
+ends by reaching `max_episode_steps`, Python publishes `EPISODE_FINISH` and
+waits for `/ros/state_all` to confirm that the C++ planner has reset. C++ map
+reset can take several seconds, so the old 3-second Python acknowledgement
+window could expire before the reset state was published. Python then sent a
+second `EPISODE_FINISH`, causing another map reset, and finally misreported the
+blocked state feedback as a stale planner process.
 
 This branch now resets episode-owned planner state explicitly:
 
@@ -100,6 +108,11 @@ This branch now resets episode-owned planner state explicitly:
   between episodes instead of remaining as a function-local static.
 - `/ros/state_all` is republished after FSM transitions so Python observes the
   current multi-agent state.
+- `/ros/state_all` is also published immediately after `resetEpisode()` finishes
+  so Python receives an explicit reset acknowledgement.
+- `habitat_evaluation.py` uses a longer reset acknowledgement window and a
+  reset-specific stale timeout, preventing overstep cleanup from retriggering
+  repeated C++ map resets.
 - `habitat_evaluation.py` now fails fast if planner state feedback is stale,
   making a dead `exploration_node` visible instead of masking it as an action
   wait loop.

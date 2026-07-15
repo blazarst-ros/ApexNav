@@ -63,12 +63,8 @@ void ExplorationFSM::FSMCallback(const ros::TimerEvent& e)
   exec_timer_.stop();
   std::lock_guard<std::mutex> lock(data_mutex_);
 
-  std_msgs::Int32MultiArray state_all_msg;
-  state_all_msg.data.resize(NUM_AGENTS);
-
   for (int agent_idx = 0; agent_idx < NUM_AGENTS; ++agent_idx) {
     auto& ad = fd_->agent_[agent_idx];
-    state_all_msg.data[agent_idx] = state_[agent_idx];
 
     switch (state_[agent_idx]) {
       case ROS_STATE::INIT: {
@@ -139,7 +135,6 @@ void ExplorationFSM::FSMCallback(const ros::TimerEvent& e)
               action_pub_[stop_idx].publish(action_msg);
               fd_->agent_[stop_idx].have_finished_ = true;
               transitState(stop_idx, ROS_STATE::FINISH, "Reach Object");
-              state_all_msg.data[stop_idx] = state_[stop_idx];
             }
           }
           else if (ad.final_result_ == FINAL_RESULT::EXPLORE ||
@@ -177,19 +172,21 @@ void ExplorationFSM::FSMCallback(const ros::TimerEvent& e)
       }
     }
   }
-  // State transitions above happen within this callback; publish the final
-  // state rather than the value captured before each switch statement.
-  for (int agent_idx = 0; agent_idx < NUM_AGENTS; ++agent_idx) {
-    state_all_msg.data[agent_idx] = state_[agent_idx];
-  }
+  publishPlannerState();
+  exec_timer_.start();
+}
 
-  // Publish legacy single-agent state for backward-compatible consumers
+void ExplorationFSM::publishPlannerState()
+{
+  std_msgs::Int32MultiArray state_all_msg;
+  state_all_msg.data.resize(NUM_AGENTS);
+  for (int agent_idx = 0; agent_idx < NUM_AGENTS; ++agent_idx)
+    state_all_msg.data[agent_idx] = state_[agent_idx];
+
   std_msgs::Int32 ros_state_msg;
   ros_state_msg.data = state_[0];
   ros_state_pub_.publish(ros_state_msg);
-  // Publish per-agent state for multi-agent Python to track all agents
   ros_state_all_pub_.publish(state_all_msg);
-  exec_timer_.start();
 }
 
 /**
@@ -697,6 +694,7 @@ void ExplorationFSM::resetEpisode()
   expl_manager_->resetEpisodeState();
 
   clearVisMarker();
+  publishPlannerState();
   ROS_WARN("Episode reset — FSM back to INIT, maps cleared.");
 }
 

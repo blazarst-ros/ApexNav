@@ -112,6 +112,7 @@ private:
   void transitState(int agent_idx, ROS_STATE new_state, string pos_call);
   void wrapAngle(double& angle);
   void publishRobotMarker(int agent_idx);
+  void publishPlannerState();
   void visualize();
   void clearVisMarker();
   void resetEpisode();  ///< Lightweight reset for episode transition (no ROS object destruction)

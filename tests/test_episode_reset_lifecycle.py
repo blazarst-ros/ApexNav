@@ -47,8 +47,10 @@ def test_visualization_never_indexes_object_labels_without_a_bound_check():
 
 def test_state_feedback_is_published_after_fsm_transitions():
     source = FSM_SOURCE.read_text(encoding="utf-8")
+    helper_body = source[source.index("void ExplorationFSM::publishPlannerState()") :]
 
-    assert source.index("for (int agent_idx = 0; agent_idx < NUM_AGENTS; ++agent_idx) {\n    state_all_msg.data[agent_idx] = state_[agent_idx];\n  }") < source.index("ros_state_all_pub_.publish(state_all_msg);")
+    assert "publishPlannerState();" in source
+    assert helper_body.index("for (int agent_idx = 0; agent_idx < NUM_AGENTS; ++agent_idx)") < helper_body.index("ros_state_all_pub_.publish(state_all_msg);")
 
 
 def test_python_detects_stale_planner_state_feedback():
@@ -56,3 +58,19 @@ def test_python_detects_stale_planner_state_feedback():
 
     assert "last_ros_state_update_time" in source
     assert "Planner state feedback is stale" in source
+
+
+def test_episode_reset_publishes_state_ack_after_map_reset():
+    source = FSM_SOURCE.read_text(encoding="utf-8")
+    reset_body = source[source.index("void ExplorationFSM::resetEpisode()") :]
+
+    assert "publishPlannerState();" in source
+    assert reset_body.index("expl_manager_->resetEpisodeState();") < reset_body.index("publishPlannerState();")
+
+
+def test_python_reset_handshake_waits_longer_than_map_reset_before_retrying():
+    source = Path("habitat_evaluation.py").read_text(encoding="utf-8")
+
+    assert "RESET_ACK_TIMEOUT_SEC = 10.0" in source
+    assert "RESET_STALE_TIMEOUT_SEC = 15.0" in source
+    assert "wait_for_stale=RESET_STALE_TIMEOUT_SEC" in source
