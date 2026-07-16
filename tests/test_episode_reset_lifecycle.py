@@ -78,11 +78,14 @@ def test_per_agent_exploration_results_are_published_as_array():
     )
 
     assert "expl_result_all_pub_" in header
+    assert "expl_result_agent_pub_[NUM_AGENTS]" in header
     assert '"/ros/expl_result_all"' in source
+    assert '"/ros/agent_" + std::to_string(i) + "/expl_result"' in source
     assert "void publishExplorationResults();" in header
     assert "void ExplorationFSM::publishExplorationResults()" in source
     assert "expl_result_all_msg.data.resize(NUM_AGENTS);" in source
     assert "expl_result_all_msg.data[agent_idx] = fd_->agent_[agent_idx].expl_result_;" in source
+    assert "expl_result_agent_pub_[agent_idx].publish(expl_result_agent_msg);" in source
     assert "expl_result_all_pub_.publish(expl_result_all_msg);" in source
     assert "ad.expl_result_ = expl_res;" in source
     assert "expl_result_ = EXPL_RESULT::EXPLORATION;" in data_header

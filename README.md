@@ -37,7 +37,7 @@ success_distance: 0.5
 The maximum episode length for evaluation is:
 
 ```yaml
-max_episode_steps: 500
+max_episode_steps: 250
 ```
 
 Step counting policy:
@@ -114,11 +114,15 @@ agent and published on:
 
 ```text
 /ros/expl_result_all
+/ros/agent_0/expl_result
+/ros/agent_1/expl_result
+/ros/agent_2/expl_result
 ```
 
 The message type is `std_msgs/Int32MultiArray`, where `data[i]` is the latest
-`EXPL_RESULT` for `agent_i`. The existing scalar `/ros/expl_result` topic is
-kept for compatibility and still reflects the most recently published
+`EXPL_RESULT` for `agent_i`. The per-agent topics are `std_msgs/Int32` and are
+easier to inspect with `rostopic echo`. The existing scalar `/ros/expl_result`
+topic is kept for compatibility and still reflects the most recently published
 exploration result.
 
 `EXPL_RESULT` values are:

@@ -1,13 +1,13 @@
 from pathlib import Path
 
 
-def test_eval_configs_restore_500_max_episode_steps():
+def test_eval_configs_use_250_max_episode_steps():
     for config_path in [
         Path("config/habitat_eval_hm3dv1.yaml"),
         Path("config/habitat_eval_hm3dv2.yaml"),
         Path("config/habitat_eval_mp3d.yaml"),
     ]:
-        assert "max_episode_steps: 500" in config_path.read_text(encoding="utf-8")
+        assert "max_episode_steps: 250" in config_path.read_text(encoding="utf-8")
 
 
 def test_eval_configs_allow_all_three_agents_to_run_perception_each_step():
@@ -40,5 +40,5 @@ def test_multiagent_runtime_log_prints_all_agent_step_counts():
 
 def test_readme_documents_step_counting_policy_and_max_steps():
     text = Path("README.md").read_text(encoding="utf-8")
-    assert "max_episode_steps: 500" in text
+    assert "max_episode_steps: 250" in text
     assert "Every executed Habitat action increments the per-agent step counter." in text

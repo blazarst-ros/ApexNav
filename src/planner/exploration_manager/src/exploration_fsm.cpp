@@ -53,6 +53,8 @@ void ExplorationFSM::init(ros::NodeHandle& nh)
   for (int i = 0; i < NUM_AGENTS; ++i) {
     action_pub_[i] = nh.advertise<std_msgs::Int32>(
         "/habitat/plan_action_agent_" + std::to_string(i), 10);
+    expl_result_agent_pub_[i] = nh.advertise<std_msgs::Int32>(
+        "/ros/agent_" + std::to_string(i) + "/expl_result", 10);
     robot_marker_pub_[i] = nh.advertise<visualization_msgs::Marker>(
         "/robot_agent_" + std::to_string(i), 10);
   }
@@ -194,8 +196,12 @@ void ExplorationFSM::publishExplorationResults()
 {
   std_msgs::Int32MultiArray expl_result_all_msg;
   expl_result_all_msg.data.resize(NUM_AGENTS);
-  for (int agent_idx = 0; agent_idx < NUM_AGENTS; ++agent_idx)
+  for (int agent_idx = 0; agent_idx < NUM_AGENTS; ++agent_idx) {
     expl_result_all_msg.data[agent_idx] = fd_->agent_[agent_idx].expl_result_;
+    std_msgs::Int32 expl_result_agent_msg;
+    expl_result_agent_msg.data = fd_->agent_[agent_idx].expl_result_;
+    expl_result_agent_pub_[agent_idx].publish(expl_result_agent_msg);
+  }
 
   expl_result_all_pub_.publish(expl_result_all_msg);
 }
