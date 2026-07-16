@@ -50,6 +50,34 @@ This matches the original single-agent counting semantics: forward motion,
 turning, looking up/down, and stop actions all count as one step for the agent
 that executed the action.
 
+Runtime progress logging prints each agent's own step counter, for example:
+
+```text
+--------------Steps: agent_0=288, agent_1=286, agent_2=284--------------
+```
+
+The C++ planner treats a searched object as reached at:
+
+```text
+REACH_DISTANCE = 0.50 m
+SOFT_REACH_DISTANCE = 0.70 m
+```
+
+The regular reach distance aligns with the evaluation success distance. The
+soft reach distance is used during stuck-recovery handling when the planner is
+already in object-search mode.
+
+Multi-agent perception scheduling:
+
+```yaml
+perception_agents_per_step: 3
+perception_interval_steps: 1
+```
+
+This allows all three agents to run ITM/VLM object detection in the same
+simulation loop when all three have changed viewpoint. `perception_interval_steps`
+is counted per agent, not as a global scheduler interval.
+
 These values are applied consistently in:
 
 - `config/habitat_eval_hm3dv1.yaml`

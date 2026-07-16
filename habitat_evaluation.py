@@ -1211,7 +1211,10 @@ def main(cfg: DictConfig) -> None:
                             frame = overlay_frame(frame, metrics)
                         ast["vis_frames"].append(frame)
 
-                print(f"\n--------------Step: {agent_states[agent_names[0]]['count_steps']}--------------")
+                steps_str = ", ".join(
+                    f"{name}={agent_states[name]['count_steps']}" for name in agent_names
+                )
+                print(f"\n--------------Steps: {steps_str}--------------")
                 print(f"  Best agent: {best_agent} (dist={best_dist:.3f})")
                 publish_int32(state_pub, HABITAT_STATE.ACTION_FINISH)
             else:

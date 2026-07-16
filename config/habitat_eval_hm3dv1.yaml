@@ -126,7 +126,7 @@ multiagent:
   episode_termination: cooperative
   inter_agent_avoidance: false
   agent_spawn_offset: 1.0
-  perception_agents_per_step: 1
+  perception_agents_per_step: 3
   # Per-agent viewpoint-change interval for VLM requests, not global scheduler steps.
   perception_interval_steps: 1
 
