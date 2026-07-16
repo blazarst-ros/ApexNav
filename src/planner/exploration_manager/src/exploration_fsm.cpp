@@ -49,6 +49,7 @@ void ExplorationFSM::init(ros::NodeHandle& nh)
   ros_state_all_pub_ = nh.advertise<std_msgs::Int32MultiArray>("/ros/state_all", 10);
   expl_state_pub_ = nh.advertise<std_msgs::Int32>("/ros/expl_state", 10);
   expl_result_pub_ = nh.advertise<std_msgs::Int32>("/ros/expl_result", 10);
+  expl_result_all_pub_ = nh.advertise<std_msgs::Int32MultiArray>("/ros/expl_result_all", 10);
   for (int i = 0; i < NUM_AGENTS; ++i) {
     action_pub_[i] = nh.advertise<std_msgs::Int32>(
         "/habitat/plan_action_agent_" + std::to_string(i), 10);
@@ -189,6 +190,16 @@ void ExplorationFSM::publishPlannerState()
   ros_state_all_pub_.publish(state_all_msg);
 }
 
+void ExplorationFSM::publishExplorationResults()
+{
+  std_msgs::Int32MultiArray expl_result_all_msg;
+  expl_result_all_msg.data.resize(NUM_AGENTS);
+  for (int agent_idx = 0; agent_idx < NUM_AGENTS; ++agent_idx)
+    expl_result_all_msg.data[agent_idx] = fd_->agent_[agent_idx].expl_result_;
+
+  expl_result_all_pub_.publish(expl_result_all_msg);
+}
+
 /**
  * @brief Plan the next action based on current state and environment
  * @return Final result indicating the planned action type and exploration state
@@ -317,6 +328,7 @@ int ExplorationFSM::callActionPlanner(int agent_idx)
 
   expl_res = expl_manager_->planNextBestPoint(
       ad.start_pt_, ad.start_yaw_, agent_idx, ad.planned_next_pos_, ad.planned_next_best_path_);
+  ad.expl_result_ = expl_res;
 
   if (expl_res != EXPL_RESULT::EXPLORATION) {
     ad.replan_flag_ = true;
@@ -331,6 +343,7 @@ int ExplorationFSM::callActionPlanner(int agent_idx)
   std_msgs::Int32 expl_result_msg;
   expl_result_msg.data = expl_res;
   expl_result_pub_.publish(expl_result_msg);
+  publishExplorationResults();
 
   if (expl_res == EXPL_RESULT::EXPLORATION)
     final_res = FINAL_RESULT::EXPLORE;
@@ -695,6 +708,7 @@ void ExplorationFSM::resetEpisode()
 
   clearVisMarker();
   publishPlannerState();
+  publishExplorationResults();
   ROS_WARN("Episode reset — FSM back to INIT, maps cleared.");
 }
 

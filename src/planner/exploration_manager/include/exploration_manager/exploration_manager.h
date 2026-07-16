@@ -13,6 +13,8 @@
 #include <memory>
 #include <vector>
 
+#include <exploration_manager/exploration_data.h>
+
 // ROS core
 #include <ros/ros.h>
 
@@ -37,7 +39,6 @@ class FrontierMap2D;
 class Gcopter;
 class KinoAstar;
 struct ExplorationParam;
-struct ExplorationData;
 
 struct SemanticFrontier {
   Vector2d position;      ///< 2D position of the frontier
@@ -54,16 +55,6 @@ struct SemanticFrontier {
     // Otherwise, sort by semantic value (descending)
     return semantic_value > other.semantic_value;
   }
-};
-
-enum EXPL_RESULT {
-  EXPLORATION,               ///< Normal exploration mode
-  SEARCH_BEST_OBJECT,        ///< Found high-confidence object
-  SEARCH_OVER_DEPTH_OBJECT,  ///< Searching over-depth object
-  SEARCH_SUSPICIOUS_OBJECT,  ///< Investigating suspicious object
-  NO_PASSABLE_FRONTIER,      ///< No reachable frontiers available
-  NO_COVERABLE_FRONTIER,     ///< No coverable frontiers found
-  SEARCH_EXTREME             ///< Extreme search mode activated
 };
 
 class ExplorationManager {

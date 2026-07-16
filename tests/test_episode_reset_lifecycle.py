@@ -68,6 +68,26 @@ def test_episode_reset_publishes_state_ack_after_map_reset():
     assert reset_body.index("expl_manager_->resetEpisodeState();") < reset_body.index("publishPlannerState();")
 
 
+def test_per_agent_exploration_results_are_published_as_array():
+    source = FSM_SOURCE.read_text(encoding="utf-8")
+    header = Path("src/planner/exploration_manager/include/exploration_manager/exploration_fsm.h").read_text(
+        encoding="utf-8"
+    )
+    data_header = Path("src/planner/exploration_manager/include/exploration_manager/exploration_data.h").read_text(
+        encoding="utf-8"
+    )
+
+    assert "expl_result_all_pub_" in header
+    assert '"/ros/expl_result_all"' in source
+    assert "void publishExplorationResults();" in header
+    assert "void ExplorationFSM::publishExplorationResults()" in source
+    assert "expl_result_all_msg.data.resize(NUM_AGENTS);" in source
+    assert "expl_result_all_msg.data[agent_idx] = fd_->agent_[agent_idx].expl_result_;" in source
+    assert "expl_result_all_pub_.publish(expl_result_all_msg);" in source
+    assert "ad.expl_result_ = expl_res;" in source
+    assert "expl_result_ = EXPL_RESULT::EXPLORATION;" in data_header
+
+
 def test_python_reset_handshake_waits_longer_than_map_reset_before_retrying():
     source = Path("habitat_evaluation.py").read_text(encoding="utf-8")
 

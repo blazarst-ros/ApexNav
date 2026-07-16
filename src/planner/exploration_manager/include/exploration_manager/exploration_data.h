@@ -16,6 +16,15 @@ namespace apexnav_planner {
 static constexpr int NUM_AGENTS = 3;
 
 enum FINAL_RESULT { EXPLORE, SEARCH_OBJECT, STUCKING, NO_FRONTIER, REACH_OBJECT };
+enum EXPL_RESULT {
+  EXPLORATION,               ///< Normal exploration mode
+  SEARCH_BEST_OBJECT,        ///< Found high-confidence object
+  SEARCH_OVER_DEPTH_OBJECT,  ///< Searching over-depth object
+  SEARCH_SUSPICIOUS_OBJECT,  ///< Investigating suspicious object
+  NO_PASSABLE_FRONTIER,      ///< No reachable frontiers available
+  NO_COVERABLE_FRONTIER,     ///< No coverable frontiers found
+  SEARCH_EXTREME             ///< Extreme search mode activated
+};
 
 struct AgentFSMData {
   AgentFSMData()
@@ -39,6 +48,7 @@ struct AgentFSMData {
     traveled_path_.clear();
 
     final_result_ = -1;
+    expl_result_ = EXPL_RESULT::EXPLORATION;
     replan_flag_ = true;
     dormant_frontier_flag_ = false;
     escape_stucking_flag_ = false;
@@ -65,6 +75,7 @@ struct AgentFSMData {
   int stucking_next_pos_count_;
   int wait_action_finish_count_;  // timeout counter for WAIT_ACTION_FINISH
   int final_result_;
+  int expl_result_;
   bool replan_flag_, dormant_frontier_flag_;
   bool escape_stucking_flag_;
   int escape_stucking_count_;

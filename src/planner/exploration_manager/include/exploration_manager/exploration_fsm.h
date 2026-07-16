@@ -91,7 +91,8 @@ private:
   ros::NodeHandle node_;
   ros::Timer exec_timer_, frontier_timer_;
   ros::Subscriber trigger_sub_, odom_sub_[NUM_AGENTS], habitat_state_sub_, confidence_threshold_sub_;
-  ros::Publisher action_pub_[NUM_AGENTS], ros_state_pub_, ros_state_all_pub_, expl_state_pub_, expl_result_pub_;
+  ros::Publisher action_pub_[NUM_AGENTS], ros_state_pub_, ros_state_all_pub_, expl_state_pub_,
+      expl_result_pub_, expl_result_all_pub_;
   ros::Publisher robot_marker_pub_[NUM_AGENTS];
 
   /* Action Planner */
@@ -113,6 +114,7 @@ private:
   void wrapAngle(double& angle);
   void publishRobotMarker(int agent_idx);
   void publishPlannerState();
+  void publishExplorationResults();
   void visualize();
   void clearVisMarker();
   void resetEpisode();  ///< Lightweight reset for episode transition (no ROS object destruction)

@@ -874,11 +874,11 @@ def main(cfg: DictConfig) -> None:
                         agent_states[agent_name]["finished"] = True
 
                 if termination_policy == "cooperative":
-                    any_finished = any(
+                    all_done = all(
                         agent_states[a]["finished"] or agent_states[a]["count_steps"] >= max_episode_steps
                         for a in agent_names
                     )
-                    if any_finished:
+                    if all_done:
                         break
                 else:
                     all_done = all(

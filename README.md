@@ -72,6 +72,52 @@ and written as JSONL files under:
 /media/blazarst/Getea/RuntimeData/Stage1_detector
 ```
 
+## Multi-Agent Exploration State and Termination
+
+The planner keeps a separate control FSM for each configured agent and publishes
+the current ROS planner state array on:
+
+```text
+/ros/state_all
+```
+
+The fine-grained exploration target state (`EXPL_RESULT`) is also tracked per
+agent and published on:
+
+```text
+/ros/expl_result_all
+```
+
+The message type is `std_msgs/Int32MultiArray`, where `data[i]` is the latest
+`EXPL_RESULT` for `agent_i`. The existing scalar `/ros/expl_result` topic is
+kept for compatibility and still reflects the most recently published
+exploration result.
+
+`EXPL_RESULT` values are:
+
+```text
+0 EXPLORATION
+1 SEARCH_BEST_OBJECT
+2 SEARCH_OVER_DEPTH_OBJECT
+3 SEARCH_SUSPICIOUS_OBJECT
+4 NO_PASSABLE_FRONTIER
+5 NO_COVERABLE_FRONTIER
+6 SEARCH_EXTREME
+```
+
+In `episode_termination: cooperative`, a successful target claim remains a
+global stop condition: if any agent reaches `FINAL_RESULT.REACH_OBJECT`, the C++
+planner broadcasts `STOP`, moves all agents to `FINISH`, and Python evaluates
+the episode outcome. Non-successful per-agent stops no longer end the whole
+episode. If one agent reaches `FINISH` because it is stuck, has no frontier, or
+hits its step limit, that agent is marked done while the other agents continue
+exploring. The episode ends after a successful target claim or after all agents
+are done.
+
+Final multi-agent success is still evaluated by Python after episode shutdown:
+the episode is counted as successful if any agent satisfies the ObjectNav stop
+success condition.
+
 ## Multi-Agent Episode Reset Fix
 
 The multi-agent branch can keep ROS subscribers and timers alive across
