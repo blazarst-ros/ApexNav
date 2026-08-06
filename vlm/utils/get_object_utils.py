@@ -17,6 +17,13 @@ sam_segmentor = MobileSAMClient(port=12183)
 dino_detector = GroundingDINOClient(port=GROUNDING_DINO_PORT)
 
 
+def get_object_class_names(right_label, similar_answer):
+    """Return the label dictionary used by the object-map message contract."""
+    target_aliases = [item.strip() for item in right_label.split("|") if item.strip()]
+    target_name = target_aliases[0] if target_aliases else "target"
+    return [target_name] + [str(item).strip() for item in similar_answer]
+
+
 def _is_port_open(host, port, timeout=0.2):
     try:
         with socket.create_connection((host, port), timeout=timeout):

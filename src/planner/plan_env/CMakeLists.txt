@@ -14,6 +14,7 @@ find_package(catkin REQUIRED COMPONENTS
   rospy
   std_msgs
   sensor_msgs
+  geometry_msgs
   visualization_msgs
   cv_bridge
   message_filters
@@ -27,18 +28,22 @@ add_message_files(
   FILES
   MultipleMasksWithConfidence.msg
   Stage1Detection.msg
+  ObjectLabelStatus.msg
+  ObjectClusterStatus.msg
+  ObjectClusterStatusArray.msg
 )
 
 generate_messages(
   DEPENDENCIES
   std_msgs
   sensor_msgs
+  geometry_msgs
 )
 
 catkin_package(
   INCLUDE_DIRS include
   LIBRARIES plan_env
-  CATKIN_DEPENDS roscpp std_msgs message_runtime sensor_msgs
+  CATKIN_DEPENDS roscpp std_msgs message_runtime sensor_msgs geometry_msgs visualization_msgs cv_bridge message_filters
   #  DEPENDS system_lib
 )
 
@@ -63,7 +68,9 @@ add_library(plan_env
   src/object_map2d.cpp
   src/value_map2d.cpp
 )
+add_dependencies(plan_env ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS})
 target_link_libraries(plan_env
   ${catkin_LIBRARIES}
   ${PCL_LIBRARIES}
+  ${OpenCV_LIBRARIES}
 )

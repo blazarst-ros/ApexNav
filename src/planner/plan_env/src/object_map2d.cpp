@@ -44,6 +44,7 @@ ObjectMap2D::ObjectMap2D(SDFMap2D* sdf_map, ros::NodeHandle& nh)
 
   // Set point cloud processing parameters
   leaf_size_ = 0.1f;  // Voxel grid leaf size for downsampling
+  class_names_.push_back("target");
 }
 
 void ObjectMap2D::reset()
@@ -53,12 +54,75 @@ void ObjectMap2D::reset()
   fill(object_indexs_.begin(), object_indexs_.end(), -1);
   all_object_clouds_.reset(new pcl::PointCloud<pcl::PointXYZ>());
   over_depth_object_cloud_.reset(new pcl::PointCloud<pcl::PointXYZ>());
+  publishObjectClouds();
 }
 
 void ObjectMap2D::setConfidenceThreshold(double val)
 {
   min_confidence_ = val;
   ROS_INFO("Set Confidence Threshold = %f", val);
+}
+
+void ObjectMap2D::ensureLabelCapacity(size_t label_count)
+{
+  if (label_count == 0)
+    label_count = 1;
+  while (class_names_.size() < label_count)
+    class_names_.push_back("label_" + std::to_string(class_names_.size()));
+  label_count = class_names_.size();
+  for (auto& object : objects_) {
+    object.clouds_.resize(label_count);
+    object.confidence_scores_.resize(label_count, 0.0);
+    object.observation_nums_.resize(label_count, 0);
+    object.observation_cloud_sums_.resize(label_count, 0);
+  }
+}
+
+void ObjectMap2D::setClassNames(const vector<string>& class_names)
+{
+  if (class_names.empty())
+    return;
+  if (objects_.empty())
+    class_names_ = class_names;
+  else {
+    if (class_names_.size() < class_names.size())
+      class_names_.resize(class_names.size());
+    for (size_t i = 0; i < class_names.size(); ++i)
+      class_names_[i] = class_names[i];
+  }
+  for (size_t i = 0; i < class_names_.size(); ++i) {
+    if (class_names_[i].empty())
+      class_names_[i] = "label_" + std::to_string(i);
+  }
+  ensureLabelCapacity(class_names_.size());
+}
+
+void ObjectMap2D::getObjectSnapshots(vector<ObjectClusterSnapshot>& snapshots) const
+{
+  snapshots.clear();
+  snapshots.reserve(objects_.size());
+  for (const auto& object : objects_) {
+    ObjectClusterSnapshot snapshot;
+    snapshot.cluster_id = object.id_;
+    snapshot.centroid = object.average_;
+    snapshot.cells = object.cells_;
+    snapshot.best_label = object.best_label_;
+    for (size_t label = 0; label < object.clouds_.size(); ++label) {
+      ObjectLabelSnapshot label_snapshot;
+      label_snapshot.label_index = static_cast<int>(label);
+      label_snapshot.label_name = label < class_names_.size()
+          ? class_names_[label]
+          : "label_" + std::to_string(label);
+      label_snapshot.cloud_points = object.clouds_[label]
+          ? static_cast<int>(object.clouds_[label]->points.size())
+          : 0;
+      label_snapshot.evidence_points = object.observation_cloud_sums_[label];
+      label_snapshot.detection_count = object.observation_nums_[label];
+      label_snapshot.confidence = object.confidence_scores_[label];
+      snapshot.labels.push_back(label_snapshot);
+    }
+    snapshots.push_back(snapshot);
+  }
 }
 
 /**
@@ -89,7 +153,7 @@ void ObjectMap2D::inputObservationObjectsCloud(
       continue;
 
     // Check overlap with each possible object classification
-    for (int label = 0; label < 5; ++label) {
+    for (int label = 0; label < (int)object.confidence_scores_.size(); ++label) {
       if (object.confidence_scores_[label] < 1e-3)
         continue;  // Skip labels with negligible confidence
 
@@ -133,11 +197,17 @@ void ObjectMap2D::inputObservationObjectsCloud(
       // ROS_WARN("[Observation] id = %d label = %d overlap_count = %d object_cloud = %ld",
       //     merged_object.id_, label, overlap_count, object.clouds_[label]->points.size());
     }
+    updateObjectBestLabel(i);
   }
 }
 
 int ObjectMap2D::searchSingleObjectCluster(const DetectedObject& detected_object)
 {
+  if (detected_object.label < 0) {
+    ROS_ERROR("Ignoring object with invalid negative label %d", detected_object.label);
+    return -1;
+  }
+  ensureLabelCapacity(static_cast<size_t>(detected_object.label) + 1);
   auto object_cloud = detected_object.cloud;
 
   // Initialize clustering analysis variables
@@ -231,7 +301,7 @@ void ObjectMap2D::updateObjectBestLabel(int obj_idx)
   for (int label = 0; label < (int)objects_[obj_idx].clouds_.size(); label++) {
     auto obs_sum = objects_[obj_idx].observation_cloud_sums_[label];
     auto score = objects_[obj_idx].confidence_scores_[label];
-    int func_score = obs_sum * score;  // Combined reliability metric
+    double func_score = obs_sum * score;  // Combined reliability metric
 
     if (func_score > max_func_score) {
       max_func_score = func_score;
@@ -247,7 +317,7 @@ void ObjectMap2D::createNewObjectCluster(
   int label = detected_object.label;
 
   // Initialize new object cluster with unique ID
-  ObjectCluster obj;
+  ObjectCluster obj(class_names_.size());
   obj.id_ = (int)objects_.size();
   obj.max_seen_count_ = 0;
   obj.good_cells_.clear();
@@ -600,13 +670,14 @@ void ObjectMap2D::getTopConfidenceObjectCloud(
   else {
     // Apply confidence filtering with functional scoring
     for (auto object : objects_) {
-      int max_func_score = 0, best_label = -1;
+      double max_func_score = 0.0;
+      int best_label = -1;
 
       // Find best label using functional score (observation count * confidence)
       for (int label = 0; label < (int)object.clouds_.size(); label++) {
         auto obs_sum = object.observation_cloud_sums_[label];
         auto score = object.confidence_scores_[label];
-        int func_score = obs_sum * score;
+        double func_score = obs_sum * score;
         if (func_score > max_func_score) {
           max_func_score = func_score;
           best_label = label;

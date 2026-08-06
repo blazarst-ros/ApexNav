@@ -88,7 +88,7 @@ from stage1_detection_logging import (
 )
 from vlm.Labels import MP3D_ID_TO_NAME
 from vlm.utils.get_itm_message import get_itm_message_cosine
-from vlm.utils.get_object_utils import get_object
+from vlm.utils.get_object_utils import get_object, get_object_class_names
 
 
 PLANNER_STALE_TIMEOUT_SEC = 5.0
@@ -1178,6 +1178,7 @@ def main(cfg: DictConfig) -> None:
                     cld_msg.point_clouds = obj_point_cloud_list
                     cld_msg.confidence_scores = score_list
                     cld_msg.label_indices = label_list
+                    cld_msg.class_names = get_object_class_names(label, llm_answer)
                     cld_pub_name = f"/detector/{agent_name}/clouds_with_scores"
                     if cld_pub_name not in _cld_pubs:
                         _cld_pubs[cld_pub_name] = rospy.Publisher(
@@ -1254,6 +1255,7 @@ def main(cfg: DictConfig) -> None:
                     )
                     cld_msg.confidence_scores = score_list
                     cld_msg.label_indices = label_list
+                    cld_msg.class_names = get_object_class_names(label, llm_answer)
                     cld_with_score_pub.publish(cld_msg)
                     _record_stage1_detections(
                         publisher=stage1_detection_pub,

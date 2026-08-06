@@ -204,3 +204,154 @@ python3 -m py_compile habitat_evaluation.py tests/test_episode_reset_lifecycle.p
 source /opt/ros/noetic/setup.bash && catkin_make --pkg exploration_manager -j2
 git diff --check
 ```
+
+## Semantic Object Visualization
+
+This branch adds RViz visualization for object-centric semantic fusion. The
+visualization separates regular grid occupancy from semantic object clusters and
+keeps the cluster status table stable across updates.
+
+### RViz Topics
+
+| Content | ROS topic | Type | Display |
+| --- | --- | --- | --- |
+| Regular occupied grid | `/grid_map/occupied` | `sensor_msgs/PointCloud2` | Dark gray obstacles |
+| Inflated occupied grid | `/grid_map/occupied_inflate` | `sensor_msgs/PointCloud2` | Gray inflated obstacles |
+| Legacy object occupancy | `/grid_map/occupancy_object` | `sensor_msgs/PointCloud2` | Kept for compatibility, disabled in RViz |
+| Semantic object grid | `/grid_map/semantic_objects` | `sensor_msgs/PointCloud2` with RGB | Enabled by default |
+| Cluster ID labels | `/object/cluster_markers` | `visualization_msgs/MarkerArray` | Enabled by default |
+| Structured cluster status | `/object/cluster_status` | `plan_env/ObjectClusterStatusArray` | For scripts and debugging |
+| RViz status table | `/object/cluster_status_image` | `sensor_msgs/Image` | Enabled as an Image display |
+
+The semantic object grid uses fixed colors:
+
+| Cluster state | Condition | Color |
+| --- | --- | --- |
+| Target | `best_label == 0` | Red |
+| Confusion object | `best_label > 0` | Cyan |
+| Uncertain | `best_label == -1` | Gray |
+| Ordinary obstacle | Not an object cluster | Dark gray from `/grid_map/occupied` |
+
+The semantic grid is published slightly above the obstacle grid so target and
+confusion clusters remain visible when they overlap occupied cells.
+
+### Cluster IDs and Competition Rule
+
+Object cluster IDs are unique within one episode and are assigned in creation
+order: `C000`, `C001`, `C002`, and so on. IDs only apply to semantic object
+clusters produced by target or confusion detections. Ordinary obstacle cells do
+not receive cluster IDs.
+
+The map color and marker state follow the existing object-centric fusion rule:
+
+```text
+best_label = argmax(evidence_points[label] * fused_confidence[label])
+```
+
+If the same physical area receives competing labels, for example chair and
+table evidence projecting to the same cluster, the cluster is not duplicated.
+The current winning label determines whether the cluster is displayed as target
+red, confusion cyan, or uncertain gray. The cluster ID and the row position in
+the status table remain stable even when the winning label changes.
+
+### Status Table
+
+`/object/cluster_status_image` is a generated image table for RViz. Add it with
+an RViz `Image` display, or use the included `ApexNav.rviz` and
+`ApexNav_Traj.rviz` configs where it is already enabled.
+
+Each table row shows one cluster:
+
+```text
+ID | state | best label | target cloud/evidence/obs/conf/value | strongest confusion cloud/evidence/obs/conf/value
+```
+
+Rows are always ordered by cluster ID. Existing rows only update their numeric
+values; they are not resorted by score. New clusters append to the bottom of the
+table. This keeps the display stable during live simulation.
+
+The structured `/object/cluster_status` topic contains all candidate labels for
+each cluster. The image table only shows the target candidate and the strongest
+confusion candidate to keep each row readable.
+
+Field meanings:
+
+- `cloud_points`: current voxel-downsampled points stored in the cluster for
+  that label.
+- `evidence_points`: accumulated evidence used by fusion. Under Fusion Type 1,
+  this can also include negative evidence from visible-but-undetected objects,
+  so it is not always equal to accumulated detected point cloud size.
+- `detection_count`: number of positive detections fused into that label.
+- `fused_confidence`: current fused confidence for that label.
+- `value`: `evidence_points * fused_confidence`, the score used for label
+  competition.
+
+### Detection Class Names
+
+The detection message now carries the class dictionary:
+
+```text
+MultipleMasksWithConfidence.class_names
+```
+
+`class_names[0]` is the target category. `class_names[1...]` are the similar or
+confusion categories. Detection results still use `label_indices[i]` to refer to
+this dictionary, so the existing convention remains:
+
+```text
+label 0 = target object
+label > 0 = confusion object
+```
+
+The C++ object map expands label storage dynamically from this dictionary, so
+more than five candidate categories can be visualized and fused safely.
+
+### Usage
+
+Build the ROS workspace after changing message definitions:
+
+```bash
+cd ~/ApexNav
+catkin_make
+source devel/setup.bash
+```
+
+Then start Habitat, the ROS planner/map node, and RViz with either project
+config:
+
+```bash
+rviz -d src/planner/exploration_manager/config/ApexNav.rviz
+rviz -d src/planner/exploration_manager/config/ApexNav_Traj.rviz
+```
+
+No extra visualization script is required. Running Habitat alone only shows the
+camera-side detection output; the accumulated clusters, semantic grid, marker
+IDs, and fusion table require the ROS map/planner node.
+
+Useful runtime checks:
+
+```bash
+rostopic echo -n 1 /object/cluster_status
+rostopic echo -n 1 /grid_map/semantic_objects/width
+rostopic echo -n 1 /object/clouds/width
+```
+
+### Episode Reset Behavior
+
+On episode finish, `SDFMap2D::resetMap()` routes through
+`MapROS::resetEpisodeState()`. The reset now publishes explicit empty
+replacement clouds and marker deletion messages so RViz does not keep stale
+data when `Decay Time` is zero.
+
+The reset clears or replaces:
+
+- semantic object grid `/grid_map/semantic_objects`
+- cluster markers `/object/cluster_markers`
+- cluster status table `/object/cluster_status_image`
+- structured cluster status `/object/cluster_status`
+- legacy object cloud `/object/clouds`
+- filtered and over-depth object clouds
+- occupied, inflated, unknown, free, ESDF, object, and value-map grid displays
+
+This clearing depends on the normal episode-finish handshake reaching the ROS
+planner. After a successful reset, new cluster IDs start again from `C000`.

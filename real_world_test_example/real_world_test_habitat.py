@@ -22,7 +22,7 @@ current_dir = os.path.dirname(os.path.realpath(__file__))
 parent_dir = os.path.dirname(current_dir)
 sys.path.append(parent_dir)
 
-from vlm.utils.get_object_utils import get_object
+from vlm.utils.get_object_utils import get_object, get_object_class_names
 from vlm.utils.get_itm_message import get_itm_message_cosine
 from llm.answer_reader.answer_reader import read_answer
 from basic_utils.object_point_cloud_utils.object_point_cloud import (
@@ -157,6 +157,9 @@ class AgentPerceptionPipeline:
             cld_with_score_msg.point_clouds = obj_point_cloud_list
             cld_with_score_msg.confidence_scores = score_list
             cld_with_score_msg.label_indices = label_list
+            cld_with_score_msg.class_names = get_object_class_names(
+                self.label, self.llm_answer
+            )
 
             self.cld_with_score_pub_.publish(cld_with_score_msg)
         except Exception as e:

@@ -42,7 +42,7 @@ from plan_env.msg import MultipleMasksWithConfidence
 
 # Local project imports
 from habitat2ros import habitat_publisher
-from vlm.utils.get_object_utils import get_object
+from vlm.utils.get_object_utils import get_object, get_object_class_names
 from vlm.utils.get_itm_message import get_itm_message_cosine
 from llm.answer_reader.answer_reader import read_answer
 from basic_utils.object_point_cloud_utils.object_point_cloud import (
@@ -303,6 +303,7 @@ def main(cfg: DictConfig) -> None:
         cld_msg.point_clouds = obj_point_cloud_list
         cld_msg.confidence_scores = score_list
         cld_msg.label_indices = label_list
+        cld_msg.class_names = get_object_class_names(label, llm_answer)
         _cld_pubs[cld_topic].publish(cld_msg)
 
         render_obs = {

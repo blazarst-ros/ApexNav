@@ -11,6 +11,9 @@
 
 #include <plan_env/map_ros.h>
 
+#include <iomanip>
+#include <sstream>
+
 namespace apexnav_planner {
 
 void MapROS::setMap(SDFMap2D* map)
@@ -88,6 +91,14 @@ void MapROS::init()
       node_.advertise<sensor_msgs::PointCloud2>("/grid_map/occupied_inflate", 10);
 
   object_grid_pub_ = node_.advertise<sensor_msgs::PointCloud2>("/grid_map/occupancy_object", 10);
+  semantic_object_pub_ =
+      node_.advertise<sensor_msgs::PointCloud2>("/grid_map/semantic_objects", 10);
+  cluster_marker_pub_ =
+      node_.advertise<visualization_msgs::MarkerArray>("/object/cluster_markers", 10);
+  cluster_status_pub_ =
+      node_.advertise<plan_env::ObjectClusterStatusArray>("/object/cluster_status", 10);
+  cluster_status_image_pub_ =
+      node_.advertise<sensor_msgs::Image>("/object/cluster_status_image", 10);
   esdf_pub_ = node_.advertise<sensor_msgs::PointCloud2>("/grid_map/esdf", 10);
   depth_cloud_pub_ = node_.advertise<sensor_msgs::PointCloud2>("/grid_map/depth_cloud", 10);
   filtered_depth_cloud_pub_ =
@@ -184,6 +195,7 @@ void MapROS::visCallback(const ros::TimerEvent& /*event*/)
     publishOccupied();
     publishInfOccupied();
     publishObjectMap();
+    publishObjectVisualizations();
     publishUnknown();
     publishFree();
     publishValueMap();
@@ -221,6 +233,24 @@ void MapROS::resetEpisodeState()
   local_updated_ = false;
   esdf_need_update_ = false;
   map_->resetMapData();
+  cluster_markers_need_reset_ = true;
+
+  // RViz keeps the last PointCloud2 indefinitely when Decay Time is zero.
+  // Publish explicit empty replacements so no data survives an episode reset.
+  PointCloud3D::Ptr empty_cloud(new PointCloud3D());
+  publishPointCloud(depth_cloud_pub_, empty_cloud);
+  publishPointCloud(filtered_depth_cloud_pub_, empty_cloud);
+  publishPointCloud(filtered_object_cloud_pub_, empty_cloud);
+  publishPointCloud(all_object_cloud_pub_, empty_cloud);
+  publishPointCloud(over_depth_object_cloud_pub_, empty_cloud);
+  publishOccupied();
+  publishInfOccupied();
+  publishObjectMap();
+  publishUnknown();
+  publishFree();
+  publishValueMap();
+  publishESDFMap();
+  publishObjectVisualizations();
 }
 
 void MapROS::detectedObjectCloudCallback(int agent_id, const plan_env::MultipleMasksWithConfidenceConstPtr& msg)
@@ -237,6 +267,9 @@ void MapROS::detectedObjectCloudCallback(int agent_id, const plan_env::MultipleM
     ROS_ERROR("[Bug] The MultipleMasksWithConfidence msg is wrong!!!");
     return;
   }
+
+  if (!msg->class_names.empty())
+    map_->object_map2d_->setClassNames(msg->class_names);
 
   auto t1 = ros::Time::now();
 
@@ -345,6 +378,7 @@ void MapROS::detectedObjectCloudCallback(int agent_id, const plan_env::MultipleM
   vector<int> detected_object_cluster_ids;
   map_->inputObjectCloud2D(detected_objects, detected_object_cluster_ids);
   getObservationObjectsCloud(agent_id, detected_object_cluster_ids);
+  publishObjectVisualizations();
 
   double object_map_process_time = (ros::Time::now() - t1).toSec();
   ROS_INFO_THROTTLE(
@@ -714,6 +748,189 @@ void MapROS::publishObjectMap()
   object_grid_pub_.publish(cloud_msg);
 }
 
+void MapROS::publishObjectVisualizations()
+{
+  vector<ObjectClusterSnapshot> snapshots;
+  map_->object_map2d_->getObjectSnapshots(snapshots);
+  const ros::Time stamp = ros::Time::now();
+
+  pcl::PointCloud<pcl::PointXYZRGB> semantic_cloud;
+  visualization_msgs::MarkerArray marker_array;
+  plan_env::ObjectClusterStatusArray status_array;
+  status_array.header.frame_id = frame_id_;
+  status_array.header.stamp = stamp;
+
+  if (cluster_markers_need_reset_) {
+    visualization_msgs::Marker clear_marker;
+    clear_marker.header = status_array.header;
+    clear_marker.action = visualization_msgs::Marker::DELETEALL;
+    marker_array.markers.push_back(clear_marker);
+    cluster_markers_need_reset_ = false;
+  }
+
+  for (const auto& snapshot : snapshots) {
+    uint8_t r = 158, g = 158, b = 158;
+    uint8_t state = plan_env::ObjectClusterStatus::UNCERTAIN;
+    char state_char = '?';
+    if (snapshot.best_label == 0) {
+      r = 229;
+      g = 57;
+      b = 53;
+      state = plan_env::ObjectClusterStatus::TARGET;
+      state_char = 'T';
+    }
+    else if (snapshot.best_label > 0) {
+      r = 0;
+      g = 166;
+      b = 214;
+      state = plan_env::ObjectClusterStatus::CONFUSION;
+      state_char = 'C';
+    }
+
+    for (const auto& cell : snapshot.cells) {
+      Eigen::Vector2i cell_index;
+      Eigen::Vector2d cell_center;
+      map_->posToIndex(cell, cell_index);
+      map_->indexToPos(cell_index, cell_center);
+      pcl::PointXYZRGB point;
+      point.x = cell_center.x();
+      point.y = cell_center.y();
+      point.z = 0.08;
+      point.r = r;
+      point.g = g;
+      point.b = b;
+      semantic_cloud.push_back(point);
+    }
+
+    visualization_msgs::Marker marker;
+    marker.header = status_array.header;
+    marker.ns = "object_cluster_ids";
+    marker.id = snapshot.cluster_id;
+    marker.type = visualization_msgs::Marker::TEXT_VIEW_FACING;
+    marker.action = visualization_msgs::Marker::ADD;
+    marker.pose.position.x = snapshot.centroid.x();
+    marker.pose.position.y = snapshot.centroid.y();
+    marker.pose.position.z = 0.32;
+    marker.pose.orientation.w = 1.0;
+    marker.scale.z = 0.20;
+    marker.color.r = r / 255.0f;
+    marker.color.g = g / 255.0f;
+    marker.color.b = b / 255.0f;
+    marker.color.a = 1.0f;
+    std::ostringstream marker_text;
+    marker_text << "C" << std::setfill('0') << std::setw(3) << snapshot.cluster_id << " "
+                << state_char;
+    marker.text = marker_text.str();
+    marker_array.markers.push_back(marker);
+
+    plan_env::ObjectClusterStatus cluster_status;
+    cluster_status.cluster_id = snapshot.cluster_id;
+    cluster_status.centroid.x = snapshot.centroid.x();
+    cluster_status.centroid.y = snapshot.centroid.y();
+    cluster_status.centroid.z = 0.0;
+    cluster_status.state = state;
+    cluster_status.best_label_index = snapshot.best_label;
+    cluster_status.best_label_name = "unknown";
+
+    for (const auto& label : snapshot.labels) {
+      plan_env::ObjectLabelStatus label_status;
+      label_status.label_index = label.label_index;
+      label_status.label_name = label.label_name;
+      label_status.is_target = label.label_index == 0;
+      label_status.cloud_points = std::max(0, label.cloud_points);
+      label_status.evidence_points = std::max(0, label.evidence_points);
+      label_status.detection_count = std::max(0, label.detection_count);
+      label_status.fused_confidence = label.confidence;
+      label_status.competition_score = label.evidence_points * label.confidence;
+      cluster_status.labels.push_back(label_status);
+      if (label.label_index == snapshot.best_label)
+        cluster_status.best_label_name = label.label_name;
+    }
+    status_array.clusters.push_back(cluster_status);
+  }
+
+  semantic_cloud.width = semantic_cloud.points.size();
+  semantic_cloud.height = 1;
+  semantic_cloud.is_dense = true;
+  sensor_msgs::PointCloud2 semantic_msg;
+  pcl::toROSMsg(semantic_cloud, semantic_msg);
+  semantic_msg.header = status_array.header;
+  semantic_object_pub_.publish(semantic_msg);
+  cluster_marker_pub_.publish(marker_array);
+  cluster_status_pub_.publish(status_array);
+
+  const int panel_width = 1800;
+  const int row_height = 38;
+  const int panel_height = std::max(120, 76 + row_height * static_cast<int>(snapshots.size()));
+  cv::Mat panel(panel_height, panel_width, CV_8UC3, cv::Scalar(24, 24, 27));
+  cv::putText(panel, "Object cluster fusion status (fixed ID order)", cv::Point(18, 28),
+      cv::FONT_HERSHEY_DUPLEX, 0.72, cv::Scalar(245, 245, 245), 1, cv::LINE_AA);
+  cv::putText(panel,
+      "ID    State       Best label       Target: cloud/evidence/obs/conf/value"
+      "              Strongest confusion: label cloud/evidence/obs/conf/value",
+      cv::Point(18, 58), cv::FONT_HERSHEY_DUPLEX, 0.48, cv::Scalar(180, 180, 185), 1,
+      cv::LINE_AA);
+
+  auto format_evidence = [](const ObjectLabelSnapshot* label, bool include_name) {
+    if (label == nullptr)
+      return string("-");
+    std::ostringstream out;
+    if (include_name)
+      out << label->label_name << " ";
+    out << label->cloud_points << "/" << label->evidence_points << "/"
+        << label->detection_count << "/" << std::fixed << std::setprecision(3)
+        << label->confidence << "/" << label->evidence_points * label->confidence;
+    return out.str();
+  };
+
+  for (size_t row = 0; row < snapshots.size(); ++row) {
+    const auto& snapshot = snapshots[row];
+    const ObjectLabelSnapshot* target = snapshot.labels.empty() ? nullptr : &snapshot.labels[0];
+    const ObjectLabelSnapshot* strongest_confusion = nullptr;
+    double strongest_value = -1.0;
+    string best_name = "unknown";
+    for (const auto& label : snapshot.labels) {
+      const double value = label.evidence_points * label.confidence;
+      if (label.label_index > 0 && value > strongest_value) {
+        strongest_value = value;
+        strongest_confusion = &label;
+      }
+      if (label.label_index == snapshot.best_label)
+        best_name = label.label_name;
+    }
+
+    string state_name = "UNCERTAIN";
+    cv::Scalar row_color(158, 158, 158);
+    if (snapshot.best_label == 0) {
+      state_name = "TARGET";
+      row_color = cv::Scalar(53, 57, 229);
+    }
+    else if (snapshot.best_label > 0) {
+      state_name = "CONFUSION";
+      row_color = cv::Scalar(214, 166, 0);
+    }
+
+    std::ostringstream line;
+    line << "C" << std::setfill('0') << std::setw(3) << snapshot.cluster_id << "  "
+         << std::left << std::setfill(' ') << std::setw(11) << state_name << " "
+         << std::setw(16) << best_name << " " << std::setw(43)
+         << format_evidence(target, false) << " "
+         << format_evidence(strongest_confusion, true);
+    const int y = 84 + static_cast<int>(row) * row_height;
+    if (row % 2 == 1)
+      cv::rectangle(panel, cv::Point(8, y - 23), cv::Point(panel_width - 8, y + 10),
+          cv::Scalar(31, 31, 35), cv::FILLED);
+    cv::putText(panel, line.str(), cv::Point(18, y), cv::FONT_HERSHEY_DUPLEX, 0.52,
+        row_color, 1, cv::LINE_AA);
+  }
+
+  std_msgs::Header image_header;
+  image_header.stamp = stamp;
+  image_header.frame_id = frame_id_;
+  cluster_status_image_pub_.publish(
+      cv_bridge::CvImage(image_header, sensor_msgs::image_encodings::BGR8, panel).toImageMsg());
+}
+
 void MapROS::publishOccupied()
 {
   PointCloud3D cloud;
@@ -936,6 +1153,7 @@ void MapROS::publishPointCloud(const ros::Publisher& pub, const PointCloud3D::Pt
 
   sensor_msgs::PointCloud2 cloud_msg;
   pcl::toROSMsg(cloud, cloud_msg);
+  cloud_msg.header.stamp = ros::Time::now();
   pub.publish(cloud_msg);
 }
 

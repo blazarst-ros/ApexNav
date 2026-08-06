@@ -10,18 +10,21 @@
 
 // Custom messages and mapping components
 #include <plan_env/MultipleMasksWithConfidence.h>
+#include <plan_env/ObjectClusterStatusArray.h>
 #include <plan_env/sdf_map2d.h>
 #include <plan_env/object_map2d.h>
 #include <plan_env/value_map2d.h>
 
 // OpenCV for image processing
 #include <cv_bridge/cv_bridge.h>
+#include <sensor_msgs/image_encodings.h>
 
 // Standard ROS messages
 #include <geometry_msgs/PoseStamped.h>
 #include <sensor_msgs/PointCloud2.h>
 #include <nav_msgs/Odometry.h>
 #include <std_msgs/Float64.h>
+#include <visualization_msgs/MarkerArray.h>
 
 // PCL for point cloud processing
 #include <pcl/filters/voxel_grid.h>
@@ -93,6 +96,7 @@ private:
   void publishUnknown();
 
   void publishObjectMap();
+  void publishObjectVisualizations();
   void publishESDFMap();
   void publishValueMap();
   void publishPointCloud(const ros::Publisher& pub, const PointCloud3D::Ptr& point_cloud);
@@ -140,7 +144,8 @@ private:
   ros::Publisher occupied_pub_, occupied_inflate_pub_, unknown_pub_, free_pub_, esdf_pub_,
       object_grid_pub_, depth_cloud_pub_, filtered_depth_cloud_pub_,
       filtered_object_cloud_pub_, all_object_cloud_pub_, over_depth_object_cloud_pub_,
-      value_map_pub_;
+      value_map_pub_, semantic_object_pub_, cluster_marker_pub_, cluster_status_pub_,
+      cluster_status_image_pub_;
 
   // ROS timers for periodic updates (shared — operate on merged map)
   ros::Timer esdf_timer_, vis_timer_;
@@ -159,6 +164,7 @@ private:
 
   // Map state flags (shared)
   bool local_updated_, esdf_need_update_;
+  bool cluster_markers_need_reset_ = true;
 
   friend SDFMap2D;
 };
