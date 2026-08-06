@@ -625,8 +625,7 @@ def main(cfg: DictConfig) -> None:
             _get_agent_action_index(0), Int32, ros_action_callback, queue_size=10
         )
     # ROS state callbacks for multi-agent tracking
-    # Match C++ NUM_AGENTS in simulation mode so readiness checks include all planner agents.
-    ros_all_states = [ROS_STATE.INIT] * max(num_agents, 3)
+    ros_all_states = [ROS_STATE.INIT] * num_agents
     last_ros_state_update_time = time.monotonic()
 
     def ros_all_state_callback(msg):

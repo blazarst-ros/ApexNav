@@ -38,10 +38,9 @@ habitat:
     agents_order:
       - agent_0
       - agent_1
-      - agent_2
     agents:
       agent_0:
-        height: 0.7
+        height: 0.8
         radius: 0.18
         sim_sensors:
           rgb_sensor:
@@ -50,7 +49,7 @@ habitat:
             width: 640
             height: 480
             hfov: 79
-            position: [0, 0.7, 0]
+            position: [0, 0.8, 0]
           depth_sensor:
             type: HabitatSimDepthSensor
             uuid: agent_0_depth
@@ -60,9 +59,9 @@ habitat:
             min_depth: 0.0
             max_depth: 5.0
             normalize_depth: true
-            position: [0, 0.7, 0]
+            position: [0, 0.8, 0]
       agent_1:
-        height: 1.2
+        height: 1.5
         radius: 0.18
         sim_sensors:
           rgb_sensor:
@@ -71,7 +70,7 @@ habitat:
             width: 640
             height: 480
             hfov: 79
-            position: [0, 1.2, 0]
+            position: [0, 1.5, 0]
           depth_sensor:
             type: HabitatSimDepthSensor
             uuid: agent_1_depth
@@ -81,30 +80,9 @@ habitat:
             min_depth: 0.0
             max_depth: 5.0
             normalize_depth: true
-            position: [0, 1.2, 0]
-      agent_2:
-        height: 1.7
-        radius: 0.18
-        sim_sensors:
-          rgb_sensor:
-            type: HabitatSimRGBSensor
-            uuid: agent_2_rgb
-            width: 640
-            height: 480
-            hfov: 79
-            position: [0, 1.7, 0]
-          depth_sensor:
-            type: HabitatSimDepthSensor
-            uuid: agent_2_depth
-            width: 640
-            height: 480
-            hfov: 79
-            min_depth: 0.0
-            max_depth: 5.0
-            normalize_depth: true
-            position: [0, 1.7, 0]
+            position: [0, 1.5, 0]
 
-num_agents: 3
+num_agents: 2
 
 detector:
   yolo:

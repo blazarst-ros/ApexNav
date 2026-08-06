@@ -807,7 +807,7 @@ void ExplorationFSM::odometryCallback(const nav_msgs::OdometryConstPtr& msg, int
 void ExplorationFSM::publishRobotMarker(int agent_idx)
 {
   auto& ad = fd_->agent_[agent_idx];
-  const double robot_height = FSMConstants::ROBOT_HEIGHT;
+  const double robot_height = FSMConstants::ROBOT_HEIGHTS[agent_idx];
   const double robot_radius = FSMConstants::ROBOT_RADIUS;
 
   string agent_ns = "agent_" + std::to_string(agent_idx);

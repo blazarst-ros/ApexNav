@@ -63,7 +63,7 @@ constexpr double SAMPLE_NUM = 10.0;  // samples along a step for safety cost
 
 // Visualization / robot marker
 constexpr double VIS_SCALE_FACTOR = 1.8;  // multiply by map resolution
-constexpr double ROBOT_HEIGHT = 0.15;
+constexpr double ROBOT_HEIGHTS[NUM_AGENTS] = { 0.8, 1.5 };
 constexpr double ROBOT_RADIUS = 0.18;
 }  // namespace FSMConstants
 

@@ -13,7 +13,7 @@
 
 namespace apexnav_planner {
 
-static constexpr int NUM_AGENTS = 3;
+static constexpr int NUM_AGENTS = 2;
 
 enum FINAL_RESULT { EXPLORE, SEARCH_OBJECT, STUCKING, NO_FRONTIER, REACH_OBJECT };
 enum EXPL_RESULT {
