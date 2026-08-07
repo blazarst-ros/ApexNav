@@ -6,6 +6,7 @@
 #include <std_msgs/Int32MultiArray.h>
 #include <boost/bind/bind.hpp>
 #include <algorithm>
+#include <sstream>
 
 namespace apexnav_planner {
 void ExplorationFSM::init(ros::NodeHandle& nh)
@@ -55,6 +56,8 @@ void ExplorationFSM::init(ros::NodeHandle& nh)
         "/habitat/plan_action_agent_" + std::to_string(i), 10);
     expl_result_agent_pub_[i] = nh.advertise<std_msgs::Int32>(
         "/ros/agent_" + std::to_string(i) + "/expl_result", 10);
+    exploration_strategy_pub_[i] = nh.advertise<std_msgs::String>(
+        "/ros/agent_" + std::to_string(i) + "/exploration_strategy", 10);
     robot_marker_pub_[i] = nh.advertise<visualization_msgs::Marker>(
         "/robot_agent_" + std::to_string(i), 10);
   }
@@ -201,9 +204,34 @@ void ExplorationFSM::publishExplorationResults()
     std_msgs::Int32 expl_result_agent_msg;
     expl_result_agent_msg.data = fd_->agent_[agent_idx].expl_result_;
     expl_result_agent_pub_[agent_idx].publish(expl_result_agent_msg);
+    publishExplorationStrategy(agent_idx);
   }
 
   expl_result_all_pub_.publish(expl_result_all_msg);
+}
+
+void ExplorationFSM::publishExplorationStrategy(int agent_idx)
+{
+  if (agent_idx < 0 || agent_idx >= NUM_AGENTS)
+    return;
+  const auto& infos = expl_manager_->ed_->strategy_infos_;
+  if (agent_idx >= static_cast<int>(infos.size()))
+    return;
+
+  const auto& info = infos[agent_idx];
+  std_msgs::String msg;
+  std::ostringstream ss;
+  ss << "{"
+     << "\"agent_id\":" << info.agent_id << ","
+     << "\"mode\":\"" << info.mode << "\","
+     << "\"target_type\":\"" << info.target_type << "\","
+     << "\"target_id\":" << info.target_id << ","
+     << "\"semantic_score\":" << info.semantic_score << ","
+     << "\"path_length\":" << info.path_length << ","
+     << "\"target_pos\":[" << info.target_pos(0) << "," << info.target_pos(1) << "]"
+     << "}";
+  msg.data = ss.str();
+  exploration_strategy_pub_[agent_idx].publish(msg);
 }
 
 /**

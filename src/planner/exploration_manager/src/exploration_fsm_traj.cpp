@@ -5,6 +5,7 @@
 #include <geometry_msgs/PoseWithCovarianceStamped.h>
 #include <tf/transform_datatypes.h>
 #include <algorithm>
+#include <sstream>
 
 namespace apexnav_planner {
 
@@ -61,6 +62,8 @@ void ExplorationFSMReal::init(ros::NodeHandle& nh)  // Initialize the Exploratio
       "/ros/expl_state", 10);  // 发布当前探索状态（未探索 / 探索中 / 完成等）
   expl_result_pub_ = nh.advertise<std_msgs::Int32>(
       "/ros/expl_result", 10);  //	发布探索结果（成功 / 失败 / 无可行前沿等）
+  exploration_strategy_pub_ = nh.advertise<std_msgs::String>(
+      "/ros/agent_0/exploration_strategy", 10);
   robot_marker_pub_ = nh.advertise<visualization_msgs::Marker>(
       "/robot", 10);  // 发布机器人位姿可视化标记（供 RViz 显示）
 
@@ -256,6 +259,7 @@ TrajPlannerResult ExplorationFSMReal::callTrajectoryPlanner()
   std_msgs::Int32 expl_result_msg;
   expl_result_msg.data = fd_->agent_[0].final_result_;
   expl_result_pub_.publish(expl_result_msg);
+  publishExplorationStrategy();
 
   if (fd_->agent_[0].final_result_ == FINAL_RESULT::NO_FRONTIER) {
     ROS_WARN("[Real] No (passable) frontier");
@@ -300,7 +304,29 @@ TrajPlannerResult ExplorationFSMReal::callTrajectoryPlanner()
   return TrajPlannerResult::FAILED;
 }
 
-void ExplorationFSMReal::polyTraj2ROSMsg(  
+void ExplorationFSMReal::publishExplorationStrategy()
+{
+  const auto& infos = expl_manager_->ed_->strategy_infos_;
+  if (infos.empty())
+    return;
+
+  const auto& info = infos[0];
+  std_msgs::String msg;
+  std::ostringstream ss;
+  ss << "{"
+     << "\"agent_id\":" << info.agent_id << ","
+     << "\"mode\":\"" << info.mode << "\","
+     << "\"target_type\":\"" << info.target_type << "\","
+     << "\"target_id\":" << info.target_id << ","
+     << "\"semantic_score\":" << info.semantic_score << ","
+     << "\"path_length\":" << info.path_length << ","
+     << "\"target_pos\":[" << info.target_pos(0) << "," << info.target_pos(1) << "]"
+     << "}";
+  msg.data = ss.str();
+  exploration_strategy_pub_.publish(msg);
+}
+
+void ExplorationFSMReal::polyTraj2ROSMsg(
     const LocalTrajectory& local_traj, trajectory_manager::PolyTraj& poly_msg)// 将局部轨迹（LocalTrajectory）转换为 ROS 消息格式发布；
 {
   auto data = &local_traj;

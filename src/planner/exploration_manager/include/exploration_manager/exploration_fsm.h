@@ -20,6 +20,7 @@
 #include <nav_msgs/Odometry.h>
 #include <std_msgs/Float64.h>
 #include <std_msgs/Int32.h>
+#include <std_msgs/String.h>
 #include <visualization_msgs/Marker.h>
 
 using Eigen::Vector2d;
@@ -91,8 +92,9 @@ private:
   ros::NodeHandle node_;
   ros::Timer exec_timer_, frontier_timer_;
   ros::Subscriber trigger_sub_, odom_sub_[NUM_AGENTS], habitat_state_sub_, confidence_threshold_sub_;
-  ros::Publisher action_pub_[NUM_AGENTS], expl_result_agent_pub_[NUM_AGENTS], ros_state_pub_,
-      ros_state_all_pub_, expl_state_pub_, expl_result_pub_, expl_result_all_pub_;
+  ros::Publisher action_pub_[NUM_AGENTS], expl_result_agent_pub_[NUM_AGENTS],
+      exploration_strategy_pub_[NUM_AGENTS], ros_state_pub_, ros_state_all_pub_,
+      expl_state_pub_, expl_result_pub_, expl_result_all_pub_;
   ros::Publisher robot_marker_pub_[NUM_AGENTS];
 
   /* Action Planner */
@@ -115,6 +117,7 @@ private:
   void publishRobotMarker(int agent_idx);
   void publishPlannerState();
   void publishExplorationResults();
+  void publishExplorationStrategy(int agent_idx);
   void visualize();
   void clearVisMarker();
   void resetEpisode();  ///< Lightweight reset for episode transition (no ROS object destruction)

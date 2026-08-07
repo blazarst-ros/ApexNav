@@ -88,6 +88,7 @@ int ExplorationManager::planNextBestPoint(const Vector3d& pos, const double& yaw
   // Clear previous planning results
   ed_->tsp_tour_.clear();
   out_next_best_path.clear();
+  setStrategyInfo(agent_idx, "PLANNING", "NONE", -1, -1.0, out_next_best_path, pos2d);
   vector<pcl::shared_ptr<pcl::PointCloud<pcl::PointXYZ>>> object_clouds;
   sdf_map_->object_map2d_->getTopConfidenceObjectCloud(object_clouds);
 
@@ -98,8 +99,11 @@ int ExplorationManager::planNextBestPoint(const Vector3d& pos, const double& yaw
 
     // Try to find path to each detected object in order of confidence
     for (auto object_cloud : object_clouds) {
-      if (searchObjectPath(pos, object_cloud, out_next_pos, out_next_best_path))
+      if (searchObjectPath(pos, object_cloud, out_next_pos, out_next_best_path)) {
+        setStrategyInfo(agent_idx, "SEARCH_BEST_OBJECT", "OBJECT", -1, -1.0,
+            out_next_best_path, out_next_pos);
         return SEARCH_BEST_OBJECT;
+      }
     }
   }
 
@@ -107,8 +111,11 @@ int ExplorationManager::planNextBestPoint(const Vector3d& pos, const double& yaw
   if (!object_map2d_->over_depth_object_cloud_->points.empty()) {
     ROS_WARN("[Agent %d Navigation Mode (Over Depth)] Get over depth object cloud", agent_idx);
     if (searchObjectPath(
-            pos, object_map2d_->over_depth_object_cloud_, out_next_pos, out_next_best_path))
+            pos, object_map2d_->over_depth_object_cloud_, out_next_pos, out_next_best_path)) {
+      setStrategyInfo(agent_idx, "SEARCH_OVER_DEPTH_OBJECT", "OBJECT", -1, -1.0,
+          out_next_best_path, out_next_pos);
       return SEARCH_OVER_DEPTH_OBJECT;
+    }
   }
 
   // ==================== Exploration Mode: Frontier-Based Planning ====================
@@ -130,8 +137,11 @@ int ExplorationManager::planNextBestPoint(const Vector3d& pos, const double& yaw
 
     // Try suspicious objects as backup
     if (!top_object_cloud->points.empty() &&
-        searchObjectPath(pos, top_object_cloud, out_next_pos, out_next_best_path))
+        searchObjectPath(pos, top_object_cloud, out_next_pos, out_next_best_path)) {
+      setStrategyInfo(agent_idx, "SEARCH_SUSPICIOUS_OBJECT", "OBJECT", -1, -1.0,
+          out_next_best_path, out_next_pos);
       return SEARCH_SUSPICIOUS_OBJECT;
+    }
     else
       // Try dormant frontiers as last resort
       chooseExplorationPolicy(
@@ -143,15 +153,21 @@ int ExplorationManager::planNextBestPoint(const Vector3d& pos, const double& yaw
 
       for (auto object_cloud : object_clouds) {
         if (!object_cloud->points.empty() &&
-            searchObjectPathExtreme(pos, object_cloud, out_next_pos, out_next_best_path))
+            searchObjectPathExtreme(pos, object_cloud, out_next_pos, out_next_best_path)) {
+          setStrategyInfo(agent_idx, "SEARCH_EXTREME_OBJECT", "OBJECT", -1, -1.0,
+              out_next_best_path, out_next_pos);
           return SEARCH_EXTREME;
+        }
       }
 
       sdf_map_->object_map2d_->getTopConfidenceObjectCloud(object_clouds, false, true);
       for (auto object_cloud : object_clouds) {
         if (!object_cloud->points.empty() &&
-            searchObjectPathExtreme(pos, object_cloud, out_next_pos, out_next_best_path))
+            searchObjectPathExtreme(pos, object_cloud, out_next_pos, out_next_best_path)) {
+          setStrategyInfo(agent_idx, "SEARCH_EXTREME_OBJECT", "OBJECT", -1, -1.0,
+              out_next_best_path, out_next_pos);
           return SEARCH_EXTREME;
+        }
       }
 
       if (!object_map2d_->over_depth_object_cloud_->points.empty())
@@ -160,6 +176,8 @@ int ExplorationManager::planNextBestPoint(const Vector3d& pos, const double& yaw
       if (!last_over_depth_object_cloud_->points.empty() &&
           searchObjectPathExtreme(
               pos, last_over_depth_object_cloud_, out_next_pos, out_next_best_path)) {
+        setStrategyInfo(agent_idx, "SEARCH_EXTREME_OVER_DEPTH_OBJECT", "OBJECT", -1, -1.0,
+            out_next_best_path, out_next_pos);
         return SEARCH_EXTREME;
       }
     }
@@ -168,10 +186,14 @@ int ExplorationManager::planNextBestPoint(const Vector3d& pos, const double& yaw
     if (next_best_path.empty()) {
       if (ed_->frontiers_.empty()) {
         ROS_ERROR("Agent %d: No coverable frontier!!", agent_idx);
+        setStrategyInfo(agent_idx, "NO_COVERABLE_FRONTIER", "NONE", -1, -1.0,
+            out_next_best_path, pos2d);
         return NO_COVERABLE_FRONTIER;
       }
       else {
         ROS_ERROR("Agent %d: No passable frontier!!", agent_idx);
+        setStrategyInfo(agent_idx, "NO_PASSABLE_FRONTIER", "NONE", -1, -1.0,
+            out_next_best_path, pos2d);
         return NO_PASSABLE_FRONTIER;
       }
     }
@@ -269,10 +291,20 @@ void ExplorationManager::hybridExplorePolicy(Vector2d cur_pos, vector<Vector2d> 
       high_sem_frontiers.push_back(sem_frontier.position);
     }
     findTSPTourPolicy(cur_pos, high_sem_frontiers, next_best_pos, next_best_path, agent_idx);
+    if (!next_best_path.empty()) {
+      setStrategyInfo(agent_idx, "HYBRID_SEMANTIC_FRONTIER", "FRONTIER",
+          findFrontierIdByPosition(next_best_pos), getFrontierSemanticValue(next_best_pos),
+          next_best_path, next_best_pos);
+    }
   }
   else {
     ROS_WARN("Agent %d: Explore the environment (Closest)!!", agent_idx);
     findClosestFrontierPolicy(cur_pos, frontiers, next_best_pos, next_best_path, agent_idx);
+    if (!next_best_path.empty()) {
+      setStrategyInfo(agent_idx, "HYBRID_GEOMETRIC_FRONTIER", "FRONTIER",
+          findFrontierIdByPosition(next_best_pos), getFrontierSemanticValue(next_best_pos),
+          next_best_path, next_best_pos);
+    }
   }
 }
 
@@ -326,6 +358,9 @@ void ExplorationManager::findHighestSemanticsFrontierPolicy(Vector2d cur_pos,
       continue;
     next_best_pos = tmp_pos;
     next_best_path = tmp_path;
+    setStrategyInfo(agent_idx, "SEMANTIC_FRONTIER", "FRONTIER",
+        findFrontierIdByPosition(next_best_pos), getFrontierSemanticValue(next_best_pos),
+        next_best_path, next_best_pos);
     break;
   }
 }
@@ -363,6 +398,11 @@ void ExplorationManager::findClosestFrontierPolicy(Vector2d cur_pos, vector<Vect
       next_best_path = tmp_path;
     }
   }
+  if (!next_best_path.empty()) {
+    setStrategyInfo(agent_idx, "GEOMETRIC_FRONTIER", "FRONTIER",
+        findFrontierIdByPosition(next_best_pos), getFrontierSemanticValue(next_best_pos),
+        next_best_path, next_best_pos);
+  }
 }
 
 void ExplorationManager::findTSPTourPolicy(Vector2d cur_pos, vector<Vector2d> frontiers,
@@ -385,10 +425,66 @@ void ExplorationManager::findTSPTourPolicy(Vector2d cur_pos, vector<Vector2d> fr
   if (!indices.empty()) {
     for (auto idx : indices) {
       Vector2d next_bext_frontier = filter_frontiers[idx];
-      if (searchFrontierPath(cur_pos, next_bext_frontier, next_best_pos, next_best_path))
+      if (searchFrontierPath(cur_pos, next_bext_frontier, next_best_pos, next_best_path)) {
+        setStrategyInfo(agent_idx, "TSP_FRONTIER", "FRONTIER",
+            findFrontierIdByPosition(next_best_pos), getFrontierSemanticValue(next_best_pos),
+            next_best_path, next_best_pos);
         break;
+      }
     }
   }
+}
+
+double ExplorationManager::getFrontierSemanticValue(const Vector2d& frontier)
+{
+  Vector2i idx;
+  sdf_map_->posToIndex(frontier, idx);
+  double value = sdf_map_->value_map_->getValue(idx);
+  auto nbrs = allNeighbors(idx, 2);
+  for (auto& nbr : nbrs) {
+    if (sdf_map_->getInflateOccupancy(nbr) == 1 ||
+        sdf_map_->getOccupancy(nbr) == SDFMap2D::OCCUPIED)
+      continue;
+    value = std::max(value, sdf_map_->value_map_->getValue(nbr));
+  }
+  return value;
+}
+
+int ExplorationManager::findFrontierIdByPosition(const Vector2d& frontier, bool dormant)
+{
+  const auto& frontiers = dormant ? ed_->dormant_frontier_averages_ : ed_->frontier_averages_;
+  if (frontiers.empty())
+    return dormant ? -1 : findFrontierIdByPosition(frontier, true);
+
+  int best_id = -1;
+  double best_dist = std::numeric_limits<double>::max();
+  for (int i = 0; i < static_cast<int>(frontiers.size()); ++i) {
+    double dist = (frontiers[i] - frontier).norm();
+    if (dist < best_dist) {
+      best_dist = dist;
+      best_id = i;
+    }
+  }
+  if (best_dist < 1e-2)
+    return best_id;
+  return dormant ? -1 : findFrontierIdByPosition(frontier, true);
+}
+
+void ExplorationManager::setStrategyInfo(int agent_idx, const std::string& mode,
+    const std::string& target_type, int target_id, double semantic_score,
+    const vector<Vector2d>& path, const Vector2d& target_pos)
+{
+  if (agent_idx < 0 || agent_idx >= static_cast<int>(ed_->strategy_infos_.size()))
+    return;
+
+  auto& info = ed_->strategy_infos_[agent_idx];
+  info.agent_id = agent_idx;
+  info.mode = mode;
+  info.target_type = target_type;
+  info.target_id = target_id;
+  info.semantic_score = semantic_score;
+  info.path_length = path.empty() ? -1.0 : Astar2D::pathLength(path);
+  info.target_pos = target_pos;
 }
 
 double ExplorationManager::computePathCost(const Vector2d& pos1, const Vector2d& pos2)

@@ -19,6 +19,7 @@
 #include <std_msgs/Float64.h>
 #include <std_msgs/Int32.h>
 #include <std_msgs/Empty.h>
+#include <std_msgs/String.h>
 #include <visualization_msgs/Marker.h>
 #include <trajectory_manager/PolyTraj.h>
 
@@ -120,7 +121,7 @@ private:
   ros::Subscriber trigger_sub_, goal_sub_, odom_sub_, confidence_threshold_sub_;
   ros::Subscriber traj_finish_sub_;  // TODO: Subscribe to trajectory execution status
   
-  ros::Publisher ros_state_pub_, expl_state_pub_, expl_result_pub_;
+  ros::Publisher ros_state_pub_, expl_state_pub_, expl_result_pub_, exploration_strategy_pub_;
   ros::Publisher robot_marker_pub_;
   
   // Real-world specific: trajectory control publishers
@@ -147,6 +148,7 @@ private:
   void transitState(RealFSM::State new_state, std::string pos_call);
   void wrapAngle(double& angle);
   void publishRobotMarker();
+  void publishExplorationStrategy();
   void visualize();
   void clearVisMarker();
 

@@ -3,6 +3,7 @@
 
 #include <Eigen/Eigen>
 #include <iostream>
+#include <string>
 #include <vector>
 #include <trajectory_manager/optimizer.h>
 
@@ -139,6 +140,27 @@ struct FSMParam {
 };
 
 struct ExplorationData {
+  struct NavigationStrategyInfo {
+    NavigationStrategyInfo()
+    {
+      agent_id = -1;
+      mode = "UNKNOWN";
+      target_type = "NONE";
+      target_id = -1;
+      semantic_score = -1.0;
+      path_length = -1.0;
+      target_pos = Eigen::Vector2d(0, 0);
+    }
+
+    int agent_id;
+    std::string mode;
+    std::string target_type;
+    int target_id;
+    double semantic_score;
+    double path_length;
+    Eigen::Vector2d target_pos;
+  };
+
   ExplorationData()
   {
     frontiers_.clear();
@@ -151,6 +173,7 @@ struct ExplorationData {
     next_pos_ = Eigen::Vector2d(0, 0);
     next_best_path_.clear();
     tsp_tour_.clear();
+    strategy_infos_.assign(NUM_AGENTS, NavigationStrategyInfo());
   }
   std::vector<std::vector<Eigen::Vector2d>> frontiers_, dormant_frontiers_;
   std::vector<Eigen::Vector2d> frontier_averages_, dormant_frontier_averages_;
@@ -161,6 +184,7 @@ struct ExplorationData {
   Eigen::Vector2d next_local_pos_;  // Local target position along path
   std::vector<Eigen::Vector2d> next_best_path_;
   std::vector<Eigen::Vector2d> tsp_tour_;
+  std::vector<NavigationStrategyInfo> strategy_infos_;
 };
 
 struct ExplorationParam {
