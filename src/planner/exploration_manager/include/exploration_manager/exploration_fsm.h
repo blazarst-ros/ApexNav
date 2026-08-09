@@ -14,9 +14,11 @@
 
 // ROS message types
 #include <geometry_msgs/PoseStamped.h>
+#include <exploration_manager/exploration_data.h>
 #include <nav_msgs/Odometry.h>
 #include <std_msgs/Float64.h>
 #include <std_msgs/Int32.h>
+#include <std_msgs/String.h>
 #include <visualization_msgs/Marker.h>
 
 using Eigen::Vector2d;
@@ -90,6 +92,7 @@ private:
   ros::Timer exec_timer_, vis_timer_, frontier_timer_;
   ros::Subscriber trigger_sub_, odom_sub_, habitat_state_sub_, confidence_threshold_sub_;
   ros::Publisher action_pub_, ros_state_pub_, expl_state_pub_, expl_result_pub_;
+  ros::Publisher exploration_strategy_pub_;
   ros::Publisher robot_marker_pub_;
 
   /* Action Planner */
@@ -109,6 +112,7 @@ private:
   bool updateFrontierAndObject();
   void transitState(ROS_STATE new_state, string pos_call);
   void wrapAngle(double& angle);
+  void publishExplorationStrategy();
   void publishRobotMarker();
   void visualize();
   void clearVisMarker();

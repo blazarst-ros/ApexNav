@@ -4,6 +4,8 @@
 #include <exploration_manager/exploration_data.h>
 #include <vis_utils/planning_visualization.h>
 
+#include <sstream>
+
 namespace apexnav_planner {
 void ExplorationFSM::init(ros::NodeHandle& nh)
 {
@@ -38,6 +40,8 @@ void ExplorationFSM::init(ros::NodeHandle& nh)
   expl_state_pub_ = nh.advertise<std_msgs::Int32>("/ros/expl_state", 10);
   action_pub_ = nh.advertise<std_msgs::Int32>("/habitat/plan_action", 10);
   expl_result_pub_ = nh.advertise<std_msgs::Int32>("/ros/expl_result", 10);
+  exploration_strategy_pub_ =
+      nh.advertise<std_msgs::String>("/ros/agent_0/exploration_strategy", 10);
   robot_marker_pub_ = nh.advertise<visualization_msgs::Marker>("/robot", 10);
 }
 
@@ -277,6 +281,7 @@ int ExplorationFSM::callActionPlanner()
   std_msgs::Int32 expl_result_msg;
   expl_result_msg.data = expl_res;
   expl_result_pub_.publish(expl_result_msg);
+  publishExplorationStrategy();
 
   // Determine current high-level state based on exploration results
   if (expl_res == EXPL_RESULT::EXPLORATION)
@@ -352,6 +357,28 @@ int ExplorationFSM::callActionPlanner()
         planNextBestAction(current_pos, current_yaw, expl_manager_->ed_->next_best_path_);
 
   return final_res;
+}
+
+void ExplorationFSM::publishExplorationStrategy()
+{
+  const auto& infos = expl_manager_->ed_->strategy_infos_;
+  if (infos.empty())
+    return;
+
+  const auto& info = infos[0];
+  std_msgs::String msg;
+  std::ostringstream ss;
+  ss << "{"
+     << "\"agent_id\":" << info.agent_id << ","
+     << "\"mode\":\"" << info.mode << "\","
+     << "\"target_type\":\"" << info.target_type << "\","
+     << "\"target_id\":" << info.target_id << ","
+     << "\"semantic_score\":" << info.semantic_score << ","
+     << "\"path_length\":" << info.path_length << ","
+     << "\"target_pos\":[" << info.target_pos(0) << "," << info.target_pos(1) << "]"
+     << "}";
+  msg.data = ss.str();
+  exploration_strategy_pub_.publish(msg);
 }
 
 int ExplorationFSM::planNextBestAction(

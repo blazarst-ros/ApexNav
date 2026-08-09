@@ -11,6 +11,7 @@
 #include <fstream>
 #include <iostream>
 #include <memory>
+#include <string>
 #include <vector>
 
 // ROS core
@@ -129,6 +130,9 @@ private:
       const Vector2d& cur_pos, const vector<Vector2d>& frontiers, Eigen::MatrixXd& cost_matrix);
   double computePathCost(const Vector2d& pos1, const Vector2d& pos2);
   vector<Vector2i> allNeighbors(const Eigen::Vector2i& idx, int grid_radius);
+  void setStrategyInfo(const std::string& mode, const std::string& target_type, int target_id,
+      double semantic_score, const vector<Vector2d>& path, const Vector2d& target_pos,
+      int agent_idx = 0);
 
   ros::ServiceClient tsp_client_;         ///< ROS service client for TSP solver
   unique_ptr<RayCaster2D> ray_caster2d_;  ///< Ray casting for collision checking
