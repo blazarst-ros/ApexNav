@@ -236,7 +236,7 @@ void MapROS::detectedObjectCloudCallback(const plan_env::MultipleMasksWithConfid
   if (continue_over_depth_count_ == -1 &&
       !map_->object_map2d_->over_depth_object_cloud_->points.empty())
     continue_over_depth_count_ = 0;
-  else if (continue_over_depth_count_ <= 4 && continue_over_depth_count_ >= 0) {
+  else if (continue_over_depth_count_ <= 15 && continue_over_depth_count_ >= 0) {
     continue_over_depth_count_++;
     *map_->object_map2d_->over_depth_object_cloud_ = *last_over_depth_cloud;
   }

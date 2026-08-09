@@ -13,6 +13,8 @@ lockfiles
 
 .catkin_workspace
 .vscode
+.env
+.env.local
 
 yolov7
 traced_model.pt
