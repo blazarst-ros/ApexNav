@@ -117,7 +117,7 @@ private:
   SDFMap2D* map_;
 
   // Number of agents
-  static constexpr int NUM_AGENTS_ = 3;
+  static constexpr int NUM_AGENTS_ = 2;
 
   // Per-agent state
   std::vector<AgentState> agents_;
@@ -139,6 +139,7 @@ private:
   vector<SynchronizerImagePose> sync_image_pose_;
   vector<ros::Subscriber> detected_object_cloud_sub_;
   vector<ros::Subscriber> itm_score_sub_;
+  ros::Publisher camera_pitch_pub_[NUM_AGENTS_];  ///< Per-agent object-filter gate angle
 
   // ROS publishers for shared merged-map visualization
   ros::Publisher occupied_pub_, occupied_inflate_pub_, unknown_pub_, free_pub_, esdf_pub_,

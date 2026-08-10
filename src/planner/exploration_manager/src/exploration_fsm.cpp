@@ -157,23 +157,11 @@ void ExplorationFSM::FSMCallback(const ros::TimerEvent& e)
         std_msgs::Int32 action_msg;
         action_msg.data = ad.newest_action_;
         action_pub_[agent_idx].publish(action_msg);
-        ad.wait_action_finish_count_ = 0;
         transitState(agent_idx, ROS_STATE::WAIT_ACTION_FINISH, "FSM");
         break;
       }
 
       case ROS_STATE::WAIT_ACTION_FINISH: {
-        // Timeout: if Python side missed the action or ACTION_FINISH was dropped,
-        // re-publish the action after MAX_WAIT_ACTION_FINISH FSM ticks (~0.5s).
-        ad.wait_action_finish_count_++;
-        if (ad.wait_action_finish_count_ >= FSMConstants::MAX_WAIT_ACTION_FINISH) {
-          ROS_WARN("Agent %d: WAIT_ACTION_FINISH timeout, re-publishing action %d",
-              agent_idx, ad.newest_action_);
-          std_msgs::Int32 action_msg;
-          action_msg.data = ad.newest_action_;
-          action_pub_[agent_idx].publish(action_msg);
-          ad.wait_action_finish_count_ = 0;
-        }
         break;
       }
     }
@@ -754,7 +742,6 @@ void ExplorationFSM::habitatStateCallback(const std_msgs::Int32ConstPtr& msg)
     // Trigger all agents that are waiting for action finish
     for (int agent_idx = 0; agent_idx < NUM_AGENTS; ++agent_idx) {
       if (state_[agent_idx] == ROS_STATE::WAIT_ACTION_FINISH) {
-        fd_->agent_[agent_idx].wait_action_finish_count_ = 0;
         transitState(agent_idx, ROS_STATE::PLAN_ACTION, "Habitat Finish Action");
       }
     }

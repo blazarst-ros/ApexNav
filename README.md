@@ -20,7 +20,6 @@ This branch runs the multi-agent evaluation with heterogeneous camera heights:
 | --- | ---: | ---: | ---: |
 | `agent_0` | `0.7 m` | `0.7 m` | `0.7 m` |
 | `agent_1` | `1.2 m` | `1.2 m` | `1.2 m` |
-| `agent_2` | `1.7 m` | `1.7 m` | `1.7 m` |
 
 The evaluation success distance is:
 
@@ -37,7 +36,7 @@ success_distance: 0.5
 The maximum episode length for evaluation is:
 
 ```yaml
-max_episode_steps: 250
+max_episode_steps: 400
 ```
 
 Step counting policy:
@@ -53,7 +52,7 @@ that executed the action.
 Runtime progress logging prints each agent's own step counter, for example:
 
 ```text
---------------Steps: agent_0=288, agent_1=286, agent_2=284--------------
+--------------Steps: agent_0=288, agent_1=286--------------
 ```
 
 The C++ planner treats a searched object as reached at:
@@ -70,12 +69,12 @@ already in object-search mode.
 Multi-agent perception scheduling:
 
 ```yaml
-perception_agents_per_step: 3
+perception_agents_per_step: 2
 perception_interval_steps: 1
 ```
 
-This allows all three agents to run ITM/VLM object detection in the same
-simulation loop when all three have changed viewpoint. `perception_interval_steps`
+This allows both agents to run ITM/VLM object detection in the same
+simulation loop when both have changed viewpoint. `perception_interval_steps`
 is counted per agent, not as a global scheduler interval.
 
 These values are applied consistently in:
@@ -116,7 +115,6 @@ agent and published on:
 /ros/expl_result_all
 /ros/agent_0/expl_result
 /ros/agent_1/expl_result
-/ros/agent_2/expl_result
 ```
 
 The message type is `std_msgs/Int32MultiArray`, where `data[i]` is the latest

@@ -179,9 +179,6 @@ rostopic echo /detector/agent_0/clouds_with_scores
 source devel/setup.bash
 rostopic echo /detector/agent_1/clouds_with_scores
 
-source devel/setup.bash
-rostopic echo /detector/agent_2/clouds_with_scores
-
 cd ApexNav
 source devel/setup.bash
 rostopic echo /semantic_observability/agent_0/evidence_debug >RuntimeData/Crossing-data/01Group/Debug01.md
@@ -195,22 +192,11 @@ rostopic echo /semantic_observability/agent_1/evidence_debug >RuntimeData/Crossi
 
 cd ApexNav
 source devel/setup.bash
-rostopic echo /semantic_observability/agent_2/evidence_debug >RuntimeData/Crossing-data/01Group/Debug03.md
-
-
-
-cd ApexNav
-source devel/setup.bash
 rostopic echo /planner/agent_0/exploration_mode
 
 cd ApexNav
 source devel/setup.bash
 rostopic echo /planner/agent_1/exploration_mode
-
-cd ApexNav
-source devel/setup.bash
-rostopic echo /planner/agent_2/exploration_mode
-
 
 cd ApexNav
 source devel/setup.bash

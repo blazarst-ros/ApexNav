@@ -36,6 +36,23 @@ def _is_yolov7_available():
     return _is_port_open("localhost", YOLOV7_PORT)
 
 
+def _is_grounding_dino_available():
+    return _is_port_open("localhost", GROUNDING_DINO_PORT)
+
+
+def _select_detector_labels(right_label, similar_answer):
+    """Select exactly one detector from the target class, not its aliases.
+
+    COCO targets are handled only by YOLOv7.  A non-COCO target selects
+    GroundingDINO, which may receive both COCO and open-vocabulary aliases.
+    """
+    target_labels = [label.strip() for label in right_label.split("|") if label.strip()]
+    all_labels = target_labels + list(similar_answer)
+    if target_labels and all(label in COCO_CLASSES for label in target_labels):
+        return "yolo", [label for label in all_labels if label in COCO_CLASSES]
+    return "gdino", all_labels
+
+
 def _predict_with_grounding_dino(labels, img, cfg):
     caption = ' '.join(f'{item}.  ' for item in labels)
     return dino_detector.predict(
@@ -101,34 +118,16 @@ def get_object(right_label, img, cfg, similar_answer):
     object_masks_list = []
     segmented_img = img.copy()
     label_list = []
-    coco_label = []
-    dino_label = []
     right_label_list = list(map(str.strip, right_label.split('|')))
-    # print(f"right_label_list: {right_label_list}")
     all_answer = right_label_list + similar_answer
-    for label in all_answer:
-        if label in COCO_CLASSES:
-            coco_label.append(label)
-        else:
-            dino_label.append(label)
+    detector_name, detector_labels = _select_detector_labels(right_label, similar_answer)
 
-    if any(item in dino_label for item in right_label_list):
-        dino_label = all_answer
-        coco_label = []
-        for label in right_label_list:
-            if label in COCO_CLASSES:
-                coco_label.append(label)
-
-    yolo_available = _is_yolov7_available()
-    if coco_label and not yolo_available:
-        print(
-            f"YOLOv7 server is not running on port {YOLOV7_PORT}; "
-            "using GroundingDINO for COCO labels."
-        )
-        dino_label = list(dict.fromkeys(dino_label + coco_label))
-        coco_label = []
-
-    if coco_label:
+    if detector_name == "yolo":
+        if not _is_yolov7_available():
+            raise RuntimeError(
+                f"YOLOv7 server is not running on port {YOLOV7_PORT} for COCO target "
+                f"{right_label!r}."
+            )
         detections = yolov7_detector.predict(img, agnostic_nms=cfg.yolo.agnostic_nms, 
                                             conf_thres=cfg.yolo.confidence_threshold_yolo, iou_thres=cfg.yolo.iou_threshold_yolo)
         for idx in range(len(detections.logits)):
@@ -141,7 +140,7 @@ def get_object(right_label, img, cfg, similar_answer):
                 score_list.append(score)
                 object_masks_list.append(object_mask)
                 label_list.append(0)
-            elif detections.phrases[idx] in coco_label:
+            elif detections.phrases[idx] in detector_labels:
                 segmented_img, object_mask = get_segmentation(
                     segmented_img, idx, detections, img, label_detected, score, color=(0, 255, 0)
                 )
@@ -149,8 +148,13 @@ def get_object(right_label, img, cfg, similar_answer):
                 object_masks_list.append(object_mask)
                 label_list.append(list(all_answer).index(label_detected) - len(right_label_list)+1)
 
-    if dino_label:
-        detections = _predict_with_grounding_dino(dino_label, img, cfg)
+    else:
+        if not _is_grounding_dino_available():
+            raise RuntimeError(
+                f"GroundingDINO server is not running on port {GROUNDING_DINO_PORT} for "
+                f"non-COCO target {right_label!r}."
+            )
+        detections = _predict_with_grounding_dino(detector_labels, img, cfg)
         for idx in range(len(detections.logits)):
             label_detected = detections.phrases[idx]
             score = detections.logits[idx].item()
@@ -162,7 +166,7 @@ def get_object(right_label, img, cfg, similar_answer):
                 object_masks_list.append(object_mask)
                 label_list.append(0)
 
-            elif label_detected in dino_label:
+            elif label_detected in detector_labels:
                 segmented_img, object_mask = get_segmentation(
                     segmented_img, idx, detections, img, label_detected, score, color=(0, 255, 0)
                 )
@@ -179,31 +183,34 @@ def get_object_with_itm(label, img, cfg):
     itm_score_list = []
     segmented_img = img.copy()
     if label in COCO_CLASSES:
-        if _is_yolov7_available():
-            detections = yolov7_detector.predict(img, agnostic_nms=cfg.yolo.agnostic_nms,
-                                                 conf_thres=cfg.yolo.confidence_threshold_yolo, iou_thres=cfg.yolo.iou_threshold_yolo)
-            for idx in range(len(detections.logits)):
-                label_detected = detections.phrases[idx]
-                score = detections.logits[idx].item()
-                if detections.phrases[idx] == label:
-                    segmented_img, object_mask = get_segmentation(
-                        segmented_img, idx, detections, img, label_detected, score, color=(255, 0, 0)
-                    )
-                    img_detected = crop_and_expand_box(img, detections, idx)
-                    # cv2.imshow(f"img_detected{idx}", img_detected)
-                    cosine, itm_score = get_itm_message(img_detected, label)
-                    print(f"cosine: {cosine:.3f}, itm_score: {itm_score:.3f}")
-                    score_list.append(score)
-                    object_masks_list.append(object_mask)
-                    cosine_list.append(cosine)
-                    itm_score_list.append(itm_score)
-            return segmented_img, score_list, object_masks_list, cosine_list, itm_score_list
+        if not _is_yolov7_available():
+            raise RuntimeError(
+                f"YOLOv7 server is not running on port {YOLOV7_PORT} for COCO label {label!r}."
+            )
+        detections = yolov7_detector.predict(img, agnostic_nms=cfg.yolo.agnostic_nms,
+                                             conf_thres=cfg.yolo.confidence_threshold_yolo, iou_thres=cfg.yolo.iou_threshold_yolo)
+        for idx in range(len(detections.logits)):
+            label_detected = detections.phrases[idx]
+            score = detections.logits[idx].item()
+            if detections.phrases[idx] == label:
+                segmented_img, object_mask = get_segmentation(
+                    segmented_img, idx, detections, img, label_detected, score, color=(255, 0, 0)
+                )
+                img_detected = crop_and_expand_box(img, detections, idx)
+                # cv2.imshow(f"img_detected{idx}", img_detected)
+                cosine, itm_score = get_itm_message(img_detected, label)
+                print(f"cosine: {cosine:.3f}, itm_score: {itm_score:.3f}")
+                score_list.append(score)
+                object_masks_list.append(object_mask)
+                cosine_list.append(cosine)
+                itm_score_list.append(itm_score)
+        return segmented_img, score_list, object_masks_list, cosine_list, itm_score_list
 
-        print(
-            f"YOLOv7 server is not running on port {YOLOV7_PORT}; "
-            "using GroundingDINO for COCO label."
+    if not _is_grounding_dino_available():
+        raise RuntimeError(
+            f"GroundingDINO server is not running on port {GROUNDING_DINO_PORT} for "
+            f"non-COCO label {label!r}."
         )
-
     detections = _predict_with_grounding_dino([label], img, cfg)
     for idx in range(len(detections.logits)):
         label_detected = detections.phrases[idx]

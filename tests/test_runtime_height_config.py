@@ -21,9 +21,8 @@ def _agent_block(text: str, agent_name: str) -> str:
 
 def test_eval_configs_use_heterogeneous_agent_heights_and_success_distance():
     expected_heights = {
-        "agent_0": 0.7,
-        "agent_1": 1.2,
-        "agent_2": 1.7,
+        "agent_0": 0.8,
+        "agent_1": 1.5,
     }
 
     for config_path in EVAL_CONFIGS:

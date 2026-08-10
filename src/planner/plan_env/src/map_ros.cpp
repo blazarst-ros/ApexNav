@@ -119,6 +119,9 @@ void MapROS::init()
   node_.param("depth_topic", depth_topic, depth_topic);
 
   for (int id = 0; id < NUM_AGENTS_; ++id) {
+    camera_pitch_pub_[id] = node_.advertise<std_msgs::Float64>(
+        "/map_ros/agent_" + std::to_string(id) + "/camera_pitch", 10);
+
     // Derive per-agent topic name from base template
     // If topic contains "agent_X", replace X; otherwise append /agent_X suffix
     auto makeAgentTopic = [id](const std::string& base) -> std::string {
@@ -334,7 +337,7 @@ void MapROS::detectedObjectCloudCallback(int agent_id, const plan_env::MultipleM
     }
 
     // DBSCAN clustering
-    single_object_cloud = dbscan(single_object_cloud, 0.12f, 10);
+    single_object_cloud = dbscan(single_object_cloud, 0.15f, 6);
     if (single_object_cloud == nullptr) {
       ROS_ERROR("After DBSCAN, no point cloud cluster!!");
       continue;
@@ -424,6 +427,12 @@ void MapROS::depthPoseCallback(
   Eigen::Vector3d euler =
       agent.camera_q_.toRotationMatrix().eulerAngles(2, 1, 0);
   double camera_yaw = euler[0];
+  double camera_pitch = euler[2];
+  if (camera_pitch < 0)
+    camera_pitch += M_PI;
+  std_msgs::Float64 camera_pitch_msg;
+  camera_pitch_msg.data = camera_pitch;
+  camera_pitch_pub_[agent_id].publish(camera_pitch_msg);
   Eigen::Vector2d camera_pos = Eigen::Vector2d(agent.camera_pos_(0), agent.camera_pos_(1));
 
   // Skip if camera outside map bounds

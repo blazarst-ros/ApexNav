@@ -15,7 +15,7 @@ class ROSPublisher:
         Create ROS publishers with namespaced topics for a specific agent.
 
         Args:
-            agent_name: Name of the agent (e.g., "agent_0", "agent_1", "agent_2").
+            agent_name: Name of the agent ("agent_0" or "agent_1").
                         This becomes the namespace between /habitat/ and the topic name.
             camera_height: Camera z-offset in meters for the sensor pose.
         """
