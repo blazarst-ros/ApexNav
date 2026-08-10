@@ -41,13 +41,13 @@ habitat:
 
 detector:
   yolo:
-    confidence_threshold_yolo: 0.3
+    confidence_threshold_yolo: 0.20
     iou_threshold_yolo: 0.5
     agnostic_nms: True
 
   groundingDINO:
-    confidence_threshold_dino: 0.40
-    text_threshold: 0.25
+    confidence_threshold_dino: 0.30
+    text_threshold: 0.20
 
 llm:
   llm_answer_path: llm/answers/llm_answer_hm3d.txt

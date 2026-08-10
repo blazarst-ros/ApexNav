@@ -1,6 +1,6 @@
 detector:
   yolo:
-    confidence_threshold_yolo: 0.3
+    confidence_threshold_yolo: 0.20
     iou_threshold_yolo: 0.5
     agnostic_nms: True
 

@@ -212,7 +212,7 @@ void MapROS::detectedObjectCloudCallback(const plan_env::MultipleMasksWithConfid
     }
 
     // Apply DBSCAN clustering to remove noise and outliers
-    single_object_cloud = dbscan(single_object_cloud, 0.12f, 10);
+    single_object_cloud = dbscan(single_object_cloud, 0.15f, 6);
     if (single_object_cloud == nullptr) {
       ROS_ERROR("After DBSCAN, no point cloud cluster!!");
       continue;
@@ -232,9 +232,11 @@ void MapROS::detectedObjectCloudCallback(const plan_env::MultipleMasksWithConfid
     detected_objects.push_back(detected_object);
   }
 
-  // Maintain consistency in over-depth object tracking
-  if (continue_over_depth_count_ == -1 &&
-      !map_->object_map2d_->over_depth_object_cloud_->points.empty())
+  // Maintain consistency in over-depth object tracking.
+  // Fresh over-depth detections refresh the cache; missed detections reuse the last cloud briefly.
+  bool has_current_over_depth_object_cloud =
+      !map_->object_map2d_->over_depth_object_cloud_->points.empty();
+  if (has_current_over_depth_object_cloud)
     continue_over_depth_count_ = 0;
   else if (continue_over_depth_count_ <= 15 && continue_over_depth_count_ >= 0) {
     continue_over_depth_count_++;
