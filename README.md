@@ -24,13 +24,13 @@ This branch runs the multi-agent evaluation with heterogeneous camera heights:
 The evaluation success distance is:
 
 ```text
-0.5 m
+0.2 m
 ```
 
 Config key:
 
 ```yaml
-success_distance: 0.5
+success_distance: 0.2
 ```
 
 The maximum episode length for evaluation is:
@@ -58,13 +58,12 @@ Runtime progress logging prints each agent's own step counter, for example:
 The C++ planner treats a searched object as reached at:
 
 ```text
-REACH_DISTANCE = 0.50 m
-SOFT_REACH_DISTANCE = 0.70 m
+REACH_DISTANCE = 0.20 m
+SOFT_REACH_DISTANCE = 0.20 m
 ```
 
-The regular reach distance aligns with the evaluation success distance. The
-soft reach distance is used during stuck-recovery handling when the planner is
-already in object-search mode.
+Both planner thresholds align with Habitat's evaluation success distance; the
+stuck-recovery branch no longer relaxes the success criterion.
 
 Multi-agent perception scheduling:
 

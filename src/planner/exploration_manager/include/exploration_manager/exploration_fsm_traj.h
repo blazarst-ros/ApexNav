@@ -45,8 +45,8 @@ constexpr double REPLAN_DISTANCE_THRESHOLD = 0.5;     // Trigger replan if devia
 
 // Distances (m)
 constexpr double STUCKING_DISTANCE = 0.05;
-constexpr double REACH_DISTANCE = 0.50;
-constexpr double SOFT_REACH_DISTANCE = 0.70;
+constexpr double REACH_DISTANCE = 0.20;
+constexpr double SOFT_REACH_DISTANCE = 0.20;
 constexpr double LOCAL_DISTANCE = 0.80;
 constexpr double FORWARD_DISTANCE = 0.15;
 constexpr double FORCE_DORMANT_DISTANCE = 0.35;
