@@ -43,7 +43,7 @@ from geometry_msgs.msg import PoseStamped
 from omegaconf import DictConfig
 from prettytable import PrettyTable
 from sensor_msgs.msg import PointCloud2
-from std_msgs.msg import Int32, Int32MultiArray, Float32MultiArray, Float64
+from std_msgs.msg import Int32, Int32MultiArray, Float32MultiArray, Float64, String
 import tqdm
 
 # Habitat-related imports
@@ -73,6 +73,7 @@ from plan_env.msg import MultipleMasksWithConfidence, Stage1Detection
 from basic_utils.failure_check.count_files import count_files_in_directory
 from basic_utils.failure_check.failure_check import (
     check_failure,
+    get_multiagent_termination_reason,
     get_reach_claim_outcome,
     is_on_same_floor,
 )
@@ -640,6 +641,7 @@ def main(cfg: DictConfig) -> None:
         )
     # ROS state callbacks for multi-agent tracking
     ros_all_states = [ROS_STATE.INIT] * num_agents
+    ros_final_results = [FINAL_RESULT.EXPLORE] * num_agents
     last_ros_state_update_time = time.monotonic()
 
     def ros_all_state_callback(msg):
@@ -649,6 +651,11 @@ def main(cfg: DictConfig) -> None:
                 ros_all_states[i] = s
         last_ros_state_update_time = time.monotonic()
 
+    def ros_final_result_all_callback(msg):
+        for i, result in enumerate(msg.data):
+            if i < len(ros_final_results):
+                ros_final_results[i] = result
+
     def _require_fresh_planner_state(wait_for_stale=PLANNER_STALE_TIMEOUT_SEC):
         if time.monotonic() - last_ros_state_update_time > wait_for_stale:
             raise RuntimeError(
@@ -657,10 +664,14 @@ def main(cfg: DictConfig) -> None:
             )
 
     rospy.Subscriber("/ros/state_all", Int32MultiArray, ros_all_state_callback, queue_size=10)
+    rospy.Subscriber("/ros/final_result_all", Int32MultiArray, ros_final_result_all_callback, queue_size=10)
     rospy.Subscriber("/ros/expl_state", Int32, ros_final_state_callback, queue_size=10)
     rospy.Subscriber("/ros/reach_claim", Int32MultiArray, ros_reach_claim_callback, queue_size=10)
     rospy.Subscriber("/ros/expl_result", Int32, ros_expl_result_callback, queue_size=10)
     state_pub = rospy.Publisher("/habitat/state", Int32, queue_size=30)
+    termination_event_pub = rospy.Publisher(
+        "/habitat/termination_event", String, queue_size=10, latch=True
+    )
     trigger_pub = rospy.Publisher("/move_base_simple/goal", PoseStamped, queue_size=10)
     itm_score_pub = rospy.Publisher("/blip2/cosine_score", Float64, queue_size=10)
     confidence_threshold_pub = rospy.Publisher(
@@ -673,7 +684,7 @@ def main(cfg: DictConfig) -> None:
         "/stage1/detector/detection", Stage1Detection, queue_size=10
     )
 
-    def _finish_episode_handshake():
+    def _finish_episode_handshake(reason):
         """Reliably notify the planner FSM to reset before the next episode.
 
         A single non-latched EPISODE_FINISH can be missed while the C++ FSM is
@@ -686,6 +697,11 @@ def main(cfg: DictConfig) -> None:
             agent_actions.clear()
         else:
             global_action = None
+
+        termination_event_pub.publish(String(data=json.dumps({
+            "event": "episode_finish_request",
+            "reason": reason,
+        })))
 
         for attempt in range(3):
             _require_fresh_planner_state(wait_for_stale=RESET_STALE_TIMEOUT_SEC)
@@ -710,8 +726,10 @@ def main(cfg: DictConfig) -> None:
         publish_int32_array(progress_pub, [num_total, number_of_episodes])
         final_state = 0
         expl_result = 0
+        ros_final_results[:] = [FINAL_RESULT.EXPLORE] * num_agents
         mission_reached_object = False
         reach_claim_agent_idx = None
+        termination_reason = None
 
         if flag_once:
             while env_count:
@@ -745,9 +763,10 @@ def main(cfg: DictConfig) -> None:
             coco_id = category_to_coco[label]
             label = id_to_name.get(coco_id, label)
 
-        llm_answer, room, fusion_threshold = read_answer(
+        llm_answer, room, _ = read_answer(
             llm_answer_path, llm_response_path, label, llm_client
         )
+        fusion_threshold = 0.4
         ensure_stage1_detection_storage(stage1_detection_output_dir)
 
         # ── Episode init ──
@@ -818,7 +837,7 @@ def main(cfg: DictConfig) -> None:
                     "Planner entered WAIT_ACTION_FINISH before Python trigger; "
                     f"resetting planner episode state. [{states_str}]"
                 )
-                _finish_episode_handshake()
+                _finish_episode_handshake("stale_pretrigger_state")
                 rate.sleep()
                 continue
 
@@ -892,23 +911,39 @@ def main(cfg: DictConfig) -> None:
                     _queue_reach_claim_stops()
 
                 for agent_idx, agent_name in enumerate(agent_names):
-                    if not reach_stop_queued and ros_all_states[agent_idx] == ROS_STATE.FINISH:
+                    if (
+                        not reach_stop_queued
+                        and ros_all_states[agent_idx] == ROS_STATE.FINISH_FAILURE
+                    ):
                         agent_states[agent_name]["finished"] = True
 
-                if termination_policy == "cooperative":
-                    all_done = all(
-                        agent_states[a]["finished"] or agent_states[a]["count_steps"] >= max_episode_steps
-                        for a in agent_names
-                    )
-                    if all_done and not reach_stop_queued:
-                        break
-                else:
-                    all_done = all(
-                        agent_states[a]["finished"] or agent_states[a]["count_steps"] >= max_episode_steps
-                        for a in agent_names
-                    )
-                    if all_done and not reach_stop_queued:
-                        break
+                candidate_termination_reason = get_multiagent_termination_reason(
+                    ros_states=ros_all_states[:num_agents],
+                    step_counts=[agent_states[a]["count_steps"] for a in agent_names],
+                    max_episode_steps=max_episode_steps,
+                    reach_stop_queued=reach_stop_queued,
+                    reach_claim_stop_executed=reach_claim_stop_executed,
+                )
+                if candidate_termination_reason is not None:
+                    termination_reason = candidate_termination_reason
+                    termination_snapshot = {
+                        "event": "team_termination",
+                        "reason": termination_reason,
+                        "agents": [
+                            {
+                                "name": name,
+                                "ros_state": ros_all_states[index],
+                                "final_result": ros_final_results[index],
+                                "steps": agent_states[name]["count_steps"],
+                                "finished": agent_states[name]["finished"],
+                            }
+                            for index, name in enumerate(agent_names)
+                        ],
+                    }
+                    snapshot_json = json.dumps(termination_snapshot, sort_keys=True)
+                    print(f"Team termination requested: {snapshot_json}")
+                    termination_event_pub.publish(String(data=snapshot_json))
+                    break
             else:
                 is_feasible = 0
                 for goal in env.current_episode.goals:
@@ -1062,8 +1097,14 @@ def main(cfg: DictConfig) -> None:
                     k: v for k, v in action_dict.items()
                     if not agent_states[k]["finished"] and v is not None
                 }
-                if active_actions:
-                    observations = _multi_agent_step(env, active_actions, agent_names)
+                active_sim_actions = {
+                    k: v for k, v in active_actions.items()
+                    if v != HabitatSimActions.stop
+                }
+                if active_sim_actions:
+                    observations = _multi_agent_step(env, active_sim_actions, agent_names)
+                elif active_actions:
+                    observations = _get_agent_observations(env, agent_names)
                 # Update task measurements for the default agent (for spl, etc.)
                 # Build a flat observation dict from the per-agent split format
                 # and pick a non-stop action to avoid incorrectly setting is_stop_called.
@@ -1071,22 +1112,20 @@ def main(cfg: DictConfig) -> None:
                 for aname, aobs in observations.items():
                     for k, v in aobs.items():
                         flat_obs[f"{aname}_{k}"] = v
-                # Use the first non-stop action; if all are stop, use move_forward
-                # to avoid falsely triggering is_stop_called for unfinished episodes
-                non_stop_actions = [
-                    v for k, v in active_actions.items()
-                    if v != HabitatSimActions.stop
-                ]
-                measure_action = (
-                    non_stop_actions[0] if non_stop_actions
-                    else (list(active_actions.values())[0] if active_actions else HabitatSimActions.move_forward)
-                )
-                env._task.measurements.update_measures(
-                    episode=env.current_episode,
-                    action={"action": measure_action},
-                    task=env._task,
-                    observations=flat_obs,
-                )
+                if active_actions:
+                    non_stop_actions = list(active_sim_actions.values())
+                    if non_stop_actions:
+                        measure_action = non_stop_actions[0]
+                    elif all(v == HabitatSimActions.stop for v in active_actions.values()):
+                        measure_action = HabitatSimActions.stop
+                    else:
+                        measure_action = HabitatSimActions.move_forward
+                    env._task.measurements.update_measures(
+                        episode=env.current_episode,
+                        action={"action": measure_action},
+                        task=env._task,
+                        observations=flat_obs,
+                    )
                 for agent_name in stop_action_agents:
                     if agent_name in active_actions:
                         agent_states[agent_name]["stop_executed"] = True
@@ -1321,9 +1360,6 @@ def main(cfg: DictConfig) -> None:
         # Timer was already shut down before the main loop to avoid dual publishing
         # (causes TF out-of-order warnings and agent stuck issues)
 
-        # ── Episode-end processing ──
-        _finish_episode_handshake()
-
         # Aggregate metrics
         if multi_agent:
             any_success = any(agent_states[a]["success"] == 1 for a in agent_names)
@@ -1334,6 +1370,10 @@ def main(cfg: DictConfig) -> None:
                 else None
             )
             report_agent = claim_agent_name or best_agent
+            report_agent_idx = agent_names.index(report_agent)
+            report_final_state = ros_final_results[report_agent_idx]
+            if claim_agent_name is not None:
+                report_final_state = FINAL_RESULT.REACH_OBJECT
             spl = agent_states[report_agent]["spl"]
             soft_spl = agent_states[report_agent]["soft_spl"]
             distance_to_goal = agent_states[report_agent]["distance_to_goal"]
@@ -1354,12 +1394,13 @@ def main(cfg: DictConfig) -> None:
             distance_to_goal_reward = ast["distance_to_goal_reward"]
             success = ast["success"]
             best_ast = ast
+            report_final_state = final_state
             if final_state == FINAL_RESULT.REACH_OBJECT and reach_claim_agent_idx == 0:
                 reach_claim_distance = distance_to_goal
                 reach_claim_stop_executed = ast["stop_executed"]
 
         reach_claim_outcome = get_reach_claim_outcome(
-            final_state,
+            report_final_state,
             reach_claim_agent_idx,
             reach_claim_distance if reach_claim_distance is not None else float("inf"),
             success_distance,
@@ -1381,7 +1422,7 @@ def main(cfg: DictConfig) -> None:
         else:
             result_text = check_failure(
                 env.current_episode,
-                final_state,
+                report_final_state,
                 expl_result,
                 best_ast["count_steps"],
                 max_episode_steps,
@@ -1420,6 +1461,7 @@ def main(cfg: DictConfig) -> None:
         )
         if multi_agent:
             table1.add_row(["Termination Policy", termination_policy])
+            table1.add_row(["Termination Reason", termination_reason or "unknown"])
             table1.add_row(["Reach Claim Agent", claim_agent_name or "none"])
             table1.add_row([
                 "Reach Claim Distance",
@@ -1440,17 +1482,15 @@ def main(cfg: DictConfig) -> None:
         table2.add_row(["Total Soft SPL", f"{soft_spl_all:.2f}"])
         table2.add_row(["Total Distance to Goal", f"{distance_to_goal_all:.4f}"])
 
-        if flag_once:
-            break
-
-        write_record(
-            scene_id, episode_id, table1, result_text, label, num_total,
-            time_spend, record_file_path,
-        )
-        write_record(
-            scene_id, episode_id, table2, result_text, label, num_total,
-            time_spend, continue_path,
-        )
+        if not flag_once:
+            write_record(
+                scene_id, episode_id, table1, result_text, label, num_total,
+                time_spend, record_file_path,
+            )
+            write_record(
+                scene_id, episode_id, table2, result_text, label, num_total,
+                time_spend, continue_path,
+            )
 
         for i in range(len(RESULT_TYPES)):
             folder = RESULT_TYPES[i]
@@ -1465,6 +1505,12 @@ def main(cfg: DictConfig) -> None:
         ]
         record_data.extend(result_list)
         publish_float32_array(record_pub, record_data)
+
+        # Keep the final shared map visible until metrics and records are complete.
+        _finish_episode_handshake(termination_reason or "single_agent_terminal")
+
+        if flag_once:
+            break
 
         pbar.update()
         env.current_episode = next(env.episode_iterator)

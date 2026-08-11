@@ -70,8 +70,9 @@ void MapROS::init()
     agents_[id].filtered_depth_cloud2d_.reset(new PointCloud2D());
     agents_[id].under_ground_cloud2d_.reset(new PointCloud2D());
     agents_[id].over_depth_object_cloud_.reset(new PointCloud3D());
+    agents_[id].cached_over_depth_cloud_.reset(new PointCloud3D());
     agents_[id].depth_image_.reset(new cv::Mat);
-    agents_[id].continue_over_depth_count_ = -1;
+    agents_[id].over_depth_missing_frames_ = 0;
     agents_[id].itm_score_ = -1.0;
   }
 
@@ -229,7 +230,8 @@ void MapROS::resetEpisodeState()
     agent.filtered_depth_cloud2d_.reset(new PointCloud2D());
     agent.under_ground_cloud2d_.reset(new PointCloud2D());
     agent.over_depth_object_cloud_.reset(new PointCloud3D());
-    agent.continue_over_depth_count_ = -1;
+    agent.cached_over_depth_cloud_.reset(new PointCloud3D());
+    agent.over_depth_missing_frames_ = 0;
     agent.itm_score_ = -1.0;
   }
 
@@ -285,9 +287,6 @@ void MapROS::detectedObjectCloudCallback(int agent_id, const plan_env::MultipleM
   if (camera_pitch < 1.5)  // Skip if camera not tilted down enough
     return;
 
-  // Backup previous per-agent over-depth object cloud for consistency tracking
-  auto last_over_depth_cloud =
-      boost::make_shared<PointCloud3D>(*agent.over_depth_object_cloud_);
   agent.over_depth_object_cloud_.reset(new PointCloud3D());
 
   // Initialize point cloud processing tools and containers
@@ -356,16 +355,20 @@ void MapROS::detectedObjectCloudCallback(int agent_id, const plan_env::MultipleM
     detected_objects.push_back(detected_object);
   }
 
-  // Maintain per-agent over-depth consistency, then merge into shared cloud.
-  if (agent.continue_over_depth_count_ == -1 &&
-      !agent.over_depth_object_cloud_->points.empty())
-    agent.continue_over_depth_count_ = 0;
-  else if (agent.continue_over_depth_count_ <= 4 && agent.continue_over_depth_count_ >= 0) {
-    agent.continue_over_depth_count_++;
-    agent.over_depth_object_cloud_ = last_over_depth_cloud;
+  // Bridge short over-depth dropouts without overwriting fresh detections.
+  const bool current_over_depth_empty = agent.over_depth_object_cloud_->points.empty();
+  if (!current_over_depth_empty) {
+    agent.cached_over_depth_cloud_.reset(new PointCloud3D(*agent.over_depth_object_cloud_));
+    agent.over_depth_missing_frames_ = 0;
+  }
+  else if (agent.cached_over_depth_cloud_ && !agent.cached_over_depth_cloud_->points.empty() &&
+           agent.over_depth_missing_frames_ < OVER_DEPTH_CACHE_MAX_MISSING_FRAMES) {
+    agent.over_depth_missing_frames_++;
+    agent.over_depth_object_cloud_ = boost::make_shared<PointCloud3D>(*agent.cached_over_depth_cloud_);
   }
   else {
-    agent.continue_over_depth_count_ = -1;
+    agent.cached_over_depth_cloud_.reset(new PointCloud3D());
+    agent.over_depth_missing_frames_ = 0;
   }
 
   // Merge all agents' over-depth clouds into the shared visualization cloud.
@@ -380,7 +383,6 @@ void MapROS::detectedObjectCloudCallback(int agent_id, const plan_env::MultipleM
   *map_->object_map2d_->all_object_clouds_ = *filtered_all_object_cloud;
   vector<int> detected_object_cluster_ids;
   map_->inputObjectCloud2D(detected_objects, detected_object_cluster_ids);
-  getObservationObjectsCloud(agent_id, detected_object_cluster_ids);
   publishObjectVisualizations();
 
   double object_map_process_time = (ros::Time::now() - t1).toSec();
@@ -608,46 +610,6 @@ bool MapROS::interpolateLineAtZ(
   return true;
 }
 
-void MapROS::getObservationObjectsCloud(int agent_id, const vector<int>& filter_object_ids)
-{
-  // Caller already holds map_mutex_ �?? called from within detectedObjectCloudCallback's lock scope
-  AgentState& agent = agents_[agent_id];
-
-  // Downsample depth cloud
-  PointCloud3D::Ptr filtered_depth_cloud(new PointCloud3D());
-  pcl::VoxelGrid<Point3D> voxel_filter;
-  voxel_filter.setInputCloud(agent.depth_cloud_);
-  voxel_filter.setLeafSize(0.1f, 0.1f, 0.1f);
-  voxel_filter.filter(*filtered_depth_cloud);
-
-  // Get bounding boxes
-  vector<Vector3d> bmins, bmaxs;
-  map_->object_map2d_->getObjectBoxes(bmins, bmaxs);
-  vector<char> filter_object_flag(bmins.size(), 0);
-  for (auto filter_object_id : filter_object_ids) filter_object_flag[filter_object_id] = 1;
-
-  pcl::CropBox<Point3D> crop_box_filter;
-  crop_box_filter.setInputCloud(filtered_depth_cloud);
-  vector<pcl::shared_ptr<PointCloud3D>> observation_clouds;
-
-  for (int i = 0; i < (int)bmins.size(); i++) {
-    PointCloud3D::Ptr cloud_filtered(new PointCloud3D);
-    if (filter_object_flag[i])
-      observation_clouds.push_back(cloud_filtered);
-    else {
-      double inf = 0.2f;
-      Eigen::Vector4f min_point(bmins[i][0] - inf, bmins[i][1] - inf, bmins[i][2] - inf, 1.0);
-      Eigen::Vector4f max_point(bmaxs[i][0] + inf, bmaxs[i][1] + inf, bmaxs[i][2] + inf, 1.0);
-      crop_box_filter.setMin(min_point);
-      crop_box_filter.setMax(max_point);
-      crop_box_filter.filter(*cloud_filtered);
-      observation_clouds.push_back(cloud_filtered);
-    }
-  }
-
-  map_->object_map2d_->inputObservationObjectsCloud(observation_clouds, max(0.0, agent.itm_score_));
-}
-
 PointCloud3D::Ptr MapROS::dbscan(const PointCloud3D::Ptr& cloud, double eps, int minPts)
 {
   if (cloud->empty()) {
@@ -780,20 +742,20 @@ void MapROS::publishObjectVisualizations()
   for (const auto& snapshot : snapshots) {
     uint8_t r = 158, g = 158, b = 158;
     uint8_t state = plan_env::ObjectClusterStatus::UNCERTAIN;
-    char state_char = '?';
+    char state_suffix = '?';
     if (snapshot.best_label == 0) {
       r = 229;
       g = 57;
       b = 53;
       state = plan_env::ObjectClusterStatus::TARGET;
-      state_char = 'T';
+      state_suffix = 'T';
     }
     else if (snapshot.best_label > 0) {
       r = 0;
       g = 166;
       b = 214;
       state = plan_env::ObjectClusterStatus::CONFUSION;
-      state_char = 'C';
+      state_suffix = 'C';
     }
 
     for (const auto& cell : snapshot.cells) {
@@ -821,14 +783,14 @@ void MapROS::publishObjectVisualizations()
     marker.pose.position.y = snapshot.centroid.y();
     marker.pose.position.z = 0.32;
     marker.pose.orientation.w = 1.0;
-    marker.scale.z = 0.20;
+    marker.scale.z = 0.16;
     marker.color.r = r / 255.0f;
     marker.color.g = g / 255.0f;
     marker.color.b = b / 255.0f;
     marker.color.a = 1.0f;
     std::ostringstream marker_text;
-    marker_text << "C" << std::setfill('0') << std::setw(3) << snapshot.cluster_id << " "
-                << state_char;
+    marker_text << "C" << std::setfill('0') << std::setw(3) << snapshot.cluster_id
+                << state_suffix;
     marker.text = marker_text.str();
     marker_array.markers.push_back(marker);
 
@@ -868,69 +830,67 @@ void MapROS::publishObjectVisualizations()
   cluster_marker_pub_.publish(marker_array);
   cluster_status_pub_.publish(status_array);
 
-  const int panel_width = 1800;
-  const int row_height = 38;
-  const int panel_height = std::max(120, 76 + row_height * static_cast<int>(snapshots.size()));
+  size_t display_row_count = 0;
+  for (const auto& snapshot : snapshots)
+    display_row_count += std::max<size_t>(1, snapshot.labels.size());
+
+  const int panel_width = 620;
+  const int row_height = 30;
+  const int panel_height =
+      std::max(120, 76 + row_height * static_cast<int>(display_row_count));
   cv::Mat panel(panel_height, panel_width, CV_8UC3, cv::Scalar(24, 24, 27));
-  cv::putText(panel, "Object cluster fusion status (fixed ID order)", cv::Point(18, 28),
-      cv::FONT_HERSHEY_DUPLEX, 0.72, cv::Scalar(245, 245, 245), 1, cv::LINE_AA);
-  cv::putText(panel,
-      "ID    State       Best label       Target: cloud/evidence/obs/conf/value"
-      "              Strongest confusion: label cloud/evidence/obs/conf/value",
+  cv::putText(panel, "Object label scores (fixed cluster order)", cv::Point(18, 28),
+      cv::FONT_HERSHEY_DUPLEX, 0.62, cv::Scalar(245, 245, 245), 1, cv::LINE_AA);
+  cv::putText(panel, "Cluster       Label       Obs              Confidence       Score",
       cv::Point(18, 58), cv::FONT_HERSHEY_DUPLEX, 0.48, cv::Scalar(180, 180, 185), 1,
       cv::LINE_AA);
 
-  auto format_evidence = [](const ObjectLabelSnapshot* label, bool include_name) {
-    if (label == nullptr)
-      return string("-");
-    std::ostringstream out;
-    if (include_name)
-      out << label->label_name << " ";
-    out << label->cloud_points << "/" << label->evidence_points << "/"
-        << label->detection_count << "/" << std::fixed << std::setprecision(3)
-        << label->confidence << "/" << label->evidence_points * label->confidence;
-    return out.str();
-  };
-
-  for (size_t row = 0; row < snapshots.size(); ++row) {
-    const auto& snapshot = snapshots[row];
-    const ObjectLabelSnapshot* target = snapshot.labels.empty() ? nullptr : &snapshot.labels[0];
-    const ObjectLabelSnapshot* strongest_confusion = nullptr;
-    double strongest_value = -1.0;
-    string best_name = "unknown";
-    for (const auto& label : snapshot.labels) {
-      const double value = label.evidence_points * label.confidence;
-      if (label.label_index > 0 && value > strongest_value) {
-        strongest_value = value;
-        strongest_confusion = &label;
-      }
-      if (label.label_index == snapshot.best_label)
-        best_name = label.label_name;
-    }
-
-    string state_name = "UNCERTAIN";
+  size_t display_row = 0;
+  for (const auto& snapshot : snapshots) {
     cv::Scalar row_color(158, 158, 158);
     if (snapshot.best_label == 0) {
-      state_name = "TARGET";
       row_color = cv::Scalar(53, 57, 229);
     }
     else if (snapshot.best_label > 0) {
-      state_name = "CONFUSION";
       row_color = cv::Scalar(214, 166, 0);
     }
 
-    std::ostringstream line;
-    line << "C" << std::setfill('0') << std::setw(3) << snapshot.cluster_id << "  "
-         << std::left << std::setfill(' ') << std::setw(11) << state_name << " "
-         << std::setw(16) << best_name << " " << std::setw(43)
-         << format_evidence(target, false) << " "
-         << format_evidence(strongest_confusion, true);
-    const int y = 84 + static_cast<int>(row) * row_height;
-    if (row % 2 == 1)
-      cv::rectangle(panel, cv::Point(8, y - 23), cv::Point(panel_width - 8, y + 10),
-          cv::Scalar(31, 31, 35), cv::FILLED);
-    cv::putText(panel, line.str(), cv::Point(18, y), cv::FONT_HERSHEY_DUPLEX, 0.52,
-        row_color, 1, cv::LINE_AA);
+    if (snapshot.labels.empty()) {
+      const int y = 84 + static_cast<int>(display_row++) * row_height;
+      std::ostringstream line;
+      line << "C" << std::setfill('0') << std::setw(3) << snapshot.cluster_id
+           << std::left << std::setfill(' ') << std::setw(10) << "" << std::setw(12) << "-"
+           << std::setw(17) << 0 << std::setw(17) << std::fixed << std::setprecision(3) << 0.0
+           << "0.000";
+      cv::putText(panel, line.str(), cv::Point(18, y), cv::FONT_HERSHEY_DUPLEX, 0.52,
+          row_color, 1, cv::LINE_AA);
+      continue;
+    }
+
+    bool first_label = true;
+    for (const auto& label : snapshot.labels) {
+      const int y = 84 + static_cast<int>(display_row) * row_height;
+      if (display_row % 2 == 1)
+        cv::rectangle(panel, cv::Point(8, y - 23), cv::Point(panel_width - 8, y + 8),
+            cv::Scalar(31, 31, 35), cv::FILLED);
+
+      std::ostringstream line;
+      if (first_label) {
+        line << "C" << std::setfill('0') << std::setw(3) << snapshot.cluster_id
+             << std::left << std::setfill(' ') << std::setw(10) << "";
+      }
+      else {
+        line << std::left << std::setfill(' ') << std::setw(14) << "";
+      }
+      line << std::left << std::setw(12) << label.label_index << std::setw(17)
+           << label.detection_count << std::fixed << std::setprecision(3) << std::setw(17)
+           << label.confidence
+           << label.evidence_points * label.confidence;
+      cv::putText(panel, line.str(), cv::Point(18, y), cv::FONT_HERSHEY_DUPLEX, 0.52,
+          row_color, 1, cv::LINE_AA);
+      first_label = false;
+      ++display_row;
+    }
   }
 
   std_msgs::Header image_header;

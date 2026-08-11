@@ -24,13 +24,13 @@ This branch runs the multi-agent evaluation with heterogeneous camera heights:
 The evaluation success distance is:
 
 ```text
-0.2 m
+0.35 m
 ```
 
 Config key:
 
 ```yaml
-success_distance: 0.2
+success_distance: 0.35
 ```
 
 The maximum episode length for evaluation is:
@@ -62,8 +62,9 @@ REACH_DISTANCE = 0.20 m
 SOFT_REACH_DISTANCE = 0.20 m
 ```
 
-Both planner thresholds align with Habitat's evaluation success distance; the
-stuck-recovery branch no longer relaxes the success criterion.
+The C++ planner reach-claim thresholds remain tighter than the Python/Habitat
+evaluation success distance; the stuck-recovery branch no longer relaxes the
+C++ reach-claim criterion.
 
 Multi-agent perception scheduling:
 
@@ -137,11 +138,11 @@ exploration result.
 In `episode_termination: cooperative`, a successful target claim remains a
 global stop condition: if any agent reaches `FINAL_RESULT.REACH_OBJECT`, the C++
 planner broadcasts `STOP`, moves all agents to `FINISH`, and Python evaluates
-the episode outcome. Non-successful per-agent stops no longer end the whole
-episode. If one agent reaches `FINISH` because it is stuck, has no frontier, or
-hits its step limit, that agent is marked done while the other agents continue
-exploring. The episode ends after a successful target claim or after all agents
-are done.
+the episode outcome. Planner failures use the separate `FINISH_FAILURE` state:
+if one agent is stuck or has no usable frontier, only that agent stops while the
+other agents continue exploring against the shared map. The episode ends as an
+overall planner failure only after every agent reaches `FINISH_FAILURE` (with
+the Habitat step budget retained as an independent hard timeout).
 
 Final multi-agent success is still evaluated by Python after episode shutdown:
 the episode is counted as successful if any agent satisfies the ObjectNav stop
@@ -257,19 +258,22 @@ the status table remain stable even when the winning label changes.
 an RViz `Image` display, or use the included `ApexNav.rviz` and
 `ApexNav_Traj.rviz` configs where it is already enabled.
 
-Each table row shows one cluster:
+Each cluster occupies one or more consecutive rows:
 
 ```text
-ID | state | best label | target cloud/evidence/obs/conf/value | strongest confusion cloud/evidence/obs/conf/value
+cluster | label | obs | score
 ```
 
-Rows are always ordered by cluster ID. Existing rows only update their numeric
-values; they are not resorted by score. New clusters append to the bottom of the
-table. This keeps the display stable during live simulation.
+Clusters are always ordered by cluster ID. Every configured candidate label is
+shown on its own row within the cluster, including labels whose observation
+count is currently zero. Existing clusters only update their numeric values;
+they are not resorted by score. New clusters append to the bottom of the table.
+This keeps the display stable during live simulation.
 
 The structured `/object/cluster_status` topic contains all candidate labels for
-each cluster. The image table only shows the target candidate and the strongest
-confusion candidate to keep each row readable.
+each cluster. The image table uses only the numeric label index, observation
+count, and competition score. The map marker is also compact, for example
+`0 obs=4 score=102.316`; cluster state remains visible through marker color.
 
 Field meanings:
 
@@ -280,7 +284,7 @@ Field meanings:
   so it is not always equal to accumulated detected point cloud size.
 - `detection_count`: number of positive detections fused into that label.
 - `fused_confidence`: current fused confidence for that label.
-- `value`: `evidence_points * fused_confidence`, the score used for label
+- `score`: `evidence_points * fused_confidence`, the score used for label
   competition.
 
 ### Detection Class Names

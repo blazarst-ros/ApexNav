@@ -100,12 +100,9 @@ struct FSMData {
     trigger_ = false;
     have_confidence_ = false;
     static_state_ = true;
-    state_str_ = { "INIT", "WAIT_TRIGGER", "PLAN_ACTION", "WAIT_ACTION_FINISH", "PUB_ACTION",
-      "FINISH" };
   }
   // FSM data
   bool trigger_, have_confidence_;
-  std::vector<string> state_str_;
   bool static_state_;
   std::vector<AgentFSMData> agent_;  // per-agent data
 };

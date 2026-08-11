@@ -29,7 +29,6 @@ ObjectMap2D::ObjectMap2D(SDFMap2D* sdf_map, ros::NodeHandle& nh)
   min_confidence_ = -1.0;  // Default to accept all detections
   nh.param("object/min_observation_num", min_observation_num_, 2);
   nh.param("object/fusion_type", fusion_type_, 1);
-  nh.param("object/use_observation", use_observation_, true);
   nh.param("object/vis_cloud", is_vis_cloud_, false);
 
   // Setup ROS communication
@@ -122,82 +121,6 @@ void ObjectMap2D::getObjectSnapshots(vector<ObjectClusterSnapshot>& snapshots) c
       snapshot.labels.push_back(label_snapshot);
     }
     snapshots.push_back(snapshot);
-  }
-}
-
-/**
- * @brief Process observation clouds to adjust detection confidence
- *
- * This function handles negative evidence from visual observations where
- * objects were expected but not detected. It computes spatial overlap
- * between observation regions and existing detections to reduce confidence
- * scores, improving the robustness of the semantic mapping system.
- *
- * @param observation_clouds Vector of point clouds representing observed regions
- * @param itm_score Image-text matching score for context weighting
- */
-void ObjectMap2D::inputObservationObjectsCloud(
-    const vector<pcl::shared_ptr<pcl::PointCloud<pcl::PointXYZ>>> observation_clouds,
-    const double& itm_score)
-{
-  // Only process observations in fusion mode with observation enabled
-  if (fusion_type_ != 1 || !use_observation_)
-    return;
-
-  // Process each observation cloud against corresponding objects
-  for (int i = 0; i < (int)observation_clouds.size(); i++) {
-    auto observation_cloud = observation_clouds[i];
-    auto object = objects_[i];
-
-    if (observation_cloud->points.empty())
-      continue;
-
-    // Check overlap with each possible object classification
-    for (int label = 0; label < (int)object.confidence_scores_.size(); ++label) {
-      if (object.confidence_scores_[label] < 1e-3)
-        continue;  // Skip labels with negligible confidence
-
-      // Setup spatial search for overlap computation
-      pcl::KdTreeFLANN<pcl::PointXYZ> kdtree;
-      kdtree.setInputCloud(observation_cloud);
-      double distance_threshold = leaf_size_ * 1.1;  // Spatial overlap threshold
-      int overlap_count = 0;
-
-      // Count overlapping points between object and observation clouds
-      for (const auto& point : object.clouds_[label]->points) {
-        std::vector<int> point_idx_search;
-        std::vector<float> point_squared_distance;
-        if (kdtree.nearestKSearch(point, 1, point_idx_search, point_squared_distance) > 0) {
-          // Points within threshold are considered overlapping
-          if (point_squared_distance[0] <= distance_threshold * distance_threshold) {
-            overlap_count++;
-          }
-        }
-      }
-
-      // Skip if no spatial overlap detected
-      if (overlap_count == 0)
-        continue;
-
-      // Update confidence scores based on negative observation evidence
-      auto& merged_object = objects_[i];
-      merged_object.observation_cloud_sums_[label] += overlap_count;
-      int total_last = merged_object.clouds_[label]->points.size();
-      double confidence_last = merged_object.confidence_scores_[label];
-      int observation_now = overlap_count;
-      double confidence_now = 0.0;  // Negative evidence has zero confidence
-      if (label == 0)
-        confidence_now = itm_score;  // Use ITM score for primary label
-      int total_now = merged_object.clouds_[label]->points.size();
-
-      // Apply confidence fusion algorithm
-      merged_object.confidence_scores_[label] = fusionConfidenceScore(total_last, confidence_last,
-          observation_now, confidence_now, total_now, merged_object.observation_cloud_sums_[label]);
-      printFusionInfo(merged_object, label, "[Observation]");
-      // ROS_WARN("[Observation] id = %d label = %d overlap_count = %d object_cloud = %ld",
-      //     merged_object.id_, label, overlap_count, object.clouds_[label]->points.size());
-    }
-    updateObjectBestLabel(i);
   }
 }
 

@@ -124,7 +124,8 @@ source ./devel/setup.bash
 
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 export LD_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu:/opt/ros/noetic/lib:$LD_LIBRARY_PATH
-roslaunch exploration_manager exploration.launch
+#roslaunch exploration_manager exploration.launch
+ roslaunch exploration_manager exploration.launch 2>&1 | tee /home/blazarst/ApexNav/RuntimeData/exploration_strategy/launch.txt
 
 ################################              #############################################33
 

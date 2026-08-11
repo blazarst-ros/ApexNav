@@ -692,7 +692,8 @@ bool ExplorationManager::searchObjectPath(const Vector3d& start,
     const pcl::shared_ptr<pcl::PointCloud<pcl::PointXYZ>>& object_cloud,
     Eigen::Vector2d& refined_pos, std::vector<Eigen::Vector2d>& refined_path)
 {
-  const double max_search_time = 0.2;  // Maximum planning time per attempt
+  constexpr double kObjectAstarMaxSearchTime = 0.4;
+  const double max_search_time = kObjectAstarMaxSearchTime;  // Maximum planning time per attempt
   Vector2d start2d = Vector2d(start(0), start(1));
 
   // Find nearest accessible point in object cloud

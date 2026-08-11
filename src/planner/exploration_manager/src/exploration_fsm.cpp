@@ -2,6 +2,7 @@
 #include <exploration_manager/exploration_manager.h>
 #include <exploration_manager/exploration_fsm.h>
 #include <exploration_manager/exploration_data.h>
+#include <exploration_manager/fsm_policy.h>
 #include <vis_utils/planning_visualization.h>
 #include <std_msgs/Int32MultiArray.h>
 #include <boost/bind/bind.hpp>
@@ -51,6 +52,8 @@ void ExplorationFSM::init(ros::NodeHandle& nh)
   expl_state_pub_ = nh.advertise<std_msgs::Int32>("/ros/expl_state", 10);
   expl_result_pub_ = nh.advertise<std_msgs::Int32>("/ros/expl_result", 10);
   expl_result_all_pub_ = nh.advertise<std_msgs::Int32MultiArray>("/ros/expl_result_all", 10);
+  final_result_all_pub_ =
+      nh.advertise<std_msgs::Int32MultiArray>("/ros/final_result_all", 10);
   reach_claim_pub_ = nh.advertise<std_msgs::Int32MultiArray>("/ros/reach_claim", 10);
   for (int i = 0; i < NUM_AGENTS; ++i) {
     action_pub_[i] = nh.advertise<std_msgs::Int32>(
@@ -94,13 +97,28 @@ void ExplorationFSM::FSMCallback(const ros::TimerEvent& e)
       }
 
       case ROS_STATE::FINISH: {
+        ROS_WARN_THROTTLE(1.0, "Agent %d: Waiting in reach-claim team terminal state.", agent_idx);
+        break;
+      }
+
+      case ROS_STATE::FINISH_FAILURE: {
         if (!ad.have_finished_) {
           ad.have_finished_ = true;
+          if (agent_idx < static_cast<int>(expl_manager_->ed_->strategy_infos_.size())) {
+            auto& info = expl_manager_->ed_->strategy_infos_[agent_idx];
+            info.agent_id = agent_idx;
+            info.mode = "FINISH_FAILURE";
+            info.target_type = "NONE";
+            info.target_id = -1;
+            info.path_length = -1.0;
+          }
           std_msgs::Int32 action_msg;
           action_msg.data = ACTION::STOP;
           action_pub_[agent_idx].publish(action_msg);
+          publishExplorationStrategy(agent_idx);
+          ROS_WARN("Agent %d failed exploration (final_result=%d); other agents continue.",
+              agent_idx, ad.final_result_);
         }
-        ROS_WARN_THROTTLE(1.0, "Agent %d: Finish One Episode!!!", agent_idx);
         break;
       }
 
@@ -151,7 +169,7 @@ void ExplorationFSM::FSMCallback(const ros::TimerEvent& e)
               ad.final_result_ == FINAL_RESULT::SEARCH_OBJECT)
             transitState(agent_idx, ROS_STATE::PUB_ACTION, "FSM");
           else
-            transitState(agent_idx, ROS_STATE::FINISH, "FSM");
+            transitState(agent_idx, ROS_STATE::FINISH_FAILURE, "Planner Failure");
         }
         visualize();
         break;
@@ -177,14 +195,19 @@ void ExplorationFSM::FSMCallback(const ros::TimerEvent& e)
 void ExplorationFSM::publishPlannerState()
 {
   std_msgs::Int32MultiArray state_all_msg;
+  std_msgs::Int32MultiArray final_result_all_msg;
   state_all_msg.data.resize(NUM_AGENTS);
-  for (int agent_idx = 0; agent_idx < NUM_AGENTS; ++agent_idx)
+  final_result_all_msg.data.resize(NUM_AGENTS);
+  for (int agent_idx = 0; agent_idx < NUM_AGENTS; ++agent_idx) {
     state_all_msg.data[agent_idx] = state_[agent_idx];
+    final_result_all_msg.data[agent_idx] = fd_->agent_[agent_idx].final_result_;
+  }
 
   std_msgs::Int32 ros_state_msg;
   ros_state_msg.data = state_[0];
   ros_state_pub_.publish(ros_state_msg);
   ros_state_all_pub_.publish(state_all_msg);
+  final_result_all_pub_.publish(final_result_all_msg);
 }
 
 void ExplorationFSM::publishExplorationResults()
@@ -247,6 +270,10 @@ int ExplorationFSM::callActionPlanner(int agent_idx)
   Eigen::Vector2d last_pos = Eigen::Vector2d(ad.last_start_pos_(0), ad.last_start_pos_(1));
   double current_yaw = ad.start_yaw_;
   ad.last_start_pos_ = ad.start_pt_;
+  const double planar_displacement = (current_pos - last_pos).norm();
+  const int last_action = ad.newest_action_;
+  const bool failed_forward = isFailedForwardAction(
+      last_action, ACTION::MOVE_FORWARD, planar_displacement, stucking_distance);
 
   // Reach the object - check if close enough to target object
   if (ad.final_result_ == FINAL_RESULT::SEARCH_OBJECT &&
@@ -257,9 +284,7 @@ int ExplorationFSM::callActionPlanner(int agent_idx)
   }
 
   // Escape-from-stuck logic
-  int last_action = ad.newest_action_;
-  if (!ad.escape_stucking_flag_ && (current_pos - last_pos).norm() < stucking_distance &&
-      last_action == ACTION::MOVE_FORWARD) {
+  if (!ad.escape_stucking_flag_ && failed_forward) {
     if (ad.final_result_ == FINAL_RESULT::SEARCH_OBJECT &&
         (current_pos - ad.planned_next_pos_).norm() < soft_reach_distance) {
       ROS_ERROR("Agent %d: Reach the object successfully!!!", agent_idx);
@@ -283,6 +308,12 @@ int ExplorationFSM::callActionPlanner(int agent_idx)
       ad.escape_stucking_count_ = 0;
       ad.escape_stucking_pos_ = current_pos;
       ad.escape_stucking_yaw_ = current_yaw;
+    }
+    else {
+      markForwardCollision(current_pos, current_yaw);
+      ad.stucking_action_count_ = 0;
+      ad.replan_flag_ = true;
+      ad.dormant_frontier_flag_ = true;
     }
   }
 
@@ -315,17 +346,9 @@ int ExplorationFSM::callActionPlanner(int agent_idx)
       ad.newest_action_ = ACTION::MOVE_FORWARD;
     else {
       ad.escape_stucking_flag_ = false;
-      expl_manager_->sdf_map_->setForceOccGrid(current_pos);
-      double forward_distance = FSMConstants::FORWARD_DISTANCE;
-      Eigen::Vector2d forward_pos = ad.escape_stucking_pos_;
-      forward_pos(0) += forward_distance * cos(ad.escape_stucking_yaw_);
-      forward_pos(1) += forward_distance * sin(ad.escape_stucking_yaw_);
-      expl_manager_->sdf_map_->setForceOccGrid(forward_pos);
-      forward_distance = FSMConstants::FORWARD_DISTANCE * 2.0;
-      forward_pos = ad.escape_stucking_pos_;
-      forward_pos(0) += forward_distance * cos(ad.escape_stucking_yaw_);
-      forward_pos(1) += forward_distance * sin(ad.escape_stucking_yaw_);
-      expl_manager_->sdf_map_->setForceOccGrid(forward_pos);
+      markForwardCollision(ad.escape_stucking_pos_, ad.escape_stucking_yaw_);
+      ad.stucking_action_count_ = 0;
+      ad.replan_flag_ = true;
       ad.dormant_frontier_flag_ = true;
       Vector3d stucking_point(
           ad.escape_stucking_pos_(0), ad.escape_stucking_pos_(1), ad.escape_stucking_yaw_);
@@ -424,21 +447,15 @@ int ExplorationFSM::callActionPlanner(int agent_idx)
     }
   }
 
-  // Track consecutive stuck actions per-agent
-  if ((current_pos - last_pos).norm() < stucking_distance) {
+  // Track failed forward attempts only. Turns and camera actions are not
+  // evidence that the robot is physically stuck.
+  if (failed_forward) {
     ad.stucking_action_count_++;
-    ROS_ERROR_COND(ad.stucking_action_count_ > 15, "Agent %d: Stucking action count = %d",
-        agent_idx, ad.stucking_action_count_);
+    ROS_ERROR("Agent %d: Failed forward action count = %d", agent_idx,
+        ad.stucking_action_count_);
   }
-  else
+  else if (planar_displacement >= stucking_distance)
     ad.stucking_action_count_ = 0;
-
-  // If stuck for too long, terminate episode for this agent
-  if (ad.stucking_action_count_ >= FSMConstants::MAX_STUCKING_COUNT) {
-    ROS_ERROR("Agent %d: Stuck for too long, stopping episode.", agent_idx);
-    final_res = FINAL_RESULT::STUCKING;
-    return final_res;
-  }
 
   // Plan specific action based on exploration result
   if (expl_res == EXPL_RESULT::SEARCH_EXTREME)
@@ -738,6 +755,17 @@ void ExplorationFSM::resetEpisode()
   ROS_WARN("Episode reset — FSM back to INIT, maps cleared.");
 }
 
+void ExplorationFSM::markForwardCollision(const Vector2d& origin, double yaw)
+{
+  for (int step = 1; step <= 2; ++step) {
+    const double distance = FSMConstants::FORWARD_DISTANCE * step;
+    Vector2d forward_pos = origin;
+    forward_pos(0) += distance * cos(yaw);
+    forward_pos(1) += distance * sin(yaw);
+    expl_manager_->sdf_map_->setForceOccGrid(forward_pos);
+  }
+}
+
 // Receive Habitat state messages
 void ExplorationFSM::habitatStateCallback(const std_msgs::Int32ConstPtr& msg)
 {
@@ -762,7 +790,8 @@ void ExplorationFSM::frontierCallback(const ros::TimerEvent& e)
   {
     std::lock_guard<std::mutex> lock(data_mutex_);
     for (int i = 0; i < NUM_AGENTS; ++i) {
-      if (state_[i] != ROS_STATE::WAIT_TRIGGER && state_[i] != ROS_STATE::FINISH) {
+      if (state_[i] != ROS_STATE::WAIT_TRIGGER && state_[i] != ROS_STATE::FINISH &&
+          state_[i] != ROS_STATE::FINISH_FAILURE) {
         all_wait = false;
         break;
       }
@@ -914,8 +943,8 @@ void ExplorationFSM::transitState(int agent_idx, ROS_STATE new_state, string pos
 {
   int pre_s = int(state_[agent_idx]);
   state_[agent_idx] = new_state;
-  cout << "[Agent " << agent_idx << " " + pos_call + "]: from " +
-              fd_->state_str_[pre_s] + " to " + fd_->state_str_[int(new_state)]
+  cout << "[Agent " << agent_idx << " " + pos_call + "]: from " + stateName(pre_s) +
+              " to " + stateName(int(new_state))
        << endl;
 }
 }  // namespace apexnav_planner

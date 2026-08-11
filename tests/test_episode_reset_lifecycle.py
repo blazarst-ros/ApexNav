@@ -7,6 +7,8 @@ MANAGER_HEADER = Path("src/planner/exploration_manager/include/exploration_manag
 MAP_ROS_SOURCE = Path("src/planner/plan_env/src/map_ros.cpp")
 MAP_ROS_HEADER = Path("src/planner/plan_env/include/plan_env/map_ros.h")
 SDF_SOURCE = Path("src/planner/plan_env/src/sdf_map2d.cpp")
+FSM_HEADER = Path("src/planner/exploration_manager/include/exploration_manager/exploration_fsm.h")
+PYTHON_PARAMS = Path("params.py")
 
 
 def test_episode_reset_clears_map_ros_agent_state_under_map_lock():
@@ -97,3 +99,56 @@ def test_python_reset_handshake_waits_longer_than_map_reset_before_retrying():
     assert "RESET_ACK_TIMEOUT_SEC = 10.0" in source
     assert "RESET_STALE_TIMEOUT_SEC = 15.0" in source
     assert "wait_for_stale=RESET_STALE_TIMEOUT_SEC" in source
+
+
+def test_failure_terminal_state_is_wire_compatible_between_cpp_and_python():
+    header = FSM_HEADER.read_text(encoding="utf-8")
+    params = PYTHON_PARAMS.read_text(encoding="utf-8")
+
+    assert "FINISH = 5" in params
+    assert "FINISH_FAILURE = 6" in params
+    assert "FINISH = 5," in header
+    assert "FINISH_FAILURE = 6" in header
+
+
+def test_cpp_state_names_cover_failure_state_without_vector_indexing():
+    source = FSM_SOURCE.read_text(encoding="utf-8")
+    data_header = Path(
+        "src/planner/exploration_manager/include/exploration_manager/exploration_data.h"
+    ).read_text(encoding="utf-8")
+
+    assert "stateName(pre_s)" in source
+    assert "stateName(int(new_state))" in source
+    assert "state_str_" not in data_header
+
+
+def test_cpp_routes_planner_failures_to_local_failure_terminal_state():
+    source = FSM_SOURCE.read_text(encoding="utf-8")
+
+    assert "case ROS_STATE::FINISH_FAILURE:" in source
+    assert 'transitState(agent_idx, ROS_STATE::FINISH_FAILURE, "Planner Failure")' in source
+    assert 'transitState(stop_idx, ROS_STATE::FINISH, "Reach Object")' in source
+    assert "broadcasting STOP to all agents" in source
+
+
+def test_failure_terminal_state_is_idle_without_resetting_shared_maps():
+    source = FSM_SOURCE.read_text(encoding="utf-8")
+    failure_case = source[
+        source.index("case ROS_STATE::FINISH_FAILURE:") :
+        source.index("case ROS_STATE::PLAN_ACTION:")
+    ]
+    frontier_callback = source[source.index("void ExplorationFSM::frontierCallback") :]
+
+    assert "action_pub_[agent_idx].publish(action_msg);" in failure_case
+    assert "resetEpisode();" not in failure_case
+    assert "ROS_STATE::FINISH_FAILURE" in frontier_callback
+
+
+def test_python_reports_episode_before_requesting_planner_reset():
+    source = Path("habitat_evaluation.py").read_text(encoding="utf-8")
+
+    report_pos = source.index("print(table1)")
+    record_pos = source.index("write_record(", report_pos)
+    reset_pos = source.index("_finish_episode_handshake(", report_pos)
+
+    assert report_pos < record_pos < reset_pos

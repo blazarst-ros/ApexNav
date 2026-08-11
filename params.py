@@ -13,6 +13,7 @@ class ROS_STATE:
     WAIT_ACTION_FINISH = 3
     PUB_ACTION = 4
     FINISH = 5
+    FINISH_FAILURE = 6
 
 
 class ACTION:

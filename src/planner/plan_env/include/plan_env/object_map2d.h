@@ -123,9 +123,6 @@ public:
 
   void reset();  ///< Clear all object data for a new episode
   int searchSingleObjectCluster(const DetectedObject& detected_object);
-  void inputObservationObjectsCloud(
-      const vector<pcl::shared_ptr<pcl::PointCloud<pcl::PointXYZ>>> observation_clouds,
-      const double& itm_score);
   void setConfidenceThreshold(double val);
   void setClassNames(const vector<string>& class_names);
   void getObjectSnapshots(vector<ObjectClusterSnapshot>& snapshots) const;
@@ -193,7 +190,6 @@ private:
   vector<string> class_names_;     ///< Label dictionary; index 0 is the target
 
   // Algorithm parameters
-  bool use_observation_;     ///< Whether to use observation-based confidence reduction
   bool is_vis_cloud_;        ///< Whether to publish visualization clouds
   int fusion_type_;          ///< Confidence fusion algorithm type (0=replace, 1=weighted, 2=max)
   int min_observation_num_;  ///< Minimum observations required for confidence

@@ -55,6 +55,8 @@ using PointCloud2D = pcl::PointCloud<Point2D>;  ///< 2D point cloud type for occ
 namespace apexnav_planner {
 class SDFMap2D;
 
+static constexpr int OVER_DEPTH_CACHE_MAX_MISSING_FRAMES = 8;
+
 /// Per-agent sensor state. Each agent has independent camera pose, depth buffer,
 /// and ITM score, but all agents write to the shared SDFMap2D + ObjectMap2D.
 struct AgentState {
@@ -66,8 +68,9 @@ struct AgentState {
   PointCloud2D::Ptr filtered_depth_cloud2d_;  ///< Filtered 2D cloud for occupancy mapping
   PointCloud2D::Ptr under_ground_cloud2d_;    ///< Virtual ground ground points for deferred map write
   PointCloud3D::Ptr over_depth_object_cloud_;  ///< Per-agent over-depth object cloud for consistency tracking
+  PointCloud3D::Ptr cached_over_depth_cloud_;  ///< Last valid over-depth cloud for short loss bridging
 
-  int continue_over_depth_count_ = -1;  ///< Over-depth consistency counter
+  int over_depth_missing_frames_ = 0;  ///< Consecutive frames without fresh over-depth cloud
   double itm_score_ = -1.0;            ///< Current image-text matching score
 };
 
@@ -104,8 +107,6 @@ private:
   // Data processing functions (all take agent_id to index agents_[agent_id])
   void processDepthImage(int agent_id);           ///< Process raw depth image into 3D point cloud
   void filterPointCloudToXY(int agent_id);        ///< Filter 3D points to 2D occupancy grid
-  void getObservationObjectsCloud(int agent_id,
-      const std::vector<int>& filter_object_ids); ///< Extract undetected objects from depth data
 
   // Utility functions
   bool interpolateLineAtZ(

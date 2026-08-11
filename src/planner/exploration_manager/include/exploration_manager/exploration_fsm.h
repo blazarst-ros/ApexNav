@@ -51,7 +51,6 @@ constexpr double FORCE_DORMANT_DISTANCE = 0.35;  // force dormant frontier if ve
 constexpr double MIN_SAFE_DISTANCE = 0.15;       // min safe distance to obstacles
 
 // Counters / thresholds
-constexpr int MAX_STUCKING_COUNT = 25;           // max consecutive stuck actions -> stop
 constexpr int MAX_STUCKING_NEXT_POS_COUNT = 14;  // times next_pos unchanged while stuck
 
 // Cost weights
@@ -72,7 +71,15 @@ class PlanningVisualization;
 struct FSMParam;
 struct FSMData;
 
-enum ROS_STATE { INIT, WAIT_TRIGGER, PLAN_ACTION, WAIT_ACTION_FINISH, PUB_ACTION, FINISH };
+enum ROS_STATE {
+  INIT = 0,
+  WAIT_TRIGGER = 1,
+  PLAN_ACTION = 2,
+  WAIT_ACTION_FINISH = 3,
+  PUB_ACTION = 4,
+  FINISH = 5,
+  FINISH_FAILURE = 6
+};
 enum ACTION { STOP, MOVE_FORWARD, TURN_LEFT, TURN_RIGHT, TURN_DOWN, TURN_UP };
 enum HABITAT_STATE { READY, ACTION_EXEC, ACTION_FINISH, EPISODE_FINISH };
 class ExplorationFSM {
@@ -93,7 +100,8 @@ private:
   ros::Subscriber trigger_sub_, odom_sub_[NUM_AGENTS], habitat_state_sub_, confidence_threshold_sub_;
   ros::Publisher action_pub_[NUM_AGENTS], expl_result_agent_pub_[NUM_AGENTS],
       exploration_strategy_pub_[NUM_AGENTS], ros_state_pub_, ros_state_all_pub_,
-      expl_state_pub_, expl_result_pub_, expl_result_all_pub_, reach_claim_pub_;
+      expl_state_pub_, expl_result_pub_, expl_result_all_pub_, final_result_all_pub_,
+      reach_claim_pub_;
   ros::Publisher robot_marker_pub_[NUM_AGENTS];
 
   /* Action Planner */
@@ -108,6 +116,7 @@ private:
   double computeActionSafetyCost(const Vector2d& current_pos, const Vector2d& step);
   double computeActionTotalCost(const Vector2d& current_pos, double current_yaw,
       const Vector2d& target_pos, const Vector2d& step);
+  void markForwardCollision(const Vector2d& origin, double yaw);
 
   /* Helper functions */
   bool updateFrontierAndObject();

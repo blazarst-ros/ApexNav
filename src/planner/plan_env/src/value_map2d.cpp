@@ -45,11 +45,14 @@ void ValueMap::updateValueMap(const Vector2d& sensor_pos, const double& sensor_y
     double last_value = value_buffer_[adr];
 
     // Apply confidence-weighted fusion with quadratic confidence combination
+    double total_confidence = now_confidence + last_confidence;
+    if (total_confidence <= 1e-9)
+      continue;
     confidence_buffer_[adr] =
         (now_confidence * now_confidence + last_confidence * last_confidence) /
-        (now_confidence + last_confidence);
+        total_confidence;
     value_buffer_[adr] = (now_confidence * now_value + last_confidence * last_value) /
-                         (now_confidence + last_confidence);
+                         total_confidence;
   }
 }
 
