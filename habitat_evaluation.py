@@ -71,7 +71,11 @@ from plan_env.msg import MultipleMasksWithConfidence, Stage1Detection
 
 # Local project imports
 from basic_utils.failure_check.count_files import count_files_in_directory
-from basic_utils.failure_check.failure_check import check_failure, is_on_same_floor
+from basic_utils.failure_check.failure_check import (
+    check_failure,
+    get_reach_claim_outcome,
+    is_on_same_floor,
+)
 from basic_utils.object_point_cloud_utils.object_point_cloud import (
     get_object_point_cloud,
 )
@@ -163,13 +167,22 @@ def ros_state_callback(msg):
 def ros_final_state_callback(msg):
     global final_state, mission_reached_object
     if msg.data == FINAL_RESULT.REACH_OBJECT:
-        # Treat a planner goal claim as an episode-level stop request.
-        # Evaluation still checks Habitat distance at episode end, so a wrong
-        # goal claim can be classified as "false positive" like single-agent.
-        mission_reached_object = True
-        final_state = FINAL_RESULT.REACH_OBJECT
-    elif not mission_reached_object:
+        # The atomic /ros/reach_claim event supplies the declaring agent.
+        # Do not infer it from this legacy global state message.
+        return
+    if not mission_reached_object:
         final_state = msg.data
+
+
+def ros_reach_claim_callback(msg):
+    """Record the agent that declared arrival at an object candidate."""
+    global final_state, mission_reached_object, reach_claim_agent_idx
+    if len(msg.data) != 2 or msg.data[1] != FINAL_RESULT.REACH_OBJECT:
+        rospy.logwarn("Ignoring malformed /ros/reach_claim message: %s", list(msg.data))
+        return
+    reach_claim_agent_idx = int(msg.data[0])
+    mission_reached_object = True
+    final_state = FINAL_RESULT.REACH_OBJECT
 
 
 def ros_expl_result_callback(msg):
@@ -490,7 +503,7 @@ def _get_agent_distance_to_goal(env, agent_idx: int):
 def main(cfg: DictConfig) -> None:
     global msg_observations, global_action, ros_state, fusion_threshold
     global ros_pub, trigger_pub, obj_point_cloud_pub, confidence_threshold_pub
-    global final_state, expl_result, mission_reached_object
+    global final_state, expl_result, mission_reached_object, reach_claim_agent_idx
 
     multi_agent = _is_multi_agent(cfg)
     num_agents = cfg.get("num_agents", 1)
@@ -525,6 +538,7 @@ def main(cfg: DictConfig) -> None:
     final_state = 0
     expl_result = 0
     mission_reached_object = False
+    reach_claim_agent_idx = None
     result_list = [0] * len(RESULT_TYPES)
 
     cfg = patch_config(cfg)
@@ -644,6 +658,7 @@ def main(cfg: DictConfig) -> None:
 
     rospy.Subscriber("/ros/state_all", Int32MultiArray, ros_all_state_callback, queue_size=10)
     rospy.Subscriber("/ros/expl_state", Int32, ros_final_state_callback, queue_size=10)
+    rospy.Subscriber("/ros/reach_claim", Int32MultiArray, ros_reach_claim_callback, queue_size=10)
     rospy.Subscriber("/ros/expl_result", Int32, ros_expl_result_callback, queue_size=10)
     state_pub = rospy.Publisher("/habitat/state", Int32, queue_size=30)
     trigger_pub = rospy.Publisher("/move_base_simple/goal", PoseStamped, queue_size=10)
@@ -696,6 +711,7 @@ def main(cfg: DictConfig) -> None:
         final_state = 0
         expl_result = 0
         mission_reached_object = False
+        reach_claim_agent_idx = None
 
         if flag_once:
             while env_count:
@@ -719,6 +735,7 @@ def main(cfg: DictConfig) -> None:
                 "vis_frames": [],
                 "finished": False,
                 "stop_called": False,
+                "stop_executed": False,
                 "viewpoint_steps_since_perception": perception_interval_steps,
             }
 
@@ -846,30 +863,36 @@ def main(cfg: DictConfig) -> None:
         rate = rospy.Rate(10)
         global_action = None
         perception_cursor = 0
+        reach_claim_distance = None
+        reach_claim_stop_executed = False
+        reach_stop_queued = False
 
-        def _stop_all_agents_for_evaluation():
-            print("Goal claim received from one agent; stopping all agents for evaluation.")
+        def _queue_reach_claim_stops():
+            """Queue real Habitat STOP actions after an atomic reach claim."""
+            nonlocal reach_claim_distance, reach_stop_queued
+            if reach_claim_agent_idx is None or not 0 <= reach_claim_agent_idx < num_agents:
+                raise RuntimeError("Received REACH_OBJECT without a valid claiming agent")
+
+            claim_agent_name = agent_names[reach_claim_agent_idx]
+            reach_claim_distance = _get_agent_distance_to_goal(env, reach_claim_agent_idx)
+            agent_states[claim_agent_name]["distance_to_goal"] = reach_claim_distance
+            print(
+                "Goal claim received from "
+                f"{claim_agent_name}; executing STOP for all agents for evaluation."
+            )
             for stop_agent_name in agent_names:
-                ast = agent_states[stop_agent_name]
-                dtg = _get_agent_distance_to_goal(env, agent_names.index(stop_agent_name))
-                ast["distance_to_goal"] = min(ast["distance_to_goal"], dtg)
-                if dtg <= success_distance:
-                    ast["near_object"] = 1
-                    ast["pass_object"] = max(ast["pass_object"], 1)
-                ast["stop_called"] = True
-                ast["success"] = int(_is_successful_stop(dtg, success_distance, ast["stop_called"]))
-                ast["finished"] = True
+                agent_states[stop_agent_name]["global_action"] = ACTION.STOP
             agent_actions.clear()
+            reach_stop_queued = True
 
         while not rospy.is_shutdown():
             # ── Termination check ──
             if multi_agent:
-                if mission_reached_object:
-                    _stop_all_agents_for_evaluation()
-                    break
+                if mission_reached_object and not reach_stop_queued:
+                    _queue_reach_claim_stops()
 
                 for agent_idx, agent_name in enumerate(agent_names):
-                    if ros_all_states[agent_idx] == ROS_STATE.FINISH:
+                    if not reach_stop_queued and ros_all_states[agent_idx] == ROS_STATE.FINISH:
                         agent_states[agent_name]["finished"] = True
 
                 if termination_policy == "cooperative":
@@ -877,14 +900,14 @@ def main(cfg: DictConfig) -> None:
                         agent_states[a]["finished"] or agent_states[a]["count_steps"] >= max_episode_steps
                         for a in agent_names
                     )
-                    if all_done:
+                    if all_done and not reach_stop_queued:
                         break
                 else:
                     all_done = all(
                         agent_states[a]["finished"] or agent_states[a]["count_steps"] >= max_episode_steps
                         for a in agent_names
                     )
-                    if all_done:
+                    if all_done and not reach_stop_queued:
                         break
             else:
                 is_feasible = 0
@@ -933,9 +956,6 @@ def main(cfg: DictConfig) -> None:
                             action_code = ACTION.STOP
                         agent_states[aname]["global_action"] = action_code
                     agent_actions.pop(agent_idx, None)
-                if mission_reached_object:
-                    _stop_all_agents_for_evaluation()
-                    break
             else:
                 if global_action is not None:
                     if (
@@ -953,6 +973,7 @@ def main(cfg: DictConfig) -> None:
             movement_action_agents = set()
             viewpoint_action_agents = set()
             action_count_agents = set()
+            stop_action_agents = set()
             single_action_is_movement = False
             single_action_changes_viewpoint = False
             single_action_counted = False
@@ -1007,7 +1028,7 @@ def main(cfg: DictConfig) -> None:
                 elif g_action == ACTION.STOP:
                     action = HabitatSimActions.stop
                     ast["stop_called"] = True
-                    ast["finished"] = True
+                    stop_action_agents.add(agent_name)
                     if not multi_agent:
                         single_action_counted = True
 
@@ -1015,10 +1036,6 @@ def main(cfg: DictConfig) -> None:
                     action_dict[agent_name] = action
                 else:
                     single_action = action
-
-            if multi_agent and mission_reached_object:
-                _stop_all_agents_for_evaluation()
-                break
 
             if not any_agent_acting:
                 # Still publish odom so the C++ planner and RViz stay updated
@@ -1047,9 +1064,6 @@ def main(cfg: DictConfig) -> None:
                 }
                 if active_actions:
                     observations = _multi_agent_step(env, active_actions, agent_names)
-                if mission_reached_object:
-                    _stop_all_agents_for_evaluation()
-                    break
                 # Update task measurements for the default agent (for spl, etc.)
                 # Build a flat observation dict from the per-agent split format
                 # and pick a non-stop action to avoid incorrectly setting is_stop_called.
@@ -1073,8 +1087,21 @@ def main(cfg: DictConfig) -> None:
                     task=env._task,
                     observations=flat_obs,
                 )
+                for agent_name in stop_action_agents:
+                    if agent_name in active_actions:
+                        agent_states[agent_name]["stop_executed"] = True
+                        agent_states[agent_name]["finished"] = True
+                if (
+                    reach_claim_agent_idx is not None
+                    and agent_names[reach_claim_agent_idx] in stop_action_agents
+                ):
+                    reach_claim_stop_executed = agent_states[
+                        agent_names[reach_claim_agent_idx]
+                    ]["stop_executed"]
             else:
                 observations = env.step(single_action)
+                if single_action == HabitatSimActions.stop:
+                    agent_states[agent_names[0]]["stop_executed"] = True
                 if env.episode_over:
                     break
 
@@ -1101,9 +1128,9 @@ def main(cfg: DictConfig) -> None:
                     # Compute per-agent distance to goal via simulator
                     agent_idx = agent_names.index(agent_name)
                     dtg = _get_agent_distance_to_goal(env, agent_idx)
-                    ast["distance_to_goal"] = min(ast["distance_to_goal"], dtg)
+                    ast["distance_to_goal"] = dtg
 
-                    if dtg <= success_distance:
+                    if dtg < success_distance:
                         ast["near_object"] = 1
                         ast["pass_object"] = max(ast["pass_object"], 1)
                     ast["success"] = int(_is_successful_stop(dtg, success_distance, ast["stop_called"]))
@@ -1273,7 +1300,7 @@ def main(cfg: DictConfig) -> None:
                     )
 
                 ast["distance_to_goal"] = info["distance_to_goal"]
-                if ast["distance_to_goal"] <= success_distance and ast["pass_object"] == 0:
+                if ast["distance_to_goal"] < success_distance and ast["pass_object"] == 0:
                     ast["pass_object"] = 1
                 ast["success"] = info["success"]
                 ast["spl"] = info["spl"]
@@ -1301,12 +1328,18 @@ def main(cfg: DictConfig) -> None:
         if multi_agent:
             any_success = any(agent_states[a]["success"] == 1 for a in agent_names)
             best_agent = min(agent_names, key=lambda a: agent_states[a]["distance_to_goal"])
-            spl = agent_states[best_agent]["spl"]
-            soft_spl = agent_states[best_agent]["soft_spl"]
-            distance_to_goal = agent_states[best_agent]["distance_to_goal"]
-            distance_to_goal_reward = agent_states[best_agent]["distance_to_goal_reward"]
+            claim_agent_name = (
+                agent_names[reach_claim_agent_idx]
+                if reach_claim_agent_idx is not None and 0 <= reach_claim_agent_idx < num_agents
+                else None
+            )
+            report_agent = claim_agent_name or best_agent
+            spl = agent_states[report_agent]["spl"]
+            soft_spl = agent_states[report_agent]["soft_spl"]
+            distance_to_goal = agent_states[report_agent]["distance_to_goal"]
+            distance_to_goal_reward = agent_states[report_agent]["distance_to_goal_reward"]
             success = 1 if any_success else 0
-            best_ast = agent_states[best_agent]
+            best_ast = agent_states[report_agent]
 
             print(f"\n------ Episode End ------")
             for agent_name in agent_names:
@@ -1321,13 +1354,30 @@ def main(cfg: DictConfig) -> None:
             distance_to_goal_reward = ast["distance_to_goal_reward"]
             success = ast["success"]
             best_ast = ast
+            if final_state == FINAL_RESULT.REACH_OBJECT and reach_claim_agent_idx == 0:
+                reach_claim_distance = distance_to_goal
+                reach_claim_stop_executed = ast["stop_executed"]
 
-        near_object = 1 if distance_to_goal <= success_distance else 0
+        reach_claim_outcome = get_reach_claim_outcome(
+            final_state,
+            reach_claim_agent_idx,
+            reach_claim_distance if reach_claim_distance is not None else float("inf"),
+            success_distance,
+            reach_claim_stop_executed,
+        )
+        if reach_claim_outcome == "success":
+            success = 1
+        elif reach_claim_outcome == "false positive":
+            success = 0
+
+        near_object = 1 if distance_to_goal < success_distance else 0
 
         if success == 1:
             num_success += 1
             result_text = "success"
             best_ast["near_object"] = 1
+        elif reach_claim_outcome == "false positive":
+            result_text = "false positive"
         else:
             result_text = check_failure(
                 env.current_episode,
@@ -1370,6 +1420,12 @@ def main(cfg: DictConfig) -> None:
         )
         if multi_agent:
             table1.add_row(["Termination Policy", termination_policy])
+            table1.add_row(["Reach Claim Agent", claim_agent_name or "none"])
+            table1.add_row([
+                "Reach Claim Distance",
+                f"{reach_claim_distance:.4f} m" if reach_claim_distance is not None else "N/A",
+            ])
+            table1.add_row(["Reach Claim Outcome", reach_claim_outcome or "not triggered"])
             for agent_name in agent_names:
                 ast = agent_states[agent_name]
                 table1.add_row([f"{agent_name} steps", ast["count_steps"]])

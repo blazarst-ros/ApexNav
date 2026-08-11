@@ -1,6 +1,24 @@
 from params import FINAL_RESULT, EXPL_RESULT
 
 
+def get_reach_claim_outcome(
+    final_state, claim_agent_idx, claim_distance_to_goal, success_distance, stop_executed
+):
+    """Classify a planner reach claim with Habitat's native STOP semantics.
+
+    A reach claim is only a candidate-object assertion.  It becomes success
+    only when the claiming agent actually executes STOP strictly inside the
+    Habitat success radius; otherwise it is a false positive.
+    """
+    if final_state != FINAL_RESULT.REACH_OBJECT or claim_agent_idx is None:
+        return None
+    if not stop_executed:
+        return "pending stop"
+    if claim_distance_to_goal < success_distance:
+        return "success"
+    return "false positive"
+
+
 def is_on_same_floor(height, ref_floor_height=None, ceiling_height=2.0, episode=None):
     """
     Check if a position is on the same floor as a reference height

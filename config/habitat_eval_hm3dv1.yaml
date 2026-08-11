@@ -26,7 +26,7 @@ habitat:
         type: PointGoalWithGPSCompassSensor
     measurements:
       success:
-        success_distance: 0.5
+        success_distance: 0.2
   simulator:
     type: MultiAgentSim-v0
     turn_angle: 30

@@ -43,8 +43,8 @@ constexpr double ACTION_ANGLE = M_PI / 6.0;
 
 // Distances (m)
 constexpr double STUCKING_DISTANCE = 0.05;       // consider stuck if movement < this
-constexpr double REACH_DISTANCE = 0.50;          // reach object distance
-constexpr double SOFT_REACH_DISTANCE = 0.70;     // soft reach distance for object
+constexpr double REACH_DISTANCE = 0.20;          // Habitat success distance
+constexpr double SOFT_REACH_DISTANCE = 0.20;     // no relaxed success distance
 constexpr double LOCAL_DISTANCE = 0.80;          // local target lookahead
 constexpr double FORWARD_DISTANCE = 0.15;        // min clearance for marking obstacles
 constexpr double FORCE_DORMANT_DISTANCE = 0.35;  // force dormant frontier if very close
@@ -93,7 +93,7 @@ private:
   ros::Subscriber trigger_sub_, odom_sub_[NUM_AGENTS], habitat_state_sub_, confidence_threshold_sub_;
   ros::Publisher action_pub_[NUM_AGENTS], expl_result_agent_pub_[NUM_AGENTS],
       exploration_strategy_pub_[NUM_AGENTS], ros_state_pub_, ros_state_all_pub_,
-      expl_state_pub_, expl_result_pub_, expl_result_all_pub_;
+      expl_state_pub_, expl_result_pub_, expl_result_all_pub_, reach_claim_pub_;
   ros::Publisher robot_marker_pub_[NUM_AGENTS];
 
   /* Action Planner */

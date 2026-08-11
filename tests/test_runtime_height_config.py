@@ -27,7 +27,7 @@ def test_eval_configs_use_heterogeneous_agent_heights_and_success_distance():
 
     for config_path in EVAL_CONFIGS:
         text = config_path.read_text(encoding="utf-8")
-        assert "success_distance: 0.5" in text
+        assert "success_distance: 0.2" in text
         for agent_name, expected_height in expected_heights.items():
             block = _agent_block(text, agent_name)
             assert f"height: {expected_height}" in block

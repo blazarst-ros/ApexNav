@@ -51,6 +51,7 @@ void ExplorationFSM::init(ros::NodeHandle& nh)
   expl_state_pub_ = nh.advertise<std_msgs::Int32>("/ros/expl_state", 10);
   expl_result_pub_ = nh.advertise<std_msgs::Int32>("/ros/expl_result", 10);
   expl_result_all_pub_ = nh.advertise<std_msgs::Int32MultiArray>("/ros/expl_result_all", 10);
+  reach_claim_pub_ = nh.advertise<std_msgs::Int32MultiArray>("/ros/reach_claim", 10);
   for (int i = 0; i < NUM_AGENTS; ++i) {
     action_pub_[i] = nh.advertise<std_msgs::Int32>(
         "/habitat/plan_action_agent_" + std::to_string(i), 10);
@@ -133,6 +134,9 @@ void ExplorationFSM::FSMCallback(const ros::TimerEvent& e)
           expl_state_msg.data = ad.final_result_;
           expl_state_pub_.publish(expl_state_msg);
           if (ad.final_result_ == FINAL_RESULT::REACH_OBJECT) {
+            std_msgs::Int32MultiArray reach_claim_msg;
+            reach_claim_msg.data = {agent_idx, FINAL_RESULT::REACH_OBJECT};
+            reach_claim_pub_.publish(reach_claim_msg);
             ROS_WARN("Agent %d reached an object candidate; broadcasting STOP to all agents.",
                 agent_idx);
             for (int stop_idx = 0; stop_idx < NUM_AGENTS; ++stop_idx) {
