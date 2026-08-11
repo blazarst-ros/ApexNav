@@ -135,7 +135,7 @@ source ./devel/setup.bash
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 export LD_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu:/opt/ros/noetic/lib:$LD_LIBRARY_PATH
 export LD_PRELOAD=/usr/lib/x86_64-linux-gnu/libffi.so.7
-python habitat_evaluation.py --dataset hm3dv2
+python habitat_evaluation.py --dataset hm3dv2 test_epi_num=100
 
 
 
@@ -157,7 +157,8 @@ python habitat_evaluation.py --dataset hm3dv2
 
 
 
-
+export http_proxy=http://127.0.0.1:7890
+export https_proxy=http://127.0.0.1:7890
 
 #########################################################################################
 
@@ -173,41 +174,6 @@ export https_proxy=http://127.0.0.1:7890
 
 
 #######################################################################################
-source devel/setup.bash
-rostopic echo /detector/agent_0/clouds_with_scores
-
-source devel/setup.bash
-rostopic echo /detector/agent_1/clouds_with_scores
-
-cd ApexNav
-source devel/setup.bash
-rostopic echo /semantic_observability/agent_0/evidence_debug >RuntimeData/Crossing-data/01Group/Debug01.md
-
-
-cd ApexNav
-source devel/setup.bash
-rostopic echo /semantic_observability/agent_1/evidence_debug >RuntimeData/Crossing-data/01Group/Debug02.md
-
-
-
-cd ApexNav
-source devel/setup.bash
-rostopic echo /planner/agent_0/exploration_mode
-
-cd ApexNav
-source devel/setup.bash
-rostopic echo /planner/agent_1/exploration_mode
-
-cd ApexNav
-source devel/setup.bash
-rostopic echo /cross_agent_check/tuning_debug > RuntimeData/Crossing-data/01Group/tuning.txt
-
-source devel/setup.bash
-rostopic echo /cross_agent_check/pending_object> /home/blazarst/ApexNav/RuntimeData/Crossing-data/01Group/object.txt
-
-
-#  rostopic echo /cross_agent_check/tuning_debug | grep -E "stage|reason|object_id|evaluated_agent_id|verification_score|selected
-#  rostopic echo /cross_agent_check/pending_object | grep -E "event|reason|object_id|margin|assigned_verifier_id|blocked_agent_ids"
 
 
 
@@ -221,14 +187,6 @@ rostopic echo /cross_agent_check/pending_object> /home/blazarst/ApexNav/RuntimeD
  When analysing data, you should do a Code-Path Root-Cause Analysis like Processed_5.md Point 11. Have a comprehensive and concise response.It is better to have a infer to the episode.
  Furthurmore,you should list all need parameters in this dataset for me to compare
 
- #################$
-
-› In RuntimeData/Crossing-data/01Group,
-    Debug0x.md shows /semantic_observability/
-    agent_x/evidence_debug,tuning.txt shows /
-    semantic_observability/agent_x/
-    evidence_debug.  Analyze the data.Export in /home/blazarst/ApexNav/
-  RuntimeData/Crossing-data/01Group/Processed.md
 
 
 python habitat_manual_control_multiagent.py --dataset hm3dv2
