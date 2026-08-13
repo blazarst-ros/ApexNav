@@ -101,6 +101,120 @@ and written as JSONL files under:
 
 ## Multi-Agent Exploration State and Termination
 
+## 当前 Frontier 规划与多 Agent 协调算法
+
+本节描述**当前代码实际运行的算法**。它与后续计划实现的“双起点
+`MINMAX` 联合分配”不同；后者尚未接入运行时规划器。
+
+### 1. Frontier 的生成与失效
+
+规划器在共享二维占据栅格中将“未知栅格且相邻自由栅格”的位置识别为
+Frontier。每轮地图更新后，它会：
+
+1. 在局部更新区域扫描 Frontier 种子；
+2. 使用 BFS 将连通种子扩展为 Frontier 簇；
+3. 丢弃过小簇；
+4. 对超过 `frontier/cluster_size_xy` 的长簇沿 PCA 第一主方向递归切分；
+5. 使用每个簇的几何中心作为候选目标。
+
+Frontier 若已被观察完成、相连未知区域不足，或机器人长时间无法到达，
+会转为 dormant 或被移除。候选目标必须通过 A* 可达性检查。
+
+### 2. 单 Agent 的目标优先级
+
+每台 Agent 目前独立按以下优先级选择下一个任务：
+
+```text
+SEARCH_BEST_OBJECT
+→ SEARCH_OVER_DEPTH_OBJECT
+→ 活跃 Frontier 探索
+→ SEARCH_SUSPICIOUS_OBJECT
+→ dormant Frontier
+→ 极端回退搜索
+```
+
+只有当前不存在可执行的高优先级对象任务时，系统才会选择 Frontier。
+因此，语义 Frontier 不是“已发现目标后的导航”，而是在尚未获得可直接
+导航对象时，根据图文匹配语义线索选择探索方向。
+
+### 3. 当前 Hybrid Frontier 策略
+
+默认参数 `exploration/policy = 2`，即 Hybrid：
+
+```text
+语义差异显著 → 选择高语义 Frontier，并用单 Agent ATSP 排序
+语义差异不显著 → 选择 A* 实际路径最短的 Frontier
+```
+
+每个 Frontier 的语义价值取 Value Map 中其周围 `5×5` 邻域的最大值，并
+跳过障碍物和膨胀障碍栅格。仅保留 A* 可达的 Frontier。若语义值标准差
+超过 `exploration/sigma_threshold`，且最大值/均值超过
+`exploration/max_to_mean_threshold`，则进入语义利用模式；否则进入几何
+探索模式。
+
+几何模式比较的是 A* 路径长度，不是欧氏直线距离。当前 A* 直接使用占据
+栅格和膨胀占据栅格判断安全性；ESDF 距离场由共享 SDFMap2D 维护，但尚未
+直接加入 A* 的路径代价。
+
+### 4. 当前 LKH-ATSP 的实际作用
+
+在语义利用模式中，系统为**当前正在规划的单台 Agent**构造：
+
+```text
+当前 Agent 位置 → 高语义 Frontier
+高语义 Frontier → 高语义 Frontier
+```
+
+的 A* 路径长度矩阵，并调用 LKH 排序。当前参数文件固定写入：
+
+```text
+SALESMEN = 1
+MTSP_OBJECTIVE = MINSUM
+```
+
+因此，这里是单 Agent 的 ATSP/开放路线排序器：系统从返回顺序中只取第一
+个可达 Frontier 作为当前目标，随后继续滚动重规划。尽管仓库内的
+`lkh_mtsp_solver` 库具备 `SALESMEN > 1` 的 MTSP 能力，当前 ApexNav 并**没有**
+运行多旅行商协同规划。
+
+### 5. 当前多 Agent 协调方式
+
+当前有两台 Agent，共享地图、对象图、Value Map 和 Frontier 列表，但仍按
+Agent 顺序调用单 Agent 规划。正常流程为：
+
+```text
+Agent 0 独立选择目标并写入 Frontier Claim
+→ Agent 1 规划时优先过滤被 Agent 0 Claim 的 Frontier
+→ 若所有 Frontier 都被 Claim，则退化为允许共享选择
+```
+
+这是一种顺序相关的贪心软互斥机制，不是集中式全局分配，也不保证两台
+Agent 的路线负载均衡。
+
+### 6. 已确认但尚未实现的双 Agent 方案
+
+后续将仅在两个 Agent 都需要重新规划且最高优先级模式一致时，建立该模式
+专属的共享候选池。例如：
+
+```text
+两个 SEARCH_BEST_OBJECT → 仅高置信度对象簇
+两个 SEARCH_OVER_DEPTH_OBJECT → 仅过深对象簇
+两个 Semantic Frontier → 仅通过语义门控的活跃 Frontier
+两个 Geometric Frontier → 仅活跃且可达的 Frontier
+```
+
+不同模式继续独立规划，因为它们的目标类别不同，不需要 Claim。对于共同
+模式，将使用两个不同起点 `R0`、`R1` 的 A* 距离，求解：
+
+```text
+min max(L0, L1)
+```
+
+即最小化两条路线中的较长路线。现有 LKH MTSP 封装只支持单一 depot，不能
+正确表示 `R0`、`R1` 两个不同起点；因此不会仅通过将 `SALESMEN` 改为 `2`
+来启用它。计划采用候选上限内的双起点动态规划/枚举分配，再为各自子路线
+排序；每轮仍只下发每台 Agent 的首个目标。
+
 The planner keeps a separate control FSM for each configured agent and publishes
 the current ROS planner state array on:
 
