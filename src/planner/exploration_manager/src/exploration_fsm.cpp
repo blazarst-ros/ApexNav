@@ -73,6 +73,11 @@ void ExplorationFSM::FSMCallback(const ros::TimerEvent& e)
   exec_timer_.stop();
   std::lock_guard<std::mutex> lock(data_mutex_);
 
+  // A joint assignment is allowed only when both agents enter the same planning
+  // phase together.  Otherwise each agent continues through its independent
+  // planner and no frontier Claim is used as a substitute for coordination.
+  planAgentsForCycle();
+
   for (int agent_idx = 0; agent_idx < NUM_AGENTS; ++agent_idx) {
     auto& ad = fd_->agent_[agent_idx];
 
@@ -256,6 +261,43 @@ void ExplorationFSM::publishExplorationStrategy(int agent_idx)
  * This is the core planning function that decides what action the robot should take next.
  * It handles obstacle avoidance, frontier exploration, object search, and stuck recovery.
  */
+bool ExplorationFSM::planAgentsForCycle()
+{
+  std::array<Vector3d, NUM_AGENTS> agent_positions;
+  for (int agent = 0; agent < NUM_AGENTS; ++agent) {
+    const auto& ad = fd_->agent_[agent];
+    if (state_[agent] != ROS_STATE::PLAN_ACTION || ad.init_action_count_ < 26 || !ad.have_odom_)
+      return false;
+    agent_positions[agent] = ad.odom_pos_;
+  }
+
+  const NavigationMode mode0 = expl_manager_->evaluateNavigationMode(agent_positions[0], 0);
+  const NavigationMode mode1 = expl_manager_->evaluateNavigationMode(agent_positions[1], 1);
+  if (mode0 != mode1 || mode0 == NavigationMode::NONE)
+    return false;  // Different modes deliberately remain distributed and independent.
+
+  JointAssignment assignment;
+  if (!expl_manager_->planJointModeTargets(agent_positions, mode0, assignment) || !assignment.valid)
+    return false;
+
+  const int joint_result = (mode0 == NavigationMode::SEMANTIC_FRONTIER ||
+      mode0 == NavigationMode::GEOMETRIC_FRONTIER || mode0 == NavigationMode::DORMANT_FRONTIER)
+      ? EXPL_RESULT::EXPLORATION
+      : (mode0 == NavigationMode::SEARCH_BEST_OBJECT ? EXPL_RESULT::SEARCH_BEST_OBJECT
+         : mode0 == NavigationMode::SEARCH_OVER_DEPTH_OBJECT ? EXPL_RESULT::SEARCH_OVER_DEPTH_OBJECT
+         : mode0 == NavigationMode::SEARCH_SUSPICIOUS_OBJECT ? EXPL_RESULT::SEARCH_SUSPICIOUS_OBJECT
+         : EXPL_RESULT::SEARCH_EXTREME);
+  for (int agent = 0; agent < NUM_AGENTS; ++agent) {
+    auto& ad = fd_->agent_[agent];
+    ad.planned_next_pos_ = assignment.next_positions[agent];
+    ad.planned_next_best_path_ = assignment.next_paths[agent];
+    ad.joint_expl_result_ = joint_result;
+    ad.joint_assignment_pending_ = true;
+    ad.replan_flag_ = true;
+  }
+  return true;
+}
+
 int ExplorationFSM::callActionPlanner(int agent_idx)
 {
   const double stucking_distance = FSMConstants::STUCKING_DISTANCE;
@@ -364,19 +406,28 @@ int ExplorationFSM::callActionPlanner(int agent_idx)
   // Replan path (stability heuristic) — use per-agent data
   vector<Vector2d> last_next_best_path = ad.planned_next_best_path_;
   Vector2d last_next_pos = ad.planned_next_pos_;
-  if (ad.dormant_frontier_flag_) {
+  if (ad.joint_assignment_pending_) {
+    // Do not let the single-agent stability heuristic overwrite a fresh joint
+    // assignment with the previous cycle's path.
+    ad.replan_flag_ = true;
+  }
+  else if (ad.dormant_frontier_flag_) {
     ad.replan_flag_ = true;
     ad.dormant_frontier_flag_ = false;
   }
   else if (ad.final_result_ == FINAL_RESULT::EXPLORE && !frontier_change_flag)
     ad.replan_flag_ = false;
 
-  // Release previous frontier claim if replanning
-  if (ad.replan_flag_)
-    expl_manager_->frontier_map2d_->releaseClaimByAgent(agent_idx);
-
-  expl_res = expl_manager_->planNextBestPoint(
-      ad.start_pt_, ad.start_yaw_, agent_idx, ad.planned_next_pos_, ad.planned_next_best_path_);
+  if (ad.joint_assignment_pending_) {
+    // The synchronized solver provides only the first waypoint of each route;
+    // normal action generation below still performs the rolling replan cycle.
+    expl_res = ad.joint_expl_result_;
+    ad.joint_assignment_pending_ = false;
+  }
+  else {
+    expl_res = expl_manager_->planNextBestPoint(
+        ad.start_pt_, ad.start_yaw_, agent_idx, ad.planned_next_pos_, ad.planned_next_best_path_);
+  }
   ad.expl_result_ = expl_res;
 
   if (expl_res != EXPL_RESULT::EXPLORATION) {
@@ -401,10 +452,6 @@ int ExplorationFSM::callActionPlanner(int agent_idx)
     final_res = FINAL_RESULT::NO_FRONTIER;
   else
     final_res = FINAL_RESULT::SEARCH_OBJECT;
-
-  // Release frontier claim when switching to object search
-  if (final_res == FINAL_RESULT::SEARCH_OBJECT)
-    expl_manager_->frontier_map2d_->releaseClaimByAgent(agent_idx);
 
   if (final_res == FINAL_RESULT::NO_FRONTIER || ad.planned_next_best_path_.empty()) {
     ROS_WARN("Agent %d: No (passable) frontier", agent_idx);

@@ -103,8 +103,8 @@ and written as JSONL files under:
 
 ## 当前 Frontier 规划与多 Agent 协调算法
 
-本节描述**当前代码实际运行的算法**。它与后续计划实现的“双起点
-`MINMAX` 联合分配”不同；后者尚未接入运行时规划器。
+本节描述**当前代码实际运行的算法**。其中，双 Agent 在同一规划周期、
+最高优先级模式一致时，会进入双起点 `MINMAX` 联合分配；其余情况保持独立规划。
 
 ### 1. Frontier 的生成与失效
 
@@ -191,9 +191,9 @@ Agent 0 独立选择目标并写入 Frontier Claim
 这是一种顺序相关的贪心软互斥机制，不是集中式全局分配，也不保证两台
 Agent 的路线负载均衡。
 
-### 6. 已确认但尚未实现的双 Agent 方案
+### 6. 双 Agent 模式门控联合分配
 
-后续将仅在两个 Agent 都需要重新规划且最高优先级模式一致时，建立该模式
+仅在两个 Agent 都需要重新规划且最高优先级模式一致时，建立该模式
 专属的共享候选池。例如：
 
 ```text
@@ -212,8 +212,10 @@ min max(L0, L1)
 
 即最小化两条路线中的较长路线。现有 LKH MTSP 封装只支持单一 depot，不能
 正确表示 `R0`、`R1` 两个不同起点；因此不会仅通过将 `SALESMEN` 改为 `2`
-来启用它。计划采用候选上限内的双起点动态规划/枚举分配，再为各自子路线
-排序；每轮仍只下发每台 Agent 的首个目标。
+来启用它。当前实现采用候选上限 `K=10` 内的双起点 Held--Karp 动态规划，
+对两个互补候选子集选择 `min max(L0, L1)` 的分配；每轮仍只下发每台 Agent
+路线的首个目标，并在下一轮滚动重规划。少于两个共同可达候选时不进入联合分配，
+由原独立规划路径处理。
 
 The planner keeps a separate control FSM for each configured agent and publishes
 the current ROS planner state array on:

@@ -8,6 +8,7 @@
 #include <pcl/point_types.h>
 
 // Standard C++ libraries
+#include <array>
 #include <fstream>
 #include <iostream>
 #include <memory>
@@ -58,6 +59,27 @@ struct SemanticFrontier {
   }
 };
 
+// A planning mode is more specific than the final result sent to Habitat:
+// only equal modes are eligible for a shared assignment.
+enum class NavigationMode {
+  NONE,
+  SEARCH_BEST_OBJECT,
+  SEARCH_OVER_DEPTH_OBJECT,
+  SEARCH_SUSPICIOUS_OBJECT,
+  SEMANTIC_FRONTIER,
+  GEOMETRIC_FRONTIER,
+  DORMANT_FRONTIER,
+  SEARCH_EXTREME
+};
+
+struct JointAssignment {
+  EIGEN_MAKE_ALIGNED_OPERATOR_NEW
+  bool valid = false;
+  NavigationMode mode = NavigationMode::NONE;
+  std::array<Vector2d, NUM_AGENTS> next_positions;
+  std::array<vector<Vector2d>, NUM_AGENTS> next_paths;
+};
+
 class ExplorationManager {
 public:
   ExplorationManager() = default;
@@ -73,6 +95,9 @@ public:
       vector<SemanticFrontier>& sem_frontiers);
   void calcSemanticFrontierInfo(const vector<SemanticFrontier>& sem_frontiers, double& std_dev,
       double& max_to_mean, double& mean, bool if_print = false);
+  NavigationMode evaluateNavigationMode(const Vector3d& pos, int agent_idx);
+  bool planJointModeTargets(const std::array<Vector3d, NUM_AGENTS>& agent_positions,
+      NavigationMode mode, JointAssignment& assignment);
 
   shared_ptr<ExplorationData> ed_;            ///< Exploration data container
   shared_ptr<ExplorationParam> ep_;           ///< Exploration parameters
@@ -128,6 +153,26 @@ private:
   void setStrategyInfo(int agent_idx, const std::string& mode, const std::string& target_type,
       int target_id, double semantic_score, const vector<Vector2d>& path,
       const Vector2d& target_pos);
+
+  struct JointCandidate {
+    EIGEN_MAKE_ALIGNED_OPERATOR_NEW
+    int target_id = -1;
+    std::string target_type;
+    double semantic_score = 0.0;
+    std::array<Vector2d, NUM_AGENTS> target_positions;
+    std::array<vector<Vector2d>, NUM_AGENTS> initial_paths;
+    std::array<double, NUM_AGENTS> initial_costs;
+  };
+
+  bool collectJointCandidates(const std::array<Vector3d, NUM_AGENTS>& agent_positions,
+      NavigationMode mode, vector<JointCandidate, Eigen::aligned_allocator<JointCandidate>>& candidates);
+  bool computeJointMtspCostMatrix(
+      const vector<JointCandidate, Eigen::aligned_allocator<JointCandidate>>& candidates,
+      std::array<Eigen::MatrixXd, NUM_AGENTS>& transition_costs);
+  bool solveTwoStartMinmax(const vector<JointCandidate, Eigen::aligned_allocator<JointCandidate>>& candidates,
+      const std::array<Eigen::MatrixXd, NUM_AGENTS>& transition_costs,
+      std::array<vector<int>, NUM_AGENTS>& routes) const;
+  static const char* navigationModeName(NavigationMode mode);
 
   ros::ServiceClient tsp_client_;         ///< ROS service client for TSP solver
   unique_ptr<RayCaster2D> ray_caster2d_;  ///< Ray casting for collision checking

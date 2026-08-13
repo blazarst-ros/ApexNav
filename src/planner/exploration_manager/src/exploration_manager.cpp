@@ -17,6 +17,10 @@
 #include <path_searching/kino_astar.h>
 #include <trajectory_manager/optimizer.h>
 
+#include <algorithm>
+#include <cmath>
+#include <limits>
+
 using namespace Eigen;
 
 namespace apexnav_planner {
@@ -75,6 +79,275 @@ void ExplorationManager::initialize(ros::NodeHandle& nh)
 void ExplorationManager::resetEpisodeState()
 {
   last_over_depth_object_cloud_.reset(new pcl::PointCloud<pcl::PointXYZ>);
+}
+
+const char* ExplorationManager::navigationModeName(NavigationMode mode)
+{
+  switch (mode) {
+    case NavigationMode::SEARCH_BEST_OBJECT: return "SEARCH_BEST_OBJECT";
+    case NavigationMode::SEARCH_OVER_DEPTH_OBJECT: return "SEARCH_OVER_DEPTH_OBJECT";
+    case NavigationMode::SEARCH_SUSPICIOUS_OBJECT: return "SEARCH_SUSPICIOUS_OBJECT";
+    case NavigationMode::SEMANTIC_FRONTIER: return "SEMANTIC_FRONTIER";
+    case NavigationMode::GEOMETRIC_FRONTIER: return "GEOMETRIC_FRONTIER";
+    case NavigationMode::DORMANT_FRONTIER: return "DORMANT_FRONTIER";
+    case NavigationMode::SEARCH_EXTREME: return "SEARCH_EXTREME";
+    default: return "NONE";
+  }
+}
+
+NavigationMode ExplorationManager::evaluateNavigationMode(const Vector3d& pos, int agent_idx)
+{
+  (void)agent_idx;
+  Vector2d target;
+  vector<Vector2d> path;
+  const auto any_object_path = [&](const vector<pcl::shared_ptr<pcl::PointCloud<pcl::PointXYZ>>>& clouds,
+                                   bool extreme) {
+    for (const auto& cloud : clouds) {
+      if (!cloud->points.empty() && (extreme
+          ? searchObjectPathExtreme(pos, cloud, target, path)
+          : searchObjectPath(pos, cloud, target, path))) return true;
+    }
+    return false;
+  };
+
+  vector<pcl::shared_ptr<pcl::PointCloud<pcl::PointXYZ>>> clouds;
+  object_map2d_->getTopConfidenceObjectCloud(clouds);
+  if (any_object_path(clouds, false)) return NavigationMode::SEARCH_BEST_OBJECT;
+  if (!object_map2d_->over_depth_object_cloud_->points.empty() &&
+      searchObjectPath(pos, object_map2d_->over_depth_object_cloud_, target, path))
+    return NavigationMode::SEARCH_OVER_DEPTH_OBJECT;
+
+  vector<Vector2d> reachable_frontiers;
+  for (const Vector2d& frontier : ed_->frontier_averages_) {
+    if (searchFrontierPath(Vector2d(pos.x(), pos.y()), frontier, target, path))
+      reachable_frontiers.push_back(frontier);
+  }
+  if (!reachable_frontiers.empty()) {
+    if (ep_->policy_mode_ == ExplorationParam::SEMANTIC)
+      return NavigationMode::SEMANTIC_FRONTIER;
+    if (ep_->policy_mode_ == ExplorationParam::HYBRID) {
+      vector<SemanticFrontier> semantic_frontiers;
+      getSortedSemanticFrontiers(Vector2d(pos.x(), pos.y()), reachable_frontiers, semantic_frontiers);
+      double std_dev = 0.0, max_to_mean = 0.0, mean = 0.0;
+      calcSemanticFrontierInfo(semantic_frontiers, std_dev, max_to_mean, mean);
+      if (std_dev > ep_->sigma_threshold_ && max_to_mean > ep_->max_to_mean_threshold_)
+        return NavigationMode::SEMANTIC_FRONTIER;
+    }
+    return NavigationMode::GEOMETRIC_FRONTIER;
+  }
+
+  object_map2d_->getTopConfidenceObjectCloud(clouds, false);
+  if (any_object_path(clouds, false)) return NavigationMode::SEARCH_SUSPICIOUS_OBJECT;
+  for (const Vector2d& frontier : ed_->dormant_frontier_averages_) {
+    if (searchFrontierPath(Vector2d(pos.x(), pos.y()), frontier, target, path))
+      return NavigationMode::DORMANT_FRONTIER;
+  }
+  object_map2d_->getTopConfidenceObjectCloud(clouds, false, true);
+  if (any_object_path(clouds, true)) return NavigationMode::SEARCH_EXTREME;
+  if (!last_over_depth_object_cloud_->points.empty() &&
+      searchObjectPathExtreme(pos, last_over_depth_object_cloud_, target, path))
+    return NavigationMode::SEARCH_EXTREME;
+  return NavigationMode::NONE;
+}
+
+bool ExplorationManager::collectJointCandidates(const std::array<Vector3d, NUM_AGENTS>& agent_positions,
+    NavigationMode mode, vector<JointCandidate, Eigen::aligned_allocator<JointCandidate>>& candidates)
+{
+  candidates.clear();
+  const auto add_object_candidates = [&](const vector<pcl::shared_ptr<pcl::PointCloud<pcl::PointXYZ>>>& clouds,
+                                         bool extreme) {
+    for (size_t i = 0; i < clouds.size(); ++i) {
+      if (clouds[i]->points.empty()) continue;
+      JointCandidate candidate;
+      candidate.target_id = static_cast<int>(i);
+      candidate.target_type = "OBJECT";
+      candidate.semantic_score = static_cast<double>(clouds.size() - i);
+      bool reachable_by_any = false;
+      candidate.initial_costs.fill(std::numeric_limits<double>::infinity());
+      for (int agent = 0; agent < NUM_AGENTS; ++agent) {
+        const bool found = extreme
+            ? searchObjectPathExtreme(agent_positions[agent], clouds[i], candidate.target_positions[agent], candidate.initial_paths[agent])
+            : searchObjectPath(agent_positions[agent], clouds[i], candidate.target_positions[agent], candidate.initial_paths[agent]);
+        if (!found) continue;
+        reachable_by_any = true;
+        candidate.initial_costs[agent] = 0.0;
+        for (size_t p = 1; p < candidate.initial_paths[agent].size(); ++p)
+          candidate.initial_costs[agent] += (candidate.initial_paths[agent][p] - candidate.initial_paths[agent][p - 1]).norm();
+      }
+      if (reachable_by_any) candidates.push_back(candidate);
+    }
+  };
+
+  switch (mode) {
+    case NavigationMode::SEARCH_BEST_OBJECT: {
+      vector<pcl::shared_ptr<pcl::PointCloud<pcl::PointXYZ>>> clouds;
+      object_map2d_->getTopConfidenceObjectCloud(clouds);
+      add_object_candidates(clouds, false);
+      break;
+    }
+    case NavigationMode::SEARCH_SUSPICIOUS_OBJECT: {
+      vector<pcl::shared_ptr<pcl::PointCloud<pcl::PointXYZ>>> clouds;
+      object_map2d_->getTopConfidenceObjectCloud(clouds, false);
+      add_object_candidates(clouds, false);
+      break;
+    }
+    case NavigationMode::SEARCH_OVER_DEPTH_OBJECT: {
+      vector<pcl::shared_ptr<pcl::PointCloud<pcl::PointXYZ>>> clouds;
+      if (!object_map2d_->over_depth_object_cloud_->points.empty()) clouds.push_back(object_map2d_->over_depth_object_cloud_);
+      add_object_candidates(clouds, false);
+      break;
+    }
+    case NavigationMode::SEARCH_EXTREME: {
+      vector<pcl::shared_ptr<pcl::PointCloud<pcl::PointXYZ>>> clouds;
+      object_map2d_->getTopConfidenceObjectCloud(clouds, false, true);
+      add_object_candidates(clouds, true);
+      break;
+    }
+    case NavigationMode::SEMANTIC_FRONTIER:
+    case NavigationMode::GEOMETRIC_FRONTIER:
+    case NavigationMode::DORMANT_FRONTIER: {
+      const vector<Vector2d>& source = mode == NavigationMode::DORMANT_FRONTIER
+          ? ed_->dormant_frontier_averages_ : ed_->frontier_averages_;
+      for (size_t i = 0; i < source.size(); ++i) {
+        JointCandidate candidate;
+        candidate.target_id = findFrontierIdByPosition(source[i], mode == NavigationMode::DORMANT_FRONTIER);
+        candidate.target_type = mode == NavigationMode::DORMANT_FRONTIER ? "DORMANT_FRONTIER" : "FRONTIER";
+        candidate.semantic_score = getFrontierSemanticValue(source[i]);
+        bool reachable_by_any = false;
+        candidate.initial_costs.fill(std::numeric_limits<double>::infinity());
+        for (int agent = 0; agent < NUM_AGENTS; ++agent) {
+          if (!searchFrontierPath(Vector2d(agent_positions[agent].x(), agent_positions[agent].y()), source[i],
+                  candidate.target_positions[agent], candidate.initial_paths[agent])) {
+            continue;
+          }
+          reachable_by_any = true;
+          candidate.initial_costs[agent] = 0.0;
+          for (size_t p = 1; p < candidate.initial_paths[agent].size(); ++p)
+            candidate.initial_costs[agent] += (candidate.initial_paths[agent][p] - candidate.initial_paths[agent][p - 1]).norm();
+        }
+        if (reachable_by_any) candidates.push_back(candidate);
+      }
+      break;
+    }
+    default: break;
+  }
+
+  // Semantic mode admits only the high-value portion used by the hybrid policy.
+  if (mode == NavigationMode::SEMANTIC_FRONTIER && ep_->policy_mode_ == ExplorationParam::HYBRID && !candidates.empty()) {
+    double max_score = 0.0, mean_score = 0.0;
+    for (const auto& candidate : candidates) { max_score = std::max(max_score, candidate.semantic_score); mean_score += candidate.semantic_score; }
+    mean_score /= candidates.size();
+    const double threshold = std::max(ep_->max_to_mean_threshold_ * mean_score,
+        ep_->max_to_mean_percentage_ * max_score);
+    candidates.erase(std::remove_if(candidates.begin(), candidates.end(),
+        [&](const JointCandidate& candidate) { return candidate.semantic_score < threshold; }), candidates.end());
+  }
+
+  std::sort(candidates.begin(), candidates.end(), [mode](const JointCandidate& a, const JointCandidate& b) {
+    if (mode == NavigationMode::SEMANTIC_FRONTIER) return a.semantic_score > b.semantic_score;
+    return std::min(a.initial_costs[0], a.initial_costs[1]) < std::min(b.initial_costs[0], b.initial_costs[1]);
+  });
+  constexpr size_t kMaxJointCandidates = 10;
+  if (candidates.size() > kMaxJointCandidates) candidates.resize(kMaxJointCandidates);
+  return candidates.size() >= NUM_AGENTS;
+}
+
+bool ExplorationManager::computeJointMtspCostMatrix(
+    const vector<JointCandidate, Eigen::aligned_allocator<JointCandidate>>& candidates,
+    std::array<Eigen::MatrixXd, NUM_AGENTS>& transition_costs)
+{
+  const int n = static_cast<int>(candidates.size());
+  for (int agent = 0; agent < NUM_AGENTS; ++agent) {
+    transition_costs[agent] = Eigen::MatrixXd::Zero(n, n);
+    for (int i = 0; i < n; ++i) for (int j = 0; j < n; ++j) {
+      if (i == j) continue;
+      if (!std::isfinite(candidates[i].initial_costs[agent]) ||
+          !std::isfinite(candidates[j].initial_costs[agent])) {
+        transition_costs[agent](i, j) = std::numeric_limits<double>::infinity();
+        continue;
+      }
+      const double cost = computePathCost(candidates[i].target_positions[agent], candidates[j].target_positions[agent]);
+      // computePathCost uses 10000 as the legacy A* failure sentinel.  Do not
+      // turn it into a finite mTSP penalty: an unreachable edge must never be
+      // selected by the MINMAX dynamic program.
+      transition_costs[agent](i, j) = (cost > 0.0 && cost < 10000.0)
+          ? cost : std::numeric_limits<double>::infinity();
+    }
+  }
+  return true;
+}
+
+bool ExplorationManager::solveTwoStartMinmax(
+    const vector<JointCandidate, Eigen::aligned_allocator<JointCandidate>>& candidates,
+    const std::array<Eigen::MatrixXd, NUM_AGENTS>& transition_costs,
+    std::array<vector<int>, NUM_AGENTS>& routes) const
+{
+  // held_karp DP: for each agent, DP[S][j] is the shortest open route from
+  // its own start through subset S and ending at j.  Complementary subsets are
+  // then selected by the MINMAX objective.
+  const int n = static_cast<int>(candidates.size());
+  if (n < NUM_AGENTS || n > 20) return false;
+  const int states = 1 << n;
+  const double inf = std::numeric_limits<double>::infinity();
+  std::array<vector<double>, NUM_AGENTS> best_subset;
+  std::array<vector<int>, NUM_AGENTS> best_end;
+  std::array<vector<double>, NUM_AGENTS> dp;
+  std::array<vector<int>, NUM_AGENTS> parent;
+  for (int agent = 0; agent < NUM_AGENTS; ++agent) {
+    dp[agent].assign(states * n, inf); parent[agent].assign(states * n, -1);
+    best_subset[agent].assign(states, inf); best_end[agent].assign(states, -1);
+    for (int j = 0; j < n; ++j) {
+      if (std::isfinite(candidates[j].initial_costs[agent]))
+        dp[agent][(1 << j) * n + j] = candidates[j].initial_costs[agent];
+    }
+    for (int mask = 1; mask < states; ++mask) for (int last = 0; last < n; ++last) {
+      const double current = dp[agent][mask * n + last];
+      if (!std::isfinite(current)) continue;
+      if (current < best_subset[agent][mask]) { best_subset[agent][mask] = current; best_end[agent][mask] = last; }
+      for (int next = 0; next < n; ++next) if (!(mask & (1 << next))) {
+        const double next_cost = current + transition_costs[agent](last, next);
+        const int index = ((mask | (1 << next)) * n + next);
+        if (next_cost < dp[agent][index]) { dp[agent][index] = next_cost; parent[agent][index] = last; }
+      }
+    }
+  }
+  const int full = states - 1; int selected = -1; double objective = inf;
+  for (int mask = 1; mask < full; ++mask) {
+    const double value = std::max(best_subset[0][mask], best_subset[1][full ^ mask]);
+    if (value < objective) { objective = value; selected = mask; }
+  }
+  if (selected < 0 || !std::isfinite(objective)) return false;
+  const std::array<int, NUM_AGENTS> subsets = {{ selected, full ^ selected }};
+  for (int agent = 0; agent < NUM_AGENTS; ++agent) {
+    int mask = subsets[agent], last = best_end[agent][mask];
+    while (last >= 0) { routes[agent].push_back(last); const int previous = parent[agent][mask * n + last]; mask &= ~(1 << last); last = previous; }
+    std::reverse(routes[agent].begin(), routes[agent].end());
+  }
+  return !routes[0].empty() && !routes[1].empty();
+}
+
+bool ExplorationManager::planJointModeTargets(const std::array<Vector3d, NUM_AGENTS>& agent_positions,
+    NavigationMode mode, JointAssignment& assignment)
+{
+  assignment = JointAssignment();
+  if (!agent_positions[0].allFinite() || !agent_positions[1].allFinite()) return false;
+  if (mode == NavigationMode::NONE) return false;
+  vector<JointCandidate, Eigen::aligned_allocator<JointCandidate>> candidates;
+  if (!collectJointCandidates(agent_positions, mode, candidates)) return false;
+  std::array<Eigen::MatrixXd, NUM_AGENTS> transition_costs;
+  if (!computeJointMtspCostMatrix(candidates, transition_costs)) return false;
+  std::array<vector<int>, NUM_AGENTS> routes;
+  if (!solveTwoStartMinmax(candidates, transition_costs, routes)) return false;
+  assignment.valid = true; assignment.mode = mode;
+  for (int agent = 0; agent < NUM_AGENTS; ++agent) {
+    const JointCandidate& first = candidates[routes[agent].front()];
+    assignment.next_positions[agent] = first.target_positions[agent];
+    assignment.next_paths[agent] = first.initial_paths[agent];
+    setStrategyInfo(agent, "JOINT_MINMAX", first.target_type, first.target_id,
+        first.semantic_score, first.initial_paths[agent], first.target_positions[agent]);
+  }
+  ROS_INFO("[Joint MINMAX] mode=%s candidates=%zu", navigationModeName(mode), candidates.size());
+  return true;
 }
 
 int ExplorationManager::planNextBestPoint(const Vector3d& pos, const double& yaw, int agent_idx,
@@ -203,9 +476,6 @@ int ExplorationManager::planNextBestPoint(const Vector3d& pos, const double& yaw
   out_next_pos = next_best_pos;
   out_next_best_path = next_best_path;
 
-  // Claim this frontier for the agent
-  frontier_map2d_->claimFrontierByPosition(next_best_pos, agent_idx);
-
   // Performance monitoring
   double total_time = (ros::Time::now() - t2).toSec();
   ROS_ERROR_COND(total_time > 0.25, "[Agent %d Plan NBV] Total time %.2lf s too long!!!", agent_idx, total_time);
@@ -216,26 +486,9 @@ int ExplorationManager::planNextBestPoint(const Vector3d& pos, const double& yaw
 void ExplorationManager::chooseExplorationPolicy(Vector2d cur_pos, vector<Vector2d> frontiers,
     Vector2d& next_best_pos, vector<Vector2d>& next_best_path, int agent_idx)
 {
-  // Filter out frontiers claimed by any other agent.
-  vector<Vector2d> original_frontiers = frontiers;  // keep for fallback
-  frontiers.erase(
-      std::remove_if(frontiers.begin(), frontiers.end(),
-          [&](const Vector2d& f) {
-              for (int other_agent = 0; other_agent < NUM_AGENTS; ++other_agent) {
-                if (other_agent == agent_idx)
-                  continue;
-                if (frontier_map2d_->isFrontierClaimedByPosition(f, other_agent))
-                  return true;
-              }
-              return false;
-          }),
-      frontiers.end());
-
-  // Fallback: if all frontiers are claimed, use unfiltered list
-  if (frontiers.empty() && !original_frontiers.empty()) {
-    ROS_WARN("Agent %d: All frontiers claimed by other agents, falling back to shared selection", agent_idx);
-    frontiers = original_frontiers;
-  }
+  // Different navigation modes are planned independently.  Deliberately do
+  // not filter by a shared Claim here: equal modes are handled by the joint
+  // MINMAX assignment in the FSM before this per-agent fallback is reached.
 
   switch (ep_->policy_mode_) {
     case ExplorationParam::DISTANCE:

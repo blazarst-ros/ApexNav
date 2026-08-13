@@ -5,6 +5,7 @@
 #include <Eigen/Eigen>
 
 // Standard C++ libraries
+#include <array>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -105,6 +106,7 @@ private:
   ros::Publisher robot_marker_pub_[NUM_AGENTS];
 
   /* Action Planner */
+  bool planAgentsForCycle();
   int callActionPlanner(int agent_idx);
   int planNextBestAction(Vector2d current_pos, double current_yaw, const vector<Vector2d>& path,
       bool need_safety = true, int agent_idx = 0);

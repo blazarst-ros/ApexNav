@@ -50,6 +50,8 @@ struct AgentFSMData {
     final_result_ = -1;
     expl_result_ = EXPL_RESULT::EXPLORATION;
     replan_flag_ = true;
+    joint_assignment_pending_ = false;
+    joint_expl_result_ = EXPL_RESULT::EXPLORATION;
     dormant_frontier_flag_ = false;
     escape_stucking_flag_ = false;
     escape_stucking_count_ = 0;
@@ -76,6 +78,10 @@ struct AgentFSMData {
   int final_result_;
   int expl_result_;
   bool replan_flag_, dormant_frontier_flag_;
+  // Set only for a synchronized same-mode planning cycle.  The FSM consumes the
+  // precomputed target through the ordinary action-planning path.
+  bool joint_assignment_pending_;
+  int joint_expl_result_;
   bool escape_stucking_flag_;
   int escape_stucking_count_;
   Eigen::Vector2d escape_stucking_pos_;
