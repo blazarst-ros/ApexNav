@@ -1,114 +1,71 @@
-# Mode-Gated Two-Agent MTSP Design
+# 按模式门控的双 Agent MTSP 设计
 
-## Goal
+## 目标
 
-Replace frontier claims as the normal multi-agent coordination mechanism with
-mode-gated, centralized two-agent task assignment. The planner uses MTSP only
-when both configured agents need a new target and their highest-priority
-navigation modes are identical. Different modes remain independent because
-their target classes are disjoint by design.
+以“模式门控、集中式双 Agent 任务分配”替代 Frontier Claim 作为常规多机协调机制。仅当两个已配置 Agent 都需要重新规划，且其最高优先级导航模式相同时，规划器才使用 MTSP；模式不同则保持独立规划，因为按设计其目标类别互不相同。
 
-## Scope and fixed decisions
+## 范围与已确认决策
 
-- The system has exactly two agents (`NUM_AGENTS == 2`).
-- The MTSP objective is `MINMAX`: minimize the longer of the two assigned route
-  lengths, rather than their total length.
-- MTSP edge costs are A* path lengths. Semantic value and object confidence are
-  eligibility gates, not additive edge-cost terms.
-- Only candidates belonging to the common mode are included in an MTSP solve.
-- Each solve produces one route per agent; only each route's first target is
-  executed. Map, perception, object, or frontier changes trigger later
-  rolling replanning.
-- Normal planning does not read or write `Frontier2D::claimed_by_`. It may be
-  retained solely as an assertion/debug signal that two agents were not given
-  the same target.
+- 系统固定为两个 Agent（`NUM_AGENTS == 2`）。
+- MTSP 优化目标固定为 `MINMAX`：最小化两条分配路线中的较长路线，而非最小化总路程。
+- MTSP 边代价使用 A* 路径长度。语义值和对象置信度仅用于候选资格筛选，不加入边代价。
+- 一次 MTSP 求解只能纳入与共同模式对应的候选目标。
+- 每次求解为每个 Agent 生成一条路线，但仅执行各自路线的第一个目标；地图、感知、对象或 Frontier 变化后继续滚动重规划。
+- 正常规划不读取或写入 `Frontier2D::claimed_by_`。该字段最多保留为断言/调试信息，用于发现两个 Agent 被错误下发同一目标。
 
-## Mode gate
+## 模式门控
 
-For a planning cycle, determine each agent's highest-priority executable mode
-before assigning either agent a target. The existing priority ordering remains
-authoritative: high-confidence object, over-depth object, active frontier,
-suspicious object, dormant frontier, then extreme fallback.
+在一个规划周期内，先为两个 Agent 分别判断最高优先级的可执行模式，再为任一 Agent 分配目标。现有优先级保持不变：高置信度对象、过深对象、活跃 Frontier、可疑对象、休眠 Frontier、极端回退搜索。
 
-The dispatcher has two branches:
+调度器分为两条分支：
 
-1. If the two modes differ, run each agent's existing mode-specific planner
-   independently. Claims are not used: targets from distinct modes are assumed
-   different.
-2. If modes match and both agents need replanning, build one shared candidate
-   pool for that exact mode and solve a two-salesman MTSP.
+1. 两个模式不同：分别调用各自原有的模式规划器，不使用 Claim；按前提，不同模式的目标不同。
+2. 两个模式相同且两个 Agent 都需要重规划：仅针对该模式建立一个共享候选池，执行一次双旅行商 MTSP。
 
-If only one agent needs replanning, retain its independent planner. A joint
-solve must never overwrite the other agent's active, still-valid target.
+若只有一个 Agent 需要重规划，则保持它的独立规划。联合求解绝不能覆盖另一台 Agent 仍有效的活动目标。
 
-## Eligible candidate pools
+## 可纳入的候选目标池
 
-| Common mode | MTSP pool | Required eligibility |
+| 共同模式 | MTSP 候选池 | 必须满足的资格 |
 | --- | --- | --- |
-| `SEARCH_BEST_OBJECT` | Current high-confidence object clusters only | Existing high-confidence criterion and a valid A* approach path |
-| `SEARCH_OVER_DEPTH_OBJECT` | Current over-depth object cluster(s) only | Nonempty and A*-reachable |
-| semantic frontier modes | Active frontiers selected by the existing semantic/Hybrid significance gate | Semantic eligibility, active status, A*-reachable |
-| geometric frontier modes | Active reachable frontiers | Active status and A*-reachable |
-| dormant/extreme modes | The corresponding fallback target class only | Existing fallback safety and validity checks |
+| `SEARCH_BEST_OBJECT` | 仅当前高置信度对象簇 | 满足现有高置信度条件，且存在有效 A* 接近路径 |
+| `SEARCH_OVER_DEPTH_OBJECT` | 仅当前过深对象簇 | 非空且 A* 可达 |
+| 语义 Frontier 模式 | 经现有 Semantic/Hybrid 显著性门控选出的活跃 Frontier | 满足语义资格、处于活跃状态、A* 可达 |
+| 几何 Frontier 模式 | 活跃且可达的 Frontier | 活跃且 A* 可达 |
+| dormant/extreme 回退模式 | 仅对应回退目标类别 | 满足现有回退安全性和有效性条件 |
 
-No object type is mixed with any frontier type, and no high-confidence object
-pool is mixed with suspicious or over-depth objects.
+任何对象类别都不得与 Frontier 类别混合；高置信度对象池也不得与可疑对象或过深对象混合。
 
-## Joint distance model
+## 联合距离模型
 
-Let `R0` and `R1` be the current positions of agents 0 and 1, and let
-`T1..Tn` be the filtered common candidate pool. The MTSP instance must retain
-both starts:
+设 `R0`、`R1` 分别是 Agent 0、Agent 1 的当前位置，`T1..Tn` 为经过筛选后的共同候选池。MTSP 问题必须同时保留两个起点：
 
-`C(Rk, Ti) = AStarLength(Rk, Ti)` for each agent `k` and target `i`.
+`C(Rk, Ti) = AStarLength(Rk, Ti)`，其中 `k` 为 Agent 编号，`i` 为目标编号。
 
-`C(Ti, Tj) = AStarLength(Ti, Tj)` for target-to-target transitions.
+`C(Ti, Tj) = AStarLength(Ti, Tj)`，表示目标间转移代价。
 
-Unreachable edges are excluded at candidate-filter time, or represented by a
-large finite penalty only when the solver still needs a complete matrix.
-Euclidean distance is not used as the assignment cost.
+不可达边应在候选筛选时排除；只有在求解器必须接收完整代价矩阵时，才使用足够大的有限惩罚。不得用欧氏直线距离替代分配代价。
 
-The LKH parameter file must use `SALESMEN = 2` and
-`MTSP_OBJECTIVE = MINMAX`. It must also request an MTSP-specific solution file
-so routes can be decoded separately for agent 0 and agent 1. The existing
-single-agent `TOUR_FILE` parser is insufficient for this purpose.
+LKH 参数文件必须写入 `SALESMEN = 2` 和 `MTSP_OBJECTIVE = MINMAX`，并请求 MTSP 专用结果文件，以便分别解析 Agent 0 和 Agent 1 的路线。现有单 Agent `TOUR_FILE` 解析器不足以承担此职责。
 
-## Assignment and fallback behavior
+## 分配与回退行为
 
-- With fewer than two eligible targets, do not run MTSP. For one target, give
-  it to the agent with the shorter valid A* path; the other agent receives no
-  assignment from that shared pool and follows its normal fallback behavior.
-- Reject malformed solver output, a missing route, duplicate target ownership,
-  or a target whose path is no longer valid. Fall back to independent planning
-  for that cycle.
-- A successful MTSP assignment writes only one first target and one path per
-  agent. It does not commit the full MTSP route as a persistent plan.
-- Existing object-reached, stuck, dormant-frontier, and map-update behavior
-  remains responsible for invalidating targets and requesting replanning.
+- 合格候选少于两个时不执行 MTSP。只有一个目标时，分配给 A* 路径更短的 Agent；另一台 Agent 不从该共享池获得任务，走其原有回退逻辑。
+- 拒绝格式错误的求解结果、缺少路线的结果、重复目标归属，或路径已失效的目标；当轮回退到独立规划。
+- 成功 MTSP 仅为每台 Agent 写入一个首目标和对应路径，不将完整 MTSP 路线作为持久计划。
+- 现有的对象到达、卡住、Frontier 休眠和地图更新逻辑继续负责使目标失效并请求重规划。
 
-## Architecture boundary
+## 架构边界
 
-Introduce a centralized, testable assignment component at the FSM/planning
-boundary. It consumes both agents' replan requests, modes, positions, and a
-shared candidate pool, then produces zero, one, or two per-agent assignments.
-The existing single-agent policy functions remain responsible for computing
-mode-specific candidates and for independent fallback planning.
+在 FSM 与规划器边界引入一个可测试的集中式分配组件。它接收两个 Agent 的重规划请求、模式、位置与共享候选池，输出零个、一个或两个按 Agent 区分的分配结果。现有单 Agent 策略函数继续负责生成模式候选及独立规划时的回退。
 
-The LKH wrapper must expose a structured two-route result to the planner
-instead of requiring the planner to interpret a flattened `TOUR_FILE`.
+LKH 包装层必须向规划器暴露结构化的双路线结果，而不是让规划器解释扁平化的 `TOUR_FILE`。
 
-## Verification
+## 验证
 
-- Unit tests prove that different modes choose independent planning with no
-  claim read/write.
-- Unit tests prove that matching semantic, geometric, high-confidence-object,
-  and over-depth-object modes form only their corresponding candidate pools.
-- Unit tests prove that a matching-mode joint request uses both agent starts,
-  `SALESMEN = 2`, and `MTSP_OBJECTIVE = MINMAX`.
-- Unit tests prove that one-target, invalid-edge, malformed-solver-output, and
-  duplicate-target cases fall back safely.
-- A parser test verifies that the two LKH MTSP routes are mapped to distinct
-  agent assignments and only each route's first target is dispatched.
-- Run targeted tests, the project test suite available in this workspace, a
-  ROS/catkin build when the local environment is available, and `git diff
-  --check`.
+- 单元测试证明：模式不同时走独立规划，且不读取/写入 Claim。
+- 单元测试证明：共同的语义、几何、高置信度对象和过深对象模式只建立对应类别的候选池。
+- 单元测试证明：共同模式的联合请求使用两个 Agent 起点、`SALESMEN = 2` 与 `MTSP_OBJECTIVE = MINMAX`。
+- 单元测试证明：单目标、无效边、求解器输出格式错误和重复目标情况会安全回退。
+- 解析测试证明：两条 LKH MTSP 路线会被映射为不同 Agent 的分配，且只下发每条路线的第一个目标。
+- 运行定向测试、工作区内可用的完整测试集、可用时的 ROS/catkin 构建，以及 `git diff --check`。
