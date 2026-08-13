@@ -68,7 +68,7 @@ def test_readme_describes_the_runtime_joint_assignment_not_a_future_plan():
     readme = read(Path("README.md"))
 
     assert "当前实现采用候选上限 `K=10`" in readme
-    assert "模式一致时，会进入双起点 `MINMAX` 联合分配" in readme
+    assert "最高优先级模式一致时，才进入双起点 `MINMAX` 联合分配" in readme
 
 
 def test_fsm_routes_matching_modes_to_one_joint_plan():
@@ -83,6 +83,41 @@ def test_fsm_routes_matching_modes_to_one_joint_plan():
         "mode0 != mode1",
     ):
         assert token in source
+
+
+def test_reach_check_precedes_any_joint_target_assignment():
+    source = read(FSM)
+
+    assert "checkReachedObjectBeforePlanning" in source
+    assert "finishTeamOnReach" in source
+    assert source.index("checkReachedObjectBeforePlanning()") < source.index("planAgentsForCycle(shared_frontier_changed)")
+    assert "reach_claim_pub_.publish" in source
+    assert "ACTION::STOP" in source
+    assert "ROS_STATE::FINISH" in source
+    fallback = source.split("int ExplorationFSM::callActionPlanner", 1)[1]
+    assert "finishTeamOnReach(agent_idx);" in fallback
+
+
+def test_joint_planning_is_hybrid_only_and_requires_both_agents_to_replan():
+    source = read(FSM)
+
+    assert "ExplorationParam::HYBRID" in source
+    assert "needsReplan" in source
+    assert "!needsReplan(0" in source
+    assert "!needsReplan(1" in source
+    assert "frontier_changed" in source
+
+
+def test_hybrid_semantic_gate_remains_the_original_two_threshold_rule():
+    source = read(MANAGER)
+
+    assert "std_dev > ep_->sigma_threshold_ && max_to_mean > ep_->max_to_mean_threshold_" in source
+
+
+def test_readme_requires_both_agents_to_need_replanning_before_joint_assignment():
+    readme = read(Path("README.md"))
+
+    assert "同一规划周期都需要" in readme
 
 
 def test_normal_planning_does_not_use_frontier_claims():

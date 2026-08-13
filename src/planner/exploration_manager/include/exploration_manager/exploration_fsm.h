@@ -106,8 +106,11 @@ private:
   ros::Publisher robot_marker_pub_[NUM_AGENTS];
 
   /* Action Planner */
-  bool planAgentsForCycle();
-  int callActionPlanner(int agent_idx);
+  bool checkReachedObjectBeforePlanning();
+  void finishTeamOnReach(int agent_idx);
+  bool needsReplan(int agent_idx, bool frontier_changed) const;
+  bool planAgentsForCycle(bool frontier_changed);
+  int callActionPlanner(int agent_idx, bool frontier_changed);
   int planNextBestAction(Vector2d current_pos, double current_yaw, const vector<Vector2d>& path,
       bool need_safety = true, int agent_idx = 0);
   Vector2d selectLocalTarget(

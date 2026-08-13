@@ -73,10 +73,29 @@ void ExplorationFSM::FSMCallback(const ros::TimerEvent& e)
   exec_timer_.stop();
   std::lock_guard<std::mutex> lock(data_mutex_);
 
-  // A joint assignment is allowed only when both agents enter the same planning
-  // phase together.  Otherwise each agent continues through its independent
-  // planner and no frontier Claim is used as a substitute for coordination.
-  planAgentsForCycle();
+  // Arrival at an existing object target wins over every map update and target
+  // assignment.  Never overwrite the target before testing this terminal case.
+  if (checkReachedObjectBeforePlanning()) {
+    publishPlannerState();
+    exec_timer_.start();
+    return;
+  }
+
+  bool shared_frontier_changed = false;
+  bool has_main_planner = false;
+  for (int agent_idx = 0; agent_idx < NUM_AGENTS; ++agent_idx) {
+    if (state_[agent_idx] == ROS_STATE::PLAN_ACTION &&
+        fd_->agent_[agent_idx].init_action_count_ >= 26) {
+      has_main_planner = true;
+      break;
+    }
+  }
+  if (has_main_planner)
+    shared_frontier_changed = updateFrontierAndObject();
+
+  // A joint assignment is Hybrid-only and requires both agents to actually
+  // replan this cycle.  Otherwise the existing independent path is preserved.
+  planAgentsForCycle(shared_frontier_changed);
 
   for (int agent_idx = 0; agent_idx < NUM_AGENTS; ++agent_idx) {
     auto& ad = fd_->agent_[agent_idx];
@@ -148,7 +167,7 @@ void ExplorationFSM::FSMCallback(const ros::TimerEvent& e)
           ad.start_yaw_ = ad.odom_yaw_;
 
           auto t1 = ros::Time::now();
-          ad.final_result_ = callActionPlanner(agent_idx);
+          ad.final_result_ = callActionPlanner(agent_idx, shared_frontier_changed);
           double call_action_planner_time = (ros::Time::now() - t1).toSec();
           ROS_INFO_THROTTLE(
               10.0, "[Agent %d] Planning process time = %.3f s", agent_idx, call_action_planner_time);
@@ -157,18 +176,8 @@ void ExplorationFSM::FSMCallback(const ros::TimerEvent& e)
           expl_state_msg.data = ad.final_result_;
           expl_state_pub_.publish(expl_state_msg);
           if (ad.final_result_ == FINAL_RESULT::REACH_OBJECT) {
-            std_msgs::Int32MultiArray reach_claim_msg;
-            reach_claim_msg.data = {agent_idx, FINAL_RESULT::REACH_OBJECT};
-            reach_claim_pub_.publish(reach_claim_msg);
-            ROS_WARN("Agent %d reached an object candidate; broadcasting STOP to all agents.",
-                agent_idx);
-            for (int stop_idx = 0; stop_idx < NUM_AGENTS; ++stop_idx) {
-              std_msgs::Int32 action_msg;
-              action_msg.data = ACTION::STOP;
-              action_pub_[stop_idx].publish(action_msg);
-              fd_->agent_[stop_idx].have_finished_ = true;
-              transitState(stop_idx, ROS_STATE::FINISH, "Reach Object");
-            }
+            // callActionPlanner() has already issued the reach claim and STOP.
+            // Keep this branch terminal so no per-agent action is published.
           }
           else if (ad.final_result_ == FINAL_RESULT::EXPLORE ||
               ad.final_result_ == FINAL_RESULT::SEARCH_OBJECT)
@@ -261,7 +270,47 @@ void ExplorationFSM::publishExplorationStrategy(int agent_idx)
  * This is the core planning function that decides what action the robot should take next.
  * It handles obstacle avoidance, frontier exploration, object search, and stuck recovery.
  */
-bool ExplorationFSM::planAgentsForCycle()
+bool ExplorationFSM::checkReachedObjectBeforePlanning()
+{
+  for (int agent = 0; agent < NUM_AGENTS; ++agent) {
+    const auto& ad = fd_->agent_[agent];
+    if (state_[agent] != ROS_STATE::PLAN_ACTION || ad.init_action_count_ < 26 || !ad.have_odom_ ||
+        ad.final_result_ != FINAL_RESULT::SEARCH_OBJECT || ad.planned_next_best_path_.empty())
+      continue;
+    const Vector2d current_pos(ad.odom_pos_.x(), ad.odom_pos_.y());
+    if ((current_pos - ad.planned_next_pos_).norm() < FSMConstants::REACH_DISTANCE) {
+      ROS_ERROR("Agent %d: reached the previous object target before replanning.", agent);
+      finishTeamOnReach(agent);
+      return true;
+    }
+  }
+  return false;
+}
+
+void ExplorationFSM::finishTeamOnReach(int agent_idx)
+{
+  std_msgs::Int32MultiArray reach_claim_msg;
+  reach_claim_msg.data = {agent_idx, FINAL_RESULT::REACH_OBJECT};
+  reach_claim_pub_.publish(reach_claim_msg);
+  ROS_WARN("Agent %d reached an object candidate; broadcasting STOP to all agents.", agent_idx);
+  for (int stop_idx = 0; stop_idx < NUM_AGENTS; ++stop_idx) {
+    std_msgs::Int32 action_msg;
+    action_msg.data = ACTION::STOP;
+    action_pub_[stop_idx].publish(action_msg);
+    fd_->agent_[stop_idx].have_finished_ = true;
+    fd_->agent_[stop_idx].final_result_ = FINAL_RESULT::REACH_OBJECT;
+    transitState(stop_idx, ROS_STATE::FINISH, "Reach Object");
+  }
+}
+
+bool ExplorationFSM::needsReplan(int agent_idx, bool frontier_changed) const
+{
+  const auto& ad = fd_->agent_[agent_idx];
+  return ad.planned_next_best_path_.empty() || ad.dormant_frontier_flag_ ||
+      ad.final_result_ != FINAL_RESULT::EXPLORE || frontier_changed;
+}
+
+bool ExplorationFSM::planAgentsForCycle(bool frontier_changed)
 {
   std::array<Vector3d, NUM_AGENTS> agent_positions;
   for (int agent = 0; agent < NUM_AGENTS; ++agent) {
@@ -270,6 +319,10 @@ bool ExplorationFSM::planAgentsForCycle()
       return false;
     agent_positions[agent] = ad.odom_pos_;
   }
+
+  if (expl_manager_->ep_->policy_mode_ != ExplorationParam::HYBRID ||
+      !needsReplan(0, frontier_changed) || !needsReplan(1, frontier_changed))
+    return false;
 
   const NavigationMode mode0 = expl_manager_->evaluateNavigationMode(agent_positions[0], 0);
   const NavigationMode mode1 = expl_manager_->evaluateNavigationMode(agent_positions[1], 1);
@@ -298,13 +351,11 @@ bool ExplorationFSM::planAgentsForCycle()
   return true;
 }
 
-int ExplorationFSM::callActionPlanner(int agent_idx)
+int ExplorationFSM::callActionPlanner(int agent_idx, bool frontier_changed)
 {
   const double stucking_distance = FSMConstants::STUCKING_DISTANCE;
   const double reach_distance = FSMConstants::REACH_DISTANCE;
   const double soft_reach_distance = FSMConstants::SOFT_REACH_DISTANCE;
-
-  bool frontier_change_flag = updateFrontierAndObject();
 
   int expl_res, final_res;
   auto& ad = fd_->agent_[agent_idx];
@@ -321,6 +372,7 @@ int ExplorationFSM::callActionPlanner(int agent_idx)
   if (ad.final_result_ == FINAL_RESULT::SEARCH_OBJECT &&
       (current_pos - ad.planned_next_pos_).norm() < reach_distance) {
     ROS_ERROR("Agent %d: Reach the object successfully!!!", agent_idx);
+    finishTeamOnReach(agent_idx);
     final_res = FINAL_RESULT::REACH_OBJECT;
     return final_res;
   }
@@ -330,6 +382,7 @@ int ExplorationFSM::callActionPlanner(int agent_idx)
     if (ad.final_result_ == FINAL_RESULT::SEARCH_OBJECT &&
         (current_pos - ad.planned_next_pos_).norm() < soft_reach_distance) {
       ROS_ERROR("Agent %d: Reach the object successfully!!!", agent_idx);
+      finishTeamOnReach(agent_idx);
       final_res = FINAL_RESULT::REACH_OBJECT;
       return final_res;
     }
@@ -415,7 +468,7 @@ int ExplorationFSM::callActionPlanner(int agent_idx)
     ad.replan_flag_ = true;
     ad.dormant_frontier_flag_ = false;
   }
-  else if (ad.final_result_ == FINAL_RESULT::EXPLORE && !frontier_change_flag)
+  else if (ad.final_result_ == FINAL_RESULT::EXPLORE && !frontier_changed)
     ad.replan_flag_ = false;
 
   if (ad.joint_assignment_pending_) {
