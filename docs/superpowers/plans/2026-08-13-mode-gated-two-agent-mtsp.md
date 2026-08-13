@@ -2,16 +2,16 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**目标：** 在 ApexNav 中实现模式相同时集中双 Agent MTSP、模式不同时独立规划的 `MINMAX` A* 距离分配。
+**目标：** 在 ApexNav 中实现模式相同时集中双起点 `MINMAX` mTSP 动态规划、模式不同时独立规划的 A* 距离分配。
 
-**架构：** FSM 在同一规划周期先评估两台 Agent 的最高优先级模式。模式不同或只有一台需要重规划时保留无 Claim 的独立规划；两台均需重规划且模式一致时，仅对该模式的共享候选池调用一次 LKH MTSP。求解器返回按 Agent 分离的路线，FSM 只下发每条路线的首目标。
+**架构：** FSM 在同一规划周期先评估两台 Agent 的最高优先级模式。模式不同或只有一台需要重规划时保留无 Claim 的独立规划；两台均需重规划且模式一致时，对最多 10 个同模式候选运行 Held--Karp 双起点 `MINMAX` 动态规划。动态规划回溯两条路线，FSM 只下发每条路线的首目标。
 
-**技术栈：** C++14、ROS1、Eigen、Astar2D、LKH-3 MTSP、pytest、catkin。
+**技术栈：** C++14、ROS1、Eigen、Astar2D、Held--Karp 动态规划、现有 LKH-3 单 Agent ATSP、pytest、catkin。
 
 ## 全局约束
 
 - 固定 `NUM_AGENTS == 2`。
-- 联合分配使用 `SALESMEN = 2` 与 `MTSP_OBJECTIVE = MINMAX`。
+- 联合分配不调用当前单 depot LKH-MTSP；使用两个不同起点的 Held--Karp `MINMAX` 动态规划。
 - 代价必须来自 A* 路径长度，语义值和置信度只作候选门控。
 - `SEARCH_BEST_OBJECT` 仅使用高置信度对象；不混入其他对象或 Frontier。
 - 常规规划不读写 `Frontier2D::claimed_by_`。
@@ -66,31 +66,29 @@ def test_joint_mtsp_contract_exposes_modes_and_two_agent_assignment():
 
 运行：`git add src/planner/exploration_manager/include/exploration_manager/exploration_manager.h src/planner/exploration_manager/include/exploration_manager/exploration_data.h src/planner/exploration_manager/src/exploration_manager.cpp tests/test_mode_gated_mtsp_policy.py; git commit -m "feat: add two-agent MTSP planning contract"`
 
-### 任务 2：实现双起点 MINMAX MTSP 文件和路线解析
+### 任务 2：实现双起点 MINMAX 动态规划与路线回溯
 
 **文件：**
 
 - 修改：`src/planner/exploration_manager/src/exploration_manager.cpp`
-- 修改：`src/planner/utils/lkh_mtsp_solver/src2/tsp_node.cpp`
-- 修改：`src/planner/utils/lkh_mtsp_solver/srv/SolveMTSP.srv`
 - 测试：`tests/test_mode_gated_mtsp_policy.py`
 
 **接口：**
 
-- `bool writeJointMtspProblem(...)`：写入包含两个 Agent 起点的本轮问题文件。
-- `bool parseMtspSolution(const std::string& file, size_t candidate_count, std::array<vector<int>, NUM_AGENTS>& routes)`：从 MTSP 专用结果中读取两条互斥路线。
+- `bool solveTwoStartMinmax(...)`：以两个 Agent 起点、A* 矩阵和候选列表产生两条互斥路线。
+- `bool reconstructRoute(...)`：从 DP 前驱表恢复一个 Agent 的目标索引序列。
 
 - [ ] **步骤 1：写失败测试**
 
 ```python
-def test_two_agent_mtsp_uses_minmax_and_mtsp_solution_file():
+def test_two_agent_mtsp_uses_two_start_minmax_dynamic_programming():
     source = read("src/planner/exploration_manager/src/exploration_manager.cpp")
-    assert "SALESMEN = 2" in source
-    assert "MTSP_OBJECTIVE = MINMAX" in source
-    assert "MTSP_SOLUTION_FILE" in source
-    assert "parseMtspSolution" in source
+    assert "solveTwoStartMinmax" in source
+    assert "held_karp" in source.lower()
+    assert "agent_positions[0]" in source
+    assert "agent_positions[1]" in source
 
-def test_mtsp_parser_validates_duplicate_and_out_of_range_targets():
+def test_two_start_dp_validates_duplicate_and_out_of_range_targets():
     source = read("src/planner/exploration_manager/src/exploration_manager.cpp")
     assert "candidate_count" in source
     assert "duplicate" in source.lower()
@@ -98,23 +96,23 @@ def test_mtsp_parser_validates_duplicate_and_out_of_range_targets():
 
 - [ ] **步骤 2：验证失败**
 
-运行：`pytest tests/test_mode_gated_mtsp_policy.py -k "minmax or parser_validates" -v`
+运行：`pytest tests/test_mode_gated_mtsp_policy.py -k "minmax or validates" -v`
 
-预期：因当前仅写 `SALESMEN = 1` 与 `MINSUM` 而失败。
+预期：因双起点 DP 与路线回溯不存在而失败。
 
 - [ ] **步骤 3：最小实现**
 
-为联合调用生成与单 Agent `atsp_tour.*` 不冲突的文件；写入 `SALESMEN = 2`、`MTSP_OBJECTIVE = MINMAX`、`MTSP_SOLUTION_FILE`。扩展服务请求，使服务读取指定参数文件。解析由 depot 分隔的两条路线，并拒绝空路线、重复、遗漏、范围外索引和文件错误。
+以 `K <= 10` 的候选上限实现 Held--Karp 表：分别计算 Agent 0、Agent 1 从各自起点访问任意子集的最短开放路线。遍历互补子集，选择 `max(route0_cost, route1_cost)` 最小的划分；从前驱表回溯两条路线，并拒绝空路线、重复、遗漏、范围外索引和不可达路径。
 
 - [ ] **步骤 4：验证通过**
 
-运行：`pytest tests/test_mode_gated_mtsp_policy.py -k "minmax or parser_validates" -v`
+运行：`pytest tests/test_mode_gated_mtsp_policy.py -k "minmax or validates" -v`
 
 预期：通过。
 
 - [ ] **步骤 5：提交**
 
-运行：`git add src/planner/exploration_manager/src/exploration_manager.cpp src/planner/utils/lkh_mtsp_solver/src2/tsp_node.cpp src/planner/utils/lkh_mtsp_solver/srv/SolveMTSP.srv tests/test_mode_gated_mtsp_policy.py; git commit -m "feat: add MINMAX two-agent MTSP solver path"`
+运行：`git add src/planner/exploration_manager/src/exploration_manager.cpp tests/test_mode_gated_mtsp_policy.py; git commit -m "feat: add two-start minmax task solver"`
 
 ### 任务 3：构造模式专属共同候选池和 A* 距离矩阵
 
