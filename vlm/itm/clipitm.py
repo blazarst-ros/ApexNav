@@ -27,7 +27,11 @@ class CLIPITM:
         elif not isinstance(device, torch.device):
             device = torch.device(device)
 
-        self.model, self.preprocess = clip.load(model_name, device=device)
+        # Keep model artifacts outside the repository/host home when an external
+        # deployment provides a dedicated cache directory.
+        download_root = os.environ.get("CLIP_DOWNLOAD_ROOT")
+        load_kwargs = {"download_root": download_root} if download_root else {}
+        self.model, self.preprocess = clip.load(model_name, device=device, **load_kwargs)
         self.device = device
         self.model.eval()
 
