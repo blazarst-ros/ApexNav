@@ -50,8 +50,7 @@ llm:
   llm_answer_path: llm/answers/llm_answer_mp3d.txt
   llm_response_path: llm/answers/llm_response_list.txt
   llm_client:
-    llm_client: ollama # deepseek, ollama, or none
-    ollama: 'qwen3:8b'
+    llm_client: offline # uses bundled answers; unknown labels use local defaults
 
 record_file_name: "record.txt"
 continue_file_name: "continue.txt"

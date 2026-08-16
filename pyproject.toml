@@ -39,7 +39,6 @@ dependencies = [
     "langdetect==1.0.9",
     "h5py==3.13.0",
     "gdown==5.2.0",
-    "ollama",
     "protobuf==3.20.1",
 ]
 

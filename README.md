@@ -35,16 +35,13 @@ cmake .. && make -j && sudo make install
 cd ../..
 ```
 
-#### 1.2 LLM (Optional)
+#### 1.2 Offline semantic-fusion answers
 
-You can use Ollama locally:
-
-```bash
-curl -fsSL https://ollama.com/install.sh | sh
-ollama pull qwen3:8b
-```
-
-If you do not want to use an LLM, change `llm.llm_client.llm_client` to `none` in the config files under `config/`.
+No LLM service is required. ApexNav uses the pre-generated semantic-fusion
+answers in `llm/answers/`. If a target category is not present in an answer
+file, it automatically uses a local neutral fallback (no related labels,
+`everywhere` room, and a `0.30` confidence threshold), so navigation can
+continue without Ollama, an API key, or network access.
 
 #### 1.3 Model Weights Download
 

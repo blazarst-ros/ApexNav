@@ -1,0 +1,106 @@
+Lite-ApexNav：HM3D-v2 最新启动指令
+====================================
+
+运行前确认
+----------
+- 源码目录：/home/blazarst/ApexNav
+- Python / Habitat 环境：/media/blazarst/Getea/Lite-ApexNav/conda-env/Lite-apex
+- HM3D-v2 ObjectNav 数据与 HM3D 场景数据均已就绪。
+- 当前版本使用离线语义融合答案，不需要启动 Ollama，也不需要 API Key。
+- 按终端 1 → 6 的顺序执行；每条长期运行的命令应保持运行，使用 Ctrl-C 才会停止。
+
+一次性构建（已完成；仅在修改 src/ 下 C++、.msg 或 CMake 文件后重新执行）
+-----------------------------------------------------------------------
+cd /home/blazarst/ApexNav
+source /opt/ros/noetic/setup.bash
+catkin_make -DPYTHON_EXECUTABLE=/usr/bin/python3
+
+终端 1：ROS Master
+------------------
+source /opt/ros/noetic/setup.bash
+roscore
+
+终端 2：CLIPITM 图文匹配服务
+---------------------------
+cd /home/blazarst/ApexNav
+/media/blazarst/Getea/Lite-ApexNav/run-lite-apex.sh \
+  -m vlm.itm.clipitm --port 12182
+
+# 继续前确认输出：Hosting on port 12182...
+
+终端 3：YOLOE 检测服务
+----------------------
+cd /home/blazarst/ApexNav
+LITE_APEX_WORKDIR=/media/blazarst/Getea/Lite-ApexNav/model-cache/ultralytics \
+  /media/blazarst/Getea/Lite-ApexNav/run-lite-apex.sh \
+  -m vlm.detector.yoloe --port 12184 \
+  --weights /media/blazarst/Getea/Lite-ApexNav/model-cache/yoloe-11l-seg.pt
+
+# 继续前确认输出：YOLOE warmup complete! 和 Hosting on port 12184...
+
+终端 4：RViz
+-------------
+cd /home/blazarst/ApexNav
+source /opt/ros/noetic/setup.bash
+source devel/setup.bash
+roslaunch exploration_manager rviz.launch
+
+终端 5：ApexNav 规划器和 TSP 求解器
+---------------------------------
+cd /home/blazarst/ApexNav
+source /opt/ros/noetic/setup.bash
+source devel/setup.bash
+roslaunch exploration_manager exploration.launch
+
+# 成功标志：出现 “TSP server is ready.” 与 “Starting in SIMULATION mode”。
+# 启动后可在另一终端检查：rosnode list
+# 应包含 /exploration_node 与 /tsp_solver。
+
+终端 6：HM3D-v2 Habitat 评测
+-----------------------------
+cd /home/blazarst/ApexNav
+# 必须保留 libffi 预加载；它修复 Conda 环境与 ROS cv_bridge 的兼容问题。
+LD_PRELOAD=/lib/x86_64-linux-gnu/libffi.so.7 \
+PYTHONUNBUFFERED=1 \
+  /media/blazarst/Getea/Lite-ApexNav/run-lite-apex.sh \
+  habitat_evaluation.py --dataset hm3dv2
+
+# 正常启动时会依次看到：
+# Environment creation successful
+# No cached answer for <label>; using offline defaults (...)   （仅缓存缺失类别时）
+# Agent is waiting in the environment!!!
+# Agent is ready to go!!!!
+
+常用选项（替换终端 6 的最后一行）
+---------------------------------
+# 只评测一个 episode
+LD_PRELOAD=/lib/x86_64-linux-gnu/libffi.so.7 \
+PYTHONUNBUFFERED=1 \
+  /media/blazarst/Getea/Lite-ApexNav/run-lite-apex.sh \
+  habitat_evaluation.py --dataset hm3dv2 test_epi_num=10
+
+# 保存视频
+LD_PRELOAD=/lib/x86_64-linux-gnu/libffi.so.7 \
+PYTHONUNBUFFERED=1 \
+  /media/blazarst/Getea/Lite-ApexNav/run-lite-apex.sh \
+  habitat_evaluation.py --dataset hm3dv2 need_video=true
+
+# 手动控制（替代评测脚本，不能与终端 6 同时运行）
+LD_PRELOAD=/lib/x86_64-linux-gnu/libffi.so.7 \
+PYTHONUNBUFFERED=1 \
+  /media/blazarst/Getea/Lite-ApexNav/run-lite-apex.sh \
+  habitat_manual_control.py --dataset hm3dv2
+
+运行状态检查
+------------
+source /opt/ros/noetic/setup.bash
+source /home/blazarst/ApexNav/devel/setup.bash
+rosnode list
+
+# 正常运行至少应有：
+# /rosout
+# /rviz_visualisation
+# /tf_53
+# /exploration_node
+# /tsp_solver
+# /habitat_eval_node_<pid>_<timestamp>
