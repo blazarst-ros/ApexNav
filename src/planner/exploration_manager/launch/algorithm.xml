@@ -24,7 +24,7 @@
         <remap from ="/map_ros/depth" to = "$(arg depth_topic_)"/>
 
         <!-- MapROS reads these params to find per-agent depth/pose topics.
-             makeAgentTopic() replaces "agent_0" with "agent_1", "agent_2", etc.
+             makeAgentTopic() replaces the trailing agent index for each configured agent.
              These must contain the actual Python-side topic names. -->
         <param name="sensor_pose_topic" value="$(arg sensor_pose_topic_)"/>
         <param name="depth_topic"       value="$(arg depth_topic_)"/>

@@ -288,14 +288,16 @@ bool ExplorationManager::solveTwoStartMinmax(
   const int n = static_cast<int>(candidates.size());
   if (n < NUM_AGENTS || n > 20) return false;
   const int states = 1 << n;
-  const double inf = std::numeric_limits<double>::infinity();
+  // `inf` is a macro in the ROS/PCL include chain on some platforms.
+  // Use a non-macro identifier so this planner remains portable.
+  const double infinity_cost = std::numeric_limits<double>::infinity();
   std::array<vector<double>, NUM_AGENTS> best_subset;
   std::array<vector<int>, NUM_AGENTS> best_end;
   std::array<vector<double>, NUM_AGENTS> dp;
   std::array<vector<int>, NUM_AGENTS> parent;
   for (int agent = 0; agent < NUM_AGENTS; ++agent) {
-    dp[agent].assign(states * n, inf); parent[agent].assign(states * n, -1);
-    best_subset[agent].assign(states, inf); best_end[agent].assign(states, -1);
+    dp[agent].assign(states * n, infinity_cost); parent[agent].assign(states * n, -1);
+    best_subset[agent].assign(states, infinity_cost); best_end[agent].assign(states, -1);
     for (int j = 0; j < n; ++j) {
       if (std::isfinite(candidates[j].initial_costs[agent]))
         dp[agent][(1 << j) * n + j] = candidates[j].initial_costs[agent];
@@ -311,7 +313,7 @@ bool ExplorationManager::solveTwoStartMinmax(
       }
     }
   }
-  const int full = states - 1; int selected = -1; double objective = inf;
+  const int full = states - 1; int selected = -1; double objective = infinity_cost;
   for (int mask = 1; mask < full; ++mask) {
     const double value = std::max(best_subset[0][mask], best_subset[1][full ^ mask]);
     if (value < objective) { objective = value; selected = mask; }

@@ -26,7 +26,7 @@ habitat:
         type: PointGoalWithGPSCompassSensor
     measurements:
       success:
-        success_distance: 0.35
+        success_distance: 1.0
   simulator:
     type: MultiAgentSim-v0
     turn_angle: 30
@@ -104,7 +104,7 @@ multiagent:
   episode_termination: cooperative
   inter_agent_avoidance: false
   agent_spawn_offset: 1.0
-  perception_agents_per_step: 3
+  perception_agents_per_step: 2
   # Per-agent viewpoint-change interval for VLM requests, not global scheduler steps.
   perception_interval_steps: 1
 

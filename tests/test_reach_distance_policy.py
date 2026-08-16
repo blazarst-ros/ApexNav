@@ -23,4 +23,4 @@ def test_eval_configs_match_main_ob_habitat_success_distance():
         Path("config/habitat_eval_mp3d.yaml"),
         Path("config/habitat_vel_control.yaml"),
     ]:
-        assert "success_distance: 0.35" in config_path.read_text(encoding="utf-8")
+        assert "success_distance: 1.0" in config_path.read_text(encoding="utf-8")

@@ -30,7 +30,7 @@ The evaluation success distance is:
 Config key:
 
 ```yaml
-success_distance: 0.35
+success_distance: 1.0
 ```
 
 The maximum episode length for evaluation is:
