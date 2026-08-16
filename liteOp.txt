@@ -9,16 +9,22 @@ Lite-ApexNav：HM3D-v2 最新启动指令
 - 当前版本使用离线语义融合答案，不需要启动 Ollama，也不需要 API Key。
 - 按终端 1 → 6 的顺序执行；每条长期运行的命令应保持运行，使用 Ctrl-C 才会停止。
 
+
+
 一次性构建（已完成；仅在修改 src/ 下 C++、.msg 或 CMake 文件后重新执行）
 -----------------------------------------------------------------------
 cd /home/blazarst/ApexNav
 source /opt/ros/noetic/setup.bash
 catkin_make -DPYTHON_EXECUTABLE=/usr/bin/python3
 
+
+
 终端 1：ROS Master
 ------------------
 source /opt/ros/noetic/setup.bash
 roscore
+
+
 
 终端 2：CLIPITM 图文匹配服务
 ---------------------------
@@ -27,6 +33,8 @@ cd /home/blazarst/ApexNav
   -m vlm.itm.clipitm --port 12182
 
 # 继续前确认输出：Hosting on port 12182...
+
+
 
 终端 3：YOLOE 检测服务
 ----------------------
@@ -38,12 +46,18 @@ LITE_APEX_WORKDIR=/media/blazarst/Getea/Lite-ApexNav/model-cache/ultralytics \
 
 # 继续前确认输出：YOLOE warmup complete! 和 Hosting on port 12184...
 
+
+
+
 终端 4：RViz
 -------------
 cd /home/blazarst/ApexNav
 source /opt/ros/noetic/setup.bash
 source devel/setup.bash
 roslaunch exploration_manager rviz.launch
+
+
+
 
 终端 5：ApexNav 规划器和 TSP 求解器
 ---------------------------------
@@ -56,6 +70,9 @@ roslaunch exploration_manager exploration.launch
 # 启动后可在另一终端检查：rosnode list
 # 应包含 /exploration_node 与 /tsp_solver。
 
+
+
+
 终端 6：HM3D-v2 Habitat 评测
 -----------------------------
 cd /home/blazarst/ApexNav
@@ -65,11 +82,8 @@ PYTHONUNBUFFERED=1 \
   /media/blazarst/Getea/Lite-ApexNav/run-lite-apex.sh \
   habitat_evaluation.py --dataset hm3dv2
 
-# 正常启动时会依次看到：
-# Environment creation successful
-# No cached answer for <label>; using offline defaults (...)   （仅缓存缺失类别时）
-# Agent is waiting in the environment!!!
-# Agent is ready to go!!!!
+
+
 
 常用选项（替换终端 6 的最后一行）
 ---------------------------------
@@ -104,3 +118,9 @@ rosnode list
 # /exploration_node
 # /tsp_solver
 # /habitat_eval_node_<pid>_<timestamp>
+
+
+
+export HTTP_PROXY=http://127.0.0.1:7890
+export HTTPS_PROXY=http://127.0.0.1:7890
+export ALL_PROXY=socks5://127.0.0.1:7890

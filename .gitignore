@@ -26,3 +26,5 @@ habitat-sim
 *.par
 bag
 wandb
+
+liteOp.txt
