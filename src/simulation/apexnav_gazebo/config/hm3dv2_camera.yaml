@@ -1,0 +1,31 @@
+# The HM3D-v2 config inherits 640x480 and hfov=79 degrees.  These K values
+# intentionally match basic_utils/object_point_cloud_utils/object_point_cloud.py.
+camera:
+  profile: hm3dv2
+  width: 640
+  height: 480
+  hfov_deg: 79.0
+  fx: 388.1910413097385
+  fy: 422.0475153598262
+  cx: 320.0
+  cy: 240.0
+  min_depth: 0.0
+  max_depth: 5.0
+  optical_frame: iris_camera_optical_frame
+
+sync:
+  queue_size: 20
+  rgb_depth_slop: 0.005
+  odom_history_sec: 5.0
+  max_odom_bracket_sec: 0.10
+  # MAVROS odom may arrive one or two 30 Hz samples behind Gazebo camera data.
+  # Accept the newest pose for up to 80 ms; the bridge still rejects any older
+  # gap and publishes every output with the source image timestamp.
+  max_future_extrapolation_sec: 0.08
+  max_frame_age_sec: 0.50
+  reject_time_regression: true
+
+extrinsic:
+  # base_link -> camera optical frame. Verify against the active PX4 model.
+  translation: [0.10, 0.0, 0.035]
+  rpy: [-1.5707963267948966, 0.0, -1.5707963267948966]

@@ -1,5 +1,8 @@
 import os
+from pathlib import Path
+import sys
 import threading
+from contextlib import contextmanager
 from typing import Any, List, Optional, Tuple
 
 import cv2
@@ -27,6 +30,46 @@ except Exception:
 YOLOE_WEIGHTS = "data/yoloe-11l-seg.pt"
 
 
+def _conda_model_cache() -> Path:
+    """Return the model cache adjacent to the active Lite conda environment."""
+    prefix = Path(os.environ.get("CONDA_PREFIX", sys.prefix)).expanduser()
+    # Expected layout: <Lite-ApexNav>/conda-env/<environment>.
+    return prefix.parent.parent / "model-cache" / "yoloe-11l-seg.pt"
+
+
+def _configure_ultralytics_asset_cache() -> None:
+    """Use the Lite project's existing Ultralytics assets for this process."""
+    asset_cache = _conda_model_cache().parent / "ultralytics"
+    if not asset_cache.is_dir():
+        return
+    try:
+        from ultralytics.utils import SETTINGS
+
+        # Bypass SettingsManager persistence: a process-local value is sufficient
+        # and avoids changing the user's global Ultralytics configuration.
+        dict.__setitem__(SETTINGS, "weights_dir", str(asset_cache))
+    except Exception:
+        # Falling back to Ultralytics' normal downloader remains valid when its
+        # implementation changes or no local cache is available.
+        pass
+
+
+@contextmanager
+def _ultralytics_asset_workdir():
+    """Prefer a complete shared MobileCLIP asset over a partial CWD download."""
+    asset_cache = _conda_model_cache().parent / "ultralytics"
+    asset = asset_cache / "mobileclip_blt.ts"
+    if not asset.is_file():
+        yield
+        return
+    previous = Path.cwd()
+    try:
+        os.chdir(asset_cache)
+        yield
+    finally:
+        os.chdir(previous)
+
+
 class YOLOEDetector:
     def __init__(
         self,
@@ -34,10 +77,16 @@ class YOLOEDetector:
         image_size: int = 640,
         device: Optional[str] = None,
     ) -> None:
+        # `weights` has already incorporated the CLI/environment default.  Do not
+        # read YOLOE_WEIGHTS again here: doing so made a stale exported value win
+        # over an explicit --weights argument.
         weights = resolve_existing_path(
-            os.environ.get("YOLOE_WEIGHTS", weights),
+            weights,
             WORKSPACE_ROOT / "data/yoloe-11l-seg.pt",
             PROJECT_ROOT / "data/yoloe-11l-seg.pt",
+            PROJECT_ROOT / "model-cache/yoloe-11l-seg.pt",
+            WORKSPACE_ROOT / "Lite-ApexNav/model-cache/yoloe-11l-seg.pt",
+            _conda_model_cache(),
         )
         if device is None:
             device = "cuda:0" if torch.cuda.is_available() else "cpu"
@@ -45,6 +94,7 @@ class YOLOEDetector:
         self.weights = weights
         self.image_size = image_size
         self.device = device
+        _configure_ultralytics_asset_cache()
         self.model = YOLOE(weights)
         self._predict_lock = threading.Lock()
         self._cached_classes: Tuple[str, ...] = ()
@@ -53,7 +103,11 @@ class YOLOEDetector:
 
     def warmup(self) -> None:
         dummy_image = np.zeros((self.image_size, self.image_size, 3), dtype=np.uint8)
-        self.predict(dummy_image, classes=["chair"])
+        # Ultralytics checks CWD before its configured weights directory.  Run the
+        # first text-encoder construction from the complete shared cache so an
+        # interrupted `mobileclip_blt.ts` in the repository cannot be selected.
+        with _ultralytics_asset_workdir():
+            self.predict(dummy_image, classes=["chair"])
 
     def predict(
         self,

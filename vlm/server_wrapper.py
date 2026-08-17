@@ -1,6 +1,5 @@
 import base64
 import os
-import random
 import threading
 import time
 from typing import Any, Dict
@@ -25,6 +24,17 @@ def host_model(model: Any, name: str, port: int = 5000) -> None:
     """
     app = Flask(__name__)
     request_lock = threading.Lock()
+    started_at = time.time()
+
+    @app.route("/healthz", methods=["GET"])
+    @app.route(f"/{name}/healthz", methods=["GET"])
+    def health() -> Dict[str, Any]:
+        return jsonify(
+            ready=True,
+            name=name,
+            model_type=type(model).__name__,
+            uptime_sec=time.time() - started_at,
+        )
 
     @app.route(f"/{name}", methods=["POST"])
     def process_request() -> Dict[str, Any]:
@@ -69,25 +79,30 @@ def str_to_image(img_str: str) -> np.ndarray:
 
 
 def send_request(url: str, **kwargs: Any) -> dict:
-    response = {}
-    for attempt in range(10):
-        try:
-            response = _send_request(url, **kwargs)
-            break
-        except Exception as e:
-            if attempt == 9:
-                print(e)
-                exit()
-            else:
-                print(f"Error: {e}. Retrying in 20-30 seconds...")
-                time.sleep(20 + random.random() * 10)
+    """Send a bounded request and surface failure to the ROS caller.
 
-    return response
+    Older code retried for several minutes and then called ``exit()``, which
+    could kill a navigation process and allowed an old inference to arrive long
+    after its source frame.  Callers now own the recovery policy.
+    """
+    max_attempts = int(kwargs.pop("max_attempts", os.environ.get("VLM_REQUEST_ATTEMPTS", 1)))
+    retry_backoff = float(kwargs.pop("retry_backoff", os.environ.get("VLM_RETRY_BACKOFF", 0.5)))
+    last_error = None
+    for attempt in range(max(1, max_attempts)):
+        try:
+            return _send_request(url, **kwargs)
+        except Exception as exc:
+            last_error = exc
+            if attempt + 1 < max_attempts:
+                time.sleep(retry_backoff * (attempt + 1))
+    raise RuntimeError(
+        f"VLM request to {url} failed after {max(1, max_attempts)} attempts: {last_error}"
+    ) from last_error
 
 
 def _send_request(url: str, **kwargs: Any) -> dict:
     request_timeout = float(
-        kwargs.pop("request_timeout", os.environ.get("VLM_REQUEST_TIMEOUT", 120))
+        kwargs.pop("request_timeout", os.environ.get("VLM_REQUEST_TIMEOUT", 5))
     )
 
     # Create a payload dict which is a clone of kwargs but all np.array values are
@@ -115,7 +130,7 @@ def _send_request(url: str, **kwargs: Any) -> dict:
                 result = resp.json()
                 break
             else:
-                raise Exception("Request failed")
+                raise RuntimeError(f"Request failed with HTTP {resp.status_code}: {resp.text[:200]}")
         except (
             requests.exceptions.Timeout,
             requests.exceptions.RequestException,

@@ -26,6 +26,7 @@ void ExplorationFSMReal::init(ros::NodeHandle& nh)
   nh.param("fsm/replan_traj_end_threshold", fp_->replan_traj_end_threshold_, 1.0);
   nh.param("fsm/replan_frontier_change_delay", fp_->replan_frontier_change_delay_, 0.5);
   nh.param("fsm/replan_timeout", fp_->replan_timeout_, 2.0);
+  nh.param<std::string>("map_ros/frame_id", world_frame_, "map");
 
   /* ROS Timer */
   exec_timer_ = nh.createTimer(
@@ -89,6 +90,7 @@ void ExplorationFSMReal::FSMCallback(const ros::TimerEvent& e)
       fd_->static_state_ = true;
       if (!fd_->have_finished_) {
         fd_->have_finished_ = true;
+        emergencyStop();
         clearVisMarker();
       }
       ROS_WARN_THROTTLE(1.0, "[Real] Finish exploration!");
@@ -235,6 +237,10 @@ TrajPlannerResult ExplorationFSMReal::callTrajectoryPlanner()
   if (fd_->final_result_ == FINAL_RESULT::SEARCH_OBJECT &&
       (fd_->start_pt_.head(2) - goal_pos).norm() < 0.25) {
     ROS_ERROR("[Real] Reach the object successfully!");
+    fd_->final_result_ = FINAL_RESULT::REACH_OBJECT;
+    expl_result_msg.data = fd_->final_result_;
+    expl_result_pub_.publish(expl_result_msg);
+    emergencyStop();
     return TrajPlannerResult::MISSION_COMPLETE;
   }
 
@@ -556,10 +562,6 @@ void ExplorationFSMReal::safetyCallback(const ros::TimerEvent& e)
     Eigen::Vector3d check_pos = expl_manager_->gcopter_->local_trajectory_.traj.getPos(t_check);
     Eigen::Vector2d check_pos_2d = check_pos.head(2);
 
-    // Skip positions too close to origin
-    if ((check_pos_2d - Eigen::Vector2d(0.0, 0.0)).norm() < 1.5)
-      continue;
-
     if (expl_manager_->sdf_map_->getInflateOccupancy(check_pos_2d)) {
       ROS_ERROR("[Real] Safety Stop!!! Obstacle detected (%.2f, %.2f) at time %.2f",
           check_pos_2d(0), check_pos_2d(1), t_check);
@@ -577,7 +579,7 @@ void ExplorationFSMReal::publishRobotMarker()
 
   // Create robot body cylinder marker
   visualization_msgs::Marker robot_marker;
-  robot_marker.header.frame_id = "world";
+  robot_marker.header.frame_id = world_frame_;
   robot_marker.header.stamp = ros::Time::now();
   robot_marker.ns = "robot_position";
   robot_marker.id = 0;
@@ -604,7 +606,7 @@ void ExplorationFSMReal::publishRobotMarker()
 
   // Create direction arrow marker
   visualization_msgs::Marker arrow_marker;
-  arrow_marker.header.frame_id = "world";
+  arrow_marker.header.frame_id = world_frame_;
   arrow_marker.header.stamp = ros::Time::now();
   arrow_marker.ns = "robot_direction";
   arrow_marker.id = 1;

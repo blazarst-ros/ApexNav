@@ -1,0 +1,7 @@
+<launch>
+  <param name="/use_sim_time" value="true"/>
+  <node pkg="apexnav_gazebo" type="px4_mission_supervisor.py"
+        name="px4_mission_supervisor" output="screen">
+    <rosparam command="load" file="$(find apexnav_gazebo)/config/px4_supervisor.yaml"/>
+  </node>
+</launch>

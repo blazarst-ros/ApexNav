@@ -25,6 +25,12 @@ void MapROS::init()
   node_.param("map_ros/fy", fy_, -1.0);
   node_.param("map_ros/cx", cx_, -1.0);
   node_.param("map_ros/cy", cy_, -1.0);
+  node_.param("map_ros/use_camera_info", use_camera_info_, true);
+  node_.param("map_ros/require_downward_camera", require_downward_camera_, false);
+  node_.param("map_ros/mapping_history_sec", mapping_history_sec_, 5.0);
+  node_.param("map_ros/semantic_match_tolerance", semantic_match_tolerance_, 0.05);
+  camera_info_ready_ = !use_camera_info_;
+  camera_width_ = camera_height_ = 0;
 
   // Load depth filtering parameters
   node_.param("map_ros/depth_filter_maxdist", depth_filter_maxdist_, -1.0);
@@ -33,6 +39,7 @@ void MapROS::init()
   node_.param("map_ros/filter_min_height", filter_min_height_, 0.5);
   node_.param("map_ros/filter_max_height", filter_max_height_, 0.88);
   node_.param("map_ros/k_depth_scaling_factor", k_depth_scaling_factor_, -1.0);
+  node_.param("map_ros/depth_unit_scale", depth_unit_scale_, 0.0);
   node_.param("map_ros/skip_pixel", skip_pixel_, -1);
   node_.param("map_ros/frame_id", frame_id_, string("world"));
   node_.param("map_ros/virtual_ground_height", virtual_ground_height_, -0.28);
@@ -60,9 +67,7 @@ void MapROS::init()
   depth_cloud_.reset(new PointCloud3D());
   filtered_depth_cloud2d_.reset(new PointCloud2D());
 
-  // Pre-allocate point cloud vectors for efficiency
-  proj_points_.resize(640 * 480 / (skip_pixel_ * skip_pixel_));
-  depth_cloud_->points.resize(640 * 480 / (skip_pixel_ * skip_pixel_));
+  // Image-dependent buffers are allocated from the received dimensions.
   proj_points_cnt_ = 0;
   depth_image_.reset(new cv::Mat);
 
@@ -96,10 +101,20 @@ void MapROS::init()
   value_map_pub_ = node_.advertise<sensor_msgs::PointCloud2>("/grid_map/value_map", 10);
   confidence_map_pub_ = node_.advertise<sensor_msgs::PointCloud2>("/grid_map/confidence_map", 10);
 
-  // Setup subscribers for object detection and ITM scores
-  detected_object_cloud_sub_ = node_.subscribe(
-      "/detector/clouds_with_scores", 10, &MapROS::detectedObjectCloudCallback, this);
-  itm_score_sub_ = node_.subscribe("/clip/cosine_score", 10, &MapROS::itmScoreCallback, this);
+  // Atomic semantic observations are the real/Gazebo interface. Legacy
+  // subscribers remain optional for Habitat compatibility only.
+  semantic_observation_sub_ = node_.subscribe(
+      "/apexnav/vlm/semantic_observation", 10, &MapROS::semanticObservationCallback, this);
+  camera_info_sub_ = node_.subscribe(
+      "/map_ros/camera_info", 2, &MapROS::cameraInfoCallback, this);
+  bool enable_legacy_semantics;
+  node_.param("map_ros/enable_legacy_semantics", enable_legacy_semantics, false);
+  if (enable_legacy_semantics) {
+    detected_object_cloud_sub_ = node_.subscribe(
+        "/detector/clouds_with_scores", 10, &MapROS::detectedObjectCloudCallback, this);
+    itm_score_sub_ =
+        node_.subscribe("/clip/cosine_score", 10, &MapROS::itmScoreCallback, this);
+  }
 
   // Setup synchronized subscribers for depth image and pose data
   depth_sub_.reset(
@@ -115,6 +130,11 @@ void MapROS::init()
   continue_over_depth_count_ = -1;
   itm_score_ = -1.0;
   map_start_time_ = ros::Time::now();
+}
+
+void MapROS::itmScoreCallback(const std_msgs::Float64ConstPtr& msg)
+{
+  itm_score_ = msg->data;
 }
 
 void MapROS::visCallback(const ros::TimerEvent& e)
@@ -135,9 +155,97 @@ void MapROS::visCallback(const ros::TimerEvent& e)
   vis_timer_.start();
 }
 
-void MapROS::itmScoreCallback(const std_msgs::Float64ConstPtr& msg)
+void MapROS::cameraInfoCallback(const sensor_msgs::CameraInfoConstPtr& msg)
 {
-  itm_score_ = msg->data;
+  if (msg->width == 0 || msg->height == 0 || !std::isfinite(msg->K[0]) ||
+      !std::isfinite(msg->K[4]) || msg->K[0] <= 0.0 || msg->K[4] <= 0.0) {
+    ROS_ERROR_THROTTLE(2.0, "Rejecting invalid CameraInfo");
+    return;
+  }
+  if (camera_info_ready_ &&
+      (camera_width_ != static_cast<int>(msg->width) ||
+          camera_height_ != static_cast<int>(msg->height))) {
+    ROS_ERROR_THROTTLE(2.0, "CameraInfo dimensions changed during mapping; rejecting update");
+    return;
+  }
+  if (camera_info_ready_ && (std::abs(fx_ - msg->K[0]) > 1e-6 ||
+                                std::abs(fy_ - msg->K[4]) > 1e-6 ||
+                                std::abs(cx_ - msg->K[2]) > 1e-6 ||
+                                std::abs(cy_ - msg->K[5]) > 1e-6)) {
+    ROS_ERROR_THROTTLE(2.0, "CameraInfo intrinsics changed during mapping; restart required");
+    return;
+  }
+  fx_ = msg->K[0];
+  fy_ = msg->K[4];
+  cx_ = msg->K[2];
+  cy_ = msg->K[5];
+  camera_width_ = msg->width;
+  camera_height_ = msg->height;
+  camera_info_ready_ = true;
+}
+
+void MapROS::semanticObservationCallback(const plan_env::SemanticObservationConstPtr& msg)
+{
+  if (msg->header.stamp.isZero() || msg->target_label.empty()) {
+    ROS_WARN_THROTTLE(2.0, "Rejecting semantic observation without source stamp/target");
+    return;
+  }
+  if (msg->header.frame_id != frame_id_) {
+    ROS_WARN_THROTTLE(2.0, "Rejecting semantic observation in frame '%s' (expected '%s')",
+        msg->header.frame_id.c_str(), frame_id_.c_str());
+    return;
+  }
+  if (!(msg->confidence_scores.size() == msg->point_clouds.size() &&
+          msg->confidence_scores.size() == msg->label_indices.size())) {
+    ROS_ERROR("Rejecting inconsistent SemanticObservation arrays");
+    return;
+  }
+  if (!semantic_target_.empty() && msg->target_label != semantic_target_) {
+    last_semantic_stamp_ = ros::Time(0);
+  }
+  semantic_target_ = msg->target_label;
+  if (!last_semantic_stamp_.isZero() && msg->header.stamp <= last_semantic_stamp_) {
+    ROS_WARN_THROTTLE(2.0, "Rejecting duplicate/out-of-order semantic observation");
+    return;
+  }
+
+  auto best = mapping_history_.end();
+  double best_delta = semantic_match_tolerance_ + 1.0;
+  for (auto it = mapping_history_.begin(); it != mapping_history_.end(); ++it) {
+    const double delta = std::abs((it->stamp - msg->header.stamp).toSec());
+    if (delta < best_delta) {
+      best_delta = delta;
+      best = it;
+    }
+  }
+  if (best == mapping_history_.end() || best_delta > semantic_match_tolerance_) {
+    ROS_WARN_THROTTLE(2.0, "Dropping stale semantic observation; nearest map frame delta %.3f s",
+        best_delta);
+    return;
+  }
+
+  // Run the existing object-map logic against the historical source frame,
+  // never against whichever depth callback happened to run most recently.
+  const Eigen::Vector3d current_camera_pos = camera_pos_;
+  const Eigen::Quaterniond current_camera_q = camera_q_;
+  PointCloud3D::Ptr current_depth_cloud(new PointCloud3D(*depth_cloud_));
+  camera_pos_ = best->camera_pos;
+  camera_q_ = best->camera_q;
+  depth_cloud_.reset(new PointCloud3D(*best->depth_cloud));
+  itm_score_ = msg->clip_valid && std::isfinite(msg->clip_score) ? msg->clip_score : -1.0;
+  plan_env::MultipleMasksWithConfidencePtr legacy(new plan_env::MultipleMasksWithConfidence());
+  legacy->point_clouds = msg->point_clouds;
+  legacy->confidence_scores = msg->confidence_scores;
+  legacy->label_indices = msg->label_indices;
+  if (msg->yolo_valid)
+    detectedObjectCloudCallback(legacy);
+  if (msg->clip_valid && std::isfinite(msg->clip_score))
+    map_->value_map_->updateValueMap(Eigen::Vector2d(best->camera_pos.x(), best->camera_pos.y()),
+        best->camera_yaw, best->free_grids, msg->clip_score);
+  last_semantic_stamp_ = msg->header.stamp;
+  camera_pos_ = current_camera_pos;
+  camera_q_ = current_camera_q;
+  depth_cloud_ = current_depth_cloud;
 }
 
 void MapROS::detectedObjectCloudCallback(const plan_env::MultipleMasksWithConfidenceConstPtr& msg)
@@ -151,13 +259,10 @@ void MapROS::detectedObjectCloudCallback(const plan_env::MultipleMasksWithConfid
 
   auto t1 = ros::Time::now();
 
-  // Check camera orientation - only process when looking down (for better object detection)
-  Eigen::Vector3d euler =
-      camera_q_.toRotationMatrix().eulerAngles(2, 1, 0);  // ZYX order: yaw, roll, pitch
-  if (euler[2] < 0)
-    euler[2] += M_PI;
-  double camera_pitch = euler[2];
-  if (camera_pitch < 1.5)  // Skip if camera not tilted down enough
+  // Optical +Z is the view direction. Avoid Euler-angle tests on an optical
+  // frame, which classify a horizontal camera as downward after axis rotation.
+  const bool camera_looking_down = camera_q_.toRotationMatrix().col(2).z() < -0.95;
+  if (require_downward_camera_ && !camera_looking_down)
     return;
 
   // Backup previous over-depth object cloud for consistency tracking
@@ -285,6 +390,20 @@ void MapROS::updateESDFCallback(const ros::TimerEvent& /*event*/)
 void MapROS::depthPoseCallback(
     const sensor_msgs::ImageConstPtr& img, const nav_msgs::OdometryConstPtr& pose)
 {
+  if (!camera_info_ready_) {
+    ROS_WARN_THROTTLE(2.0, "Waiting for valid CameraInfo before mapping");
+    return;
+  }
+  if (img->header.stamp.isZero() || pose->header.stamp.isZero() ||
+      std::abs((img->header.stamp - pose->header.stamp).toSec()) > 0.01) {
+    ROS_WARN_THROTTLE(2.0, "Rejecting depth/pose without coherent source timestamps");
+    return;
+  }
+  if (camera_width_ > 0 && (camera_width_ != static_cast<int>(img->width) ||
+                              camera_height_ != static_cast<int>(img->height))) {
+    ROS_ERROR_THROTTLE(2.0, "Depth dimensions differ from CameraInfo");
+    return;
+  }
   // Extract camera pose from odometry message
   camera_pos_(0) = pose->pose.pose.position.x;
   camera_pos_(1) = pose->pose.pose.position.y;
@@ -292,23 +411,47 @@ void MapROS::depthPoseCallback(
   camera_q_ = Eigen::Quaterniond(pose->pose.pose.orientation.w, pose->pose.pose.orientation.x,
       pose->pose.pose.orientation.y, pose->pose.pose.orientation.z);
 
-  // Calculate camera yaw angle for value map updates
-  Eigen::Vector3d euler =
-      camera_q_.toRotationMatrix().eulerAngles(2, 1, 0);  // ZYX order: yaw, roll, pitch
-  double camera_yaw = euler[0];
+  // ROS optical +Z is the viewing direction. Project that axis into the map
+  // plane; Euler-Z of an optical quaternion is offset by roughly 90 degrees.
+  const Eigen::Vector3d optical_forward = camera_q_.toRotationMatrix().col(2);
+  const double camera_yaw = std::atan2(optical_forward.y(), optical_forward.x());
   Eigen::Vector2d camera_pos = Eigen::Vector2d(camera_pos_(0), camera_pos_(1));
 
   // Skip processing if camera is outside map bounds
   if (!map_->isInMap(camera_pos))
     return;
 
-  // Convert depth image format (Habitat publishes Float32, some sensors use 8UC1)
-  cv_bridge::CvImagePtr cv_ptr = cv_bridge::toCvCopy(img, img->encoding);
-  if (img->encoding == sensor_msgs::image_encodings::TYPE_32FC1)
-    (cv_ptr->image).convertTo(cv_ptr->image, CV_16UC1, k_depth_scaling_factor_);
-  if (img->encoding == sensor_msgs::image_encodings::TYPE_8UC1)
-    (cv_ptr->image).convertTo(cv_ptr->image, CV_16UC1, 255.0);
-  cv_ptr->image.copyTo(*depth_image_);
+  // Convert every supported encoding to CV_32FC1 metres. Unsupported encodings
+  // are rejected instead of guessed.
+  cv_bridge::CvImageConstPtr cv_ptr;
+  try {
+    cv_ptr = cv_bridge::toCvShare(img, img->encoding);
+  }
+  catch (const cv_bridge::Exception& e) {
+    ROS_ERROR_THROTTLE(2.0, "Depth conversion failed: %s", e.what());
+    return;
+  }
+  if (img->encoding == sensor_msgs::image_encodings::TYPE_32FC1) {
+    const double scale = depth_unit_scale_ > 0.0 ? depth_unit_scale_ :
+        (depth_filter_maxdist_ - depth_filter_mindist_);
+    cv_ptr->image.convertTo(*depth_image_, CV_32FC1, scale,
+        depth_unit_scale_ > 0.0 ? 0.0 : depth_filter_mindist_);
+  }
+  else if (img->encoding == sensor_msgs::image_encodings::TYPE_16UC1) {
+    if (depth_unit_scale_ <= 0.0) {
+      ROS_ERROR_THROTTLE(2.0, "16UC1 requires positive map_ros/depth_unit_scale");
+      return;
+    }
+    cv_ptr->image.convertTo(*depth_image_, CV_32FC1, depth_unit_scale_);
+  }
+  else if (img->encoding == sensor_msgs::image_encodings::TYPE_8UC1 && depth_unit_scale_ <= 0.0) {
+    cv_ptr->image.convertTo(*depth_image_, CV_32FC1,
+        (depth_filter_maxdist_ - depth_filter_mindist_) / 255.0, depth_filter_mindist_);
+  }
+  else {
+    ROS_ERROR_THROTTLE(2.0, "Unsupported depth encoding '%s'", img->encoding.c_str());
+    return;
+  }
 
   auto t1 = ros::Time::now();
 
@@ -324,12 +467,19 @@ void MapROS::depthPoseCallback(
   double process_time = (ros::Time::now() - t1).toSec();
   ROS_INFO_THROTTLE(50.0, "[Calculating Time] Grid Map process time = %.3f s", process_time);
 
-  t1 = ros::Time::now();
-  // Update semantic value map if ITM score is available
-  if (itm_score_ != -1.0)
-    map_->value_map_->updateValueMap(camera_pos, camera_yaw, free_grids, itm_score_);
-  double value_map_time = (ros::Time::now() - t1).toSec();
-  ROS_INFO_THROTTLE(50.0, "[Calculating Time] Value Map process time = %.3f s", value_map_time);
+  // Cache the exact frame needed when asynchronous VLM results return. The
+  // occupancy map never waits for semantic inference.
+  MappingFrame frame;
+  frame.stamp = img->header.stamp;
+  frame.camera_pos = camera_pos_;
+  frame.camera_q = camera_q_;
+  frame.camera_yaw = camera_yaw;
+  frame.free_grids = free_grids;
+  frame.depth_cloud.reset(new PointCloud3D(*depth_cloud_));
+  mapping_history_.push_back(frame);
+  const ros::Time cutoff = frame.stamp - ros::Duration(mapping_history_sec_);
+  while (!mapping_history_.empty() && mapping_history_.front().stamp < cutoff)
+    mapping_history_.pop_front();
 
   // Trigger ESDF update if local map has been updated
   if (local_updated_) {
@@ -342,29 +492,26 @@ void MapROS::depthPoseCallback(
 void MapROS::processDepthImage()
 {
   proj_points_cnt_ = 0;
-
-  uint16_t* row_ptr;
   int cols = depth_image_->cols;
   int rows = depth_image_->rows;
   double depth;
   Eigen::Matrix3d camera_r = camera_q_.toRotationMatrix();
   Eigen::Vector3d pt_cur, pt_world;
-  const double inv_factor = 1.0 / k_depth_scaling_factor_;
+  depth_cloud_->clear();
+  const int estimated_points =
+      std::max(1, (rows / std::max(1, skip_pixel_)) * (cols / std::max(1, skip_pixel_)));
+  depth_cloud_->points.reserve(estimated_points);
 
   // Iterate through depth image pixels with margin and skipping for efficiency
   for (int v = depth_filter_margin_; v < rows - depth_filter_margin_; v += skip_pixel_) {
-    row_ptr = depth_image_->ptr<uint16_t>(v) + depth_filter_margin_;
     for (int u = depth_filter_margin_; u < cols - depth_filter_margin_; u += skip_pixel_) {
-      // Convert pixel depth value to metric distance
-      depth = (*row_ptr) * inv_factor * (depth_filter_maxdist_ - depth_filter_mindist_) +
-              depth_filter_mindist_;
-      row_ptr = row_ptr + skip_pixel_;
+      depth = depth_image_->at<float>(v, u);
 
       // Apply depth range filtering
+      if (!std::isfinite(depth) || depth <= 0.0 || depth < depth_filter_mindist_)
+        continue;
       if (depth > depth_filter_maxdist_)
         depth = depth_filter_maxdist_;
-      else if (depth < depth_filter_mindist_)
-        continue;
 
       // Project pixel to 3D camera coordinates
       pt_cur(0) = (u - cx_) * depth / fx_;
@@ -373,12 +520,17 @@ void MapROS::processDepthImage()
 
       // Transform to world coordinates
       pt_world = camera_r * pt_cur + camera_pos_;
-      auto& pt = depth_cloud_->points[proj_points_cnt_++];
+      Point3D pt;
       pt.x = pt_world[0];
       pt.y = pt_world[1];
       pt.z = pt_world[2];
+      depth_cloud_->points.push_back(pt);
+      ++proj_points_cnt_;
     }
   }
+  depth_cloud_->width = depth_cloud_->points.size();
+  depth_cloud_->height = 1;
+  depth_cloud_->is_dense = false;
   publishPointCloud(depth_cloud_pub_, depth_cloud_);
 }
 
@@ -498,15 +650,8 @@ void MapROS::filterPointCloudToXY()
     outrem.filter(*under_ground_cloud_3d);
   }
 
-  // Add virtual ground points to prevent getting stuck when going downstairs
-  Eigen::Vector3d euler =
-      camera_q_.toRotationMatrix().eulerAngles(2, 1, 0);  // ZYX order: yaw roll pitch
-  if (euler[2] < 0)
-    euler[2] += M_PI;
-  double camera_pitch = euler[2];
-
-  // When camera is pointing down (pitch > 1.5 rad) and under-ground points exist
-  if (camera_pitch > 1.5 && !under_ground_cloud_3d->points.empty()) {
+  const bool camera_looking_down = camera_q_.toRotationMatrix().col(2).z() < -0.95;
+  if (camera_looking_down && !under_ground_cloud_3d->points.empty()) {
     for (auto pt : under_ground_cloud_3d->points) {
       Eigen::Vector3d pt_pos = Eigen::Vector3d(pt.x, pt.y, pt.z);
       Eigen::Vector2d ground_pos;

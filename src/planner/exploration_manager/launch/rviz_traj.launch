@@ -1,4 +1,5 @@
 <launch>
-  <node name="rviz_visualisation" pkg="rviz" type="rviz" output="log" args="-d $(find exploration_manager)/config/ApexNav_Traj.rviz" />
-  <node pkg="tf" type="static_transform_publisher" name="tf_53" args="0 0 0 0 0 0 world navigation 100" />
+  <arg name="fixed_frame" default="odom"/>
+  <node name="rviz_visualisation" pkg="rviz" type="rviz" output="log" args="-d $(find exploration_manager)/config/ApexNav_Traj.rviz -f $(arg fixed_frame)" />
+  <node pkg="tf" type="static_transform_publisher" name="tf_53" args="0 0 0 0 0 0 $(arg fixed_frame) navigation 100" />
 </launch>

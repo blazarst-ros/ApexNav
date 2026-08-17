@@ -164,6 +164,7 @@ private:
 
   // ==================== Data Members ====================
   ros::Publisher object_cloud_pub_;  ///< Publisher for colored object visualization
+  std::string frame_id_;             ///< World frame shared with MapROS visualizations
 
   // Object storage and indexing
   vector<int> object_indexs_;      ///< Grid cell to object ID mapping
@@ -440,7 +441,7 @@ inline void ObjectMap2D::publishObjectClouds()
   // Publish the combined visualization
   sensor_msgs::PointCloud2 output;
   pcl::toROSMsg(*combined_colored_cloud, output);
-  output.header.frame_id = "world";
+  output.header.frame_id = frame_id_;
   output.header.stamp = ros::Time::now();
   object_cloud_pub_.publish(output);
 }

@@ -1,0 +1,19 @@
+<launch>
+  <arg name="world_frame" default="map"/>
+  <arg name="odom_topic" default="/mavros/local_position/odom"/>
+  <param name="/use_sim_time" value="true"/>
+
+  <include file="$(find exploration_manager)/launch/exploration_traj.launch">
+    <arg name="odom_topic" value="$(arg odom_topic)"/>
+    <arg name="sensor_pose_topic" value="/apexnav/camera/pose"/>
+    <arg name="depth_topic" value="/apexnav/camera/depth/image_raw"/>
+    <arg name="camera_info_topic" value="/apexnav/camera/camera_info"/>
+    <arg name="cmd_vel_topic" value="/apexnav/planner/cmd_vel_raw"/>
+    <arg name="depth_unit_scale" value="1.0"/>
+    <arg name="world_frame" value="$(arg world_frame)"/>
+    <arg name="planning_param_file" value="$(find apexnav_gazebo)/config/iris_planning_param.yaml"/>
+    <arg name="obstacles_inflation" value="0.08"/>
+    <arg name="filter_min_height" value="0.35"/>
+    <arg name="filter_max_height" value="1.65"/>
+  </include>
+</launch>

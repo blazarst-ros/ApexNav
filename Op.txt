@@ -15,30 +15,18 @@ roscore
 
 ***************开启VLM必要的库****************
 
-# 终端 1
+# 终端 1：Lite 图文匹配（CLIPITM）
 cd ApexNav
 conda activate apexnav
 #export no_proxy="localhost,127.0.0.1"
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
-python -m vlm.detector.grounding_dino --port 12181
-# 终端 2
+python -m vlm.itm.clipitm --port 12182
+# 终端 2：Lite 开放词表检测/分割（YOLOE）
 cd ApexNav
 conda activate apexnav
 #export no_proxy="localhost,127.0.0.1"
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
-python -m vlm.itm.blip2itm --port 12182
-# 终端 3
-cd ApexNav
-conda activate apexnav
-#export no_proxy="localhost,127.0.0.1"
-export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
-python -m vlm.segmentor.sam --port 12183
-# 终端 4
-cd ApexNav
-conda activate apexnav
-#export no_proxy="localhost,127.0.0.1"
-export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
-python -m vlm.detector.yolov7 --port 12184
+python -m vlm.detector.yoloe --port 12184
 
 
 
@@ -94,7 +82,7 @@ python habitat_vel_control.py test_epi_num=8
 
 
 
-********真实世界节点启动（桥联节点）(测评模式切忌使用！！！！否则话题将会被覆盖)************************
+********真实世界节点启动（真机；不要和 Habitat 测评同时运行）************************
 conda activate apexnav
 cd ~/ApexNav
 source ./devel/setup.bash
@@ -105,7 +93,10 @@ export LD_PRELOAD=/usr/lib/x86_64-linux-gnu/libffi.so.7
 
 
 
-python ./real_world_test_example/real_world_test_habitat.py # 3. 執行橋接節點
+python ./real_world_test_example/real_world_tf_pose.py \
+  _world_frame:=odom _camera_frame:=camera_color_optical_frame
+python ./real_world_test_example/real_world_perception.py \
+  ros.world_frame:=odom ros.camera_frame:=camera_color_optical_frame
 
 
 

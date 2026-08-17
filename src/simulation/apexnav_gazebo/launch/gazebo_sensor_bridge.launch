@@ -1,0 +1,12 @@
+<launch>
+  <arg name="world_frame" default="map"/>
+  <arg name="odom_topic" default="/mavros/local_position/odom"/>
+  <param name="/use_sim_time" value="true"/>
+
+  <node pkg="apexnav_gazebo" type="gazebo_sensor_adapter.py"
+        name="gazebo_sensor_adapter" output="screen">
+    <rosparam command="load" file="$(find apexnav_gazebo)/config/hm3dv2_camera.yaml"/>
+    <param name="world_frame" value="$(arg world_frame)"/>
+    <param name="odom_topic" value="$(arg odom_topic)"/>
+  </node>
+</launch>

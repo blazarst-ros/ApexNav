@@ -1,0 +1,20 @@
+uint8 WAIT_FCU=0
+uint8 PRESTREAM=1
+uint8 ARM=2
+uint8 OFFBOARD_TAKEOFF=3
+uint8 HOLD_READY=4
+uint8 AUTO=5
+uint8 HOLD=6
+uint8 LAND=7
+uint8 DISARMED=8
+uint8 FAULT=9
+
+std_msgs/Header header
+uint8 state
+string target_label
+string detail
+bool fcu_connected
+bool armed
+string px4_mode
+float32 altitude
+bool planner_active

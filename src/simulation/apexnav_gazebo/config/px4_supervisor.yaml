@@ -1,0 +1,17 @@
+setpoint_rate: 30.0
+prestream_sec: 2.0
+takeoff_altitude: 1.0
+altitude_tolerance: 0.10
+altitude_stable_sec: 2.0
+completion_hold_sec: 2.0
+fault_land_delay_sec: 3.0
+recovery_stable_sec: 1.0
+command_timeout_sec: 0.30
+planner_start_timeout_sec: 3.0
+arm_transition_timeout_sec: 10.0
+odom_timeout_sec: 0.20
+sensor_timeout_sec: 0.50
+semantic_timeout_sec: 5.0
+max_horizontal_speed: 0.25
+max_yaw_rate: 0.40
+auto_start_planner: true

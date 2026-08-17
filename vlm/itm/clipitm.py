@@ -1,4 +1,6 @@
 import os
+from pathlib import Path
+import sys
 import time
 from typing import Any, Optional
 
@@ -12,6 +14,13 @@ try:
     import clip
 except Exception:
     print("Could not import clip. This is OK if you are only using the client.")
+
+
+def _default_clip_download_root() -> Optional[str]:
+    """Locate the shared Lite model cache from the active conda environment."""
+    prefix = Path(os.environ.get("CONDA_PREFIX", sys.prefix)).expanduser()
+    cache = prefix.parent.parent / "model-cache" / "clip"
+    return str(cache) if cache.is_dir() else None
 
 
 class CLIPITM:
@@ -29,7 +38,7 @@ class CLIPITM:
 
         # Keep model artifacts outside the repository/host home when an external
         # deployment provides a dedicated cache directory.
-        download_root = os.environ.get("CLIP_DOWNLOAD_ROOT")
+        download_root = os.environ.get("CLIP_DOWNLOAD_ROOT") or _default_clip_download_root()
         load_kwargs = {"download_root": download_root} if download_root else {}
         self.model, self.preprocess = clip.load(model_name, device=device, **load_kwargs)
         self.device = device

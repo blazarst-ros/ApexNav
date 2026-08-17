@@ -9,11 +9,18 @@
   <arg name="is_real_world" default="true"/>
 
   <!-- topic of your odometry such as VIO or LIO -->
-  <arg name="odom_topic" value="/habitat/odom" />
-  <!-- transform of camera frame in the world frame -->
-  <arg name="sensor_pose_topic" value="/habitat/sensor_pose"/>
-  <!-- depth image, 640x480 by default -->
-  <arg name="depth_topic" value="/habitat/camera_depth"/>
+  <arg name="odom_topic" default="/odom" />
+  <!-- Camera pose in the map frame. Publish this from TF using real_world_tf_pose.py. -->
+  <arg name="sensor_pose_topic" default="/apexnav/camera_odom"/>
+  <arg name="depth_topic" default="/camera/aligned_depth_to_color/image_raw"/>
+  <arg name="camera_info_topic" default="/camera/color/camera_info"/>
+  <arg name="cmd_vel_topic" default="/cmd_vel"/>
+  <arg name="depth_unit_scale" default="0.001"/>
+  <arg name="world_frame" default="odom"/>
+  <arg name="planning_param_file" default="$(find trajectory_manager)/config/planning_param.yaml"/>
+  <arg name="obstacles_inflation" default="0.18"/>
+  <arg name="filter_min_height" default="0.28"/>
+  <arg name="filter_max_height" default="1.18"/>
 
   <!-- TODO: Load real-world specific configuration -->
   <!-- <rosparam file="$(find exploration_manager)/config/real_world_params.yaml" command="load" /> -->
@@ -29,12 +36,19 @@
     <arg name="odometry_topic_" value="$(arg odom_topic)"/>
     <arg name="sensor_pose_topic_" value="$(arg sensor_pose_topic)"/>
     <arg name="depth_topic_" value="$(arg depth_topic)"/>
+    <arg name="camera_info_topic_" value="$(arg camera_info_topic)"/>
 
     <!-- intrinsic params of the depth camera - TODO: update for your camera -->
-    <arg name="cx_" value="320"/>
-    <arg name="cy_" value="240"/>
-    <arg name="fx_" value="388.1910413097385"/>
-    <arg name="fy_" value="422.0475153598262"/>
+    <arg name="cx_" default="320"/>
+    <arg name="cy_" default="240"/>
+    <arg name="fx_" default="388.1910413097385"/>
+    <arg name="fy_" default="422.0475153598262"/>
+    <arg name="depth_unit_scale_" value="$(arg depth_unit_scale)"/>
+    <arg name="world_frame_" value="$(arg world_frame)"/>
+    <arg name="planning_param_file_" value="$(arg planning_param_file)"/>
+    <arg name="obstacles_inflation_" value="$(arg obstacles_inflation)"/>
+    <arg name="filter_min_height_" value="$(arg filter_min_height)"/>
+    <arg name="filter_max_height_" value="$(arg filter_max_height)"/>
   </include>
 
   <!-- Trajectory server for real robot control -->
@@ -42,12 +56,13 @@
     <rosparam file="$(find trajectory_manager)/config/control_param.yaml" command="load" />
     <remap from="~odometry" to="$(arg odom_topic)"/>
     <remap from="~trajectory" to="/planning/trajectory"/>
-    <remap from="~cmd_vel" to="/cmd_vel"/>
+    <remap from="~cmd_vel" to="$(arg cmd_vel_topic)"/>
 
     <!-- Real-world specific parameters -->
     <param name="need_init" value="false" type="bool"/>
     <param name="max_correction_vel" value="1.0" type="double"/>
     <param name="max_correction_omega" value="1.57" type="double"/>
+    <param name="world_frame" value="$(arg world_frame)" type="string"/>
   </node>
 
   <!-- TODO: Add additional real-world nodes if needed -->

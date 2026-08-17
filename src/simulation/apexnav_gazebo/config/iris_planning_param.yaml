@@ -1,0 +1,28 @@
+################ PX4 Iris fixed-altitude 2-D model ################
+max_vel: 0.25
+max_acc: 0.30
+max_domega: 0.40
+zoom_omega: 0.20
+max_cur: 3.0
+wheel_base: 0.35
+length: 0.70
+width: 0.70
+height: 0.30
+
+astar_cur: 3.0
+step_arc: 0.15
+lambda_heu: 1.0
+max_seach_time: 2.0
+checkl: 0.05
+check_num: 7
+non_siguav: 0.01
+oneshot_range: 0.8
+sampletime: 0.1
+collision_interval: 0.05
+
+time_weight: 15.0
+penaltyWeights: [5, 8, 20, 8, 1500]
+denseResolution: 20
+sparseResolution: 8
+timeResolution: 1
+safe_dist: 0.10

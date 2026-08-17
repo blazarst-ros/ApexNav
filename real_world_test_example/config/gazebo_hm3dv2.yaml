@@ -1,5 +1,3 @@
-# Physical-robot defaults. Override these keys with Hydra, e.g.
-# ros.rgb_topic:=/camera/color/image_raw ros.camera_frame:=camera_color_optical_frame
 target_label: ""
 use_llm: false
 
@@ -10,19 +8,18 @@ detector:
     agnostic_nms: true
 
 ros:
-  rgb_topic: /camera/color/image_raw
-  depth_topic: /camera/aligned_depth_to_color/image_raw
-  camera_info_topic: /camera/color/camera_info
+  rgb_topic: /apexnav/camera/rgb/image_raw
+  depth_topic: /apexnav/camera/depth/image_raw
+  camera_info_topic: /apexnav/camera/camera_info
   camera_pose_topic: /apexnav/camera/pose
-  world_frame: odom
-  camera_frame: camera_color_optical_frame
-  # 16UC1 RealSense depth is millimetres. Use 1.0 for 32FC1 depth in metres.
-  depth_unit_scale: 0.001
+  world_frame: map
+  camera_frame: iris_camera_optical_frame
+  depth_unit_scale: 1.0
   min_depth: 0.15
   max_depth: 5.0
   object_cloud_stride: 3
   sync_queue: 20
-  sync_slop: 0.03
+  sync_slop: 0.01
   max_frame_age: 0.50
   legacy_topics: false
 

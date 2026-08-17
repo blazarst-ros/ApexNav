@@ -30,7 +30,7 @@ case "$stage" in
     add_agent_topics camera_depth
     for agent in "${agents[@]}"; do
       topics+=("/detector/agent_${agent}/clouds_with_scores")
-      topics+=("/blip2/agent_${agent}/cosine_score")
+      topics+=("/clip/agent_${agent}/cosine_score")
     done
     topics+=(/stage1/detector/detection /detector/confidence_threshold)
     ;;
@@ -61,7 +61,7 @@ case "$stage" in
   shared_map)
     for agent in "${agents[@]}"; do
       topics+=("/detector/agent_${agent}/clouds_with_scores")
-      topics+=("/blip2/agent_${agent}/cosine_score")
+      topics+=("/clip/agent_${agent}/cosine_score")
     done
     topics+=(/grid_map/value_map /grid_map/semantic_objects /grid_map/occupancy_object)
     topics+=(/object/cluster_status /object/cluster_markers /grid_map/occupied /grid_map/esdf)

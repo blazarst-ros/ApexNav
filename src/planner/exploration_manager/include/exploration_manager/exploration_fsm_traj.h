@@ -115,6 +115,7 @@ private:
   std::shared_ptr<FSMParam> fp_;
   std::shared_ptr<FSMData> fd_;
   RealFSM::State state_;
+  std::string world_frame_;
 
   /* ROS Utils */
   ros::NodeHandle node_;

@@ -66,23 +66,13 @@ def get_segmentation(segmented_img, idx, detections, img, label, score, color):
 
 def _get_yoloe_params(cfg):
     yoloe_cfg = getattr(cfg, "yoloe", None)
-    if yoloe_cfg is not None:
-        return (
-            getattr(yoloe_cfg, "confidence_threshold", 0.3),
-            getattr(yoloe_cfg, "iou_threshold", 0.5),
-            getattr(yoloe_cfg, "agnostic_nms", True),
-        )
-
-    legacy_yolo_cfg = getattr(cfg, "yolo", None)
-    legacy_dino_cfg = getattr(cfg, "groundingDINO", None)
-    confidence_threshold = getattr(
-        legacy_yolo_cfg,
-        "confidence_threshold_yolo",
-        getattr(legacy_dino_cfg, "confidence_threshold_dino", 0.3),
+    if yoloe_cfg is None:
+        raise ValueError("Lite VLM requires detector.yoloe configuration")
+    return (
+        getattr(yoloe_cfg, "confidence_threshold", 0.3),
+        getattr(yoloe_cfg, "iou_threshold", 0.5),
+        getattr(yoloe_cfg, "agnostic_nms", True),
     )
-    iou_threshold = getattr(legacy_yolo_cfg, "iou_threshold_yolo", 0.5)
-    agnostic_nms = getattr(legacy_yolo_cfg, "agnostic_nms", True)
-    return confidence_threshold, iou_threshold, agnostic_nms
 
 
 def _merge_labels(right_label, similar_answer):
@@ -124,14 +114,14 @@ def get_object(right_label, img, cfg, similar_answer, return_stats=False):
             segmented_img, object_mask = get_segmentation(
                 segmented_img, idx, detections, img, label_detected, score, color=(255, 0, 0)
             )
-            score_list.append(score)
+            score_list.append(float(score))
             object_masks_list.append(object_mask)
             label_list.append(0)
         elif label_detected in all_answer:
             segmented_img, object_mask = get_segmentation(
                 segmented_img, idx, detections, img, label_detected, score, color=(0, 255, 0)
             )
-            score_list.append(score)
+            score_list.append(float(score))
             object_masks_list.append(object_mask)
             label_list.append(all_answer.index(label_detected) - len(right_label_list) + 1)
 
@@ -170,7 +160,7 @@ def get_object_with_itm(label, img, cfg):
         img_detected = crop_and_expand_box(img, detections, idx)
         cosine, itm_score = get_itm_message(img_detected, label)
         print(f"cosine: {cosine:.3f}, itm_score: {itm_score:.3f}")
-        score_list.append(score)
+        score_list.append(float(score))
         object_masks_list.append(object_mask)
         cosine_list.append(cosine)
         itm_score_list.append(itm_score)

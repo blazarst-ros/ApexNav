@@ -1,0 +1,46 @@
+#仅Gazebo
+ export GAZEBO_MODEL_PATH=/home/blazarst/model_editor_models:/home/blazarst/.gazebo/models:/usr/share/gazebo-11/models
+ gazebo --verbose
+
+
+
+
+#仅仅环境
+ cd /media/blazarst/Getea/ApexGazebo/src/aws-robomaker-small-house-world
+ git switch -c ros1 --track origin/ros1
+ source /usr/share/gazebo/setup.sh
+ export GAZEBO_MODEL_PATH="$PWD/models:${GAZEBO_MODEL_PATH}"
+ gazebo worlds/small_house.world --verbose
+
+
+
+#环境+无人机+深度相机
+  export HOUSE=/media/blazarst/Getea/ApexGazebo/src/aws-robomaker-small-house-world
+  export PX4=/media/blazarst/Getea/ApexGazebo/src/PX4-Autopilot
+
+  source /usr/share/gazebo/setup.sh
+  export GAZEBO_MODEL_PATH="$HOUSE/models:${GAZEBO_MODEL_PATH}"
+  export PX4_SITL_WORLD="$HOUSE/worlds/small_house.world"
+
+  cd "$PX4"
+  make px4_sitl gazebo-classic_iris_depth_camera  #启动，带有深度相机
+  
+    
+#查看深度图像 
+  source /opt/ros/noetic/setup.bash
+  rqt_image_view /iris_depth_camera/camera/depth/image_raw
+#RGB
+  source /opt/ros/noetic/setup.bash
+  rqt_image_view /iris_depth_camera/camera/rgb/image_raw
+
+ 
+ #启动飞控
+    cd /media/blazarst/Getea/ApexGazebo/tools/qgroundcontrol
+  ./QGroundControl-4.2.8.AppImage
+
+
+# ApexNav完整分终端仿真
+# 不建议调试阶段一键启动。请按以下文档依次启动：
+#   /home/blazarst/ApexNav/real_world_test_example/README.md
+# 顺序：roscore -> PX4/Gazebo -> MAVROS -> sensor bridge -> YOLOE/CLIPITM
+#      -> perception -> planner -> PX4 supervisor -> RViz -> mission/start

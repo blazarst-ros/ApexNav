@@ -68,13 +68,13 @@ rostopic list | sort | tee RuntimeData/topic_list_$(date +%Y%m%d_%H%M%S).txt
 
 判定：仅一个 `/exploration_node`，且它订阅 `agent_0` 和 `agent_1` 的深度、位姿、检测云、
 ITM 分数和里程计。`/detector/agent_X/clouds_with_scores` 必须各有一个发布者；仿真模式
-不要同时运行 `real_world_test_habitat.py`，否则会产生重复检测发布者。
+不要同时运行 `real_world_perception.py`，否则会产生重复检测发布者。
 
 ## 1. 识别输入与识别结果
 
 数据流：`/habitat/agent_X/camera_rgb` 与深度图进入 Python 识别；检测结果经
 `/detector/agent_X/clouds_with_scores` 进入 MapROS；语义相关性经
-`/blip2/agent_X/cosine_score` 写入 ValueMap。`/stage1/detector/detection` 是 Python
+`/clip/agent_X/cosine_score` 写入 ValueMap。`/stage1/detector/detection` 是 Python
 的可读诊断记录，**不被 C++ MapROS 订阅**，不能用它单独证明地图已写入。
 
 | 话题 | 类型 | 判断 |
@@ -82,7 +82,7 @@ ITM 分数和里程计。`/detector/agent_X/clouds_with_scores` 必须各有一�
 | `/habitat/agent_X/camera_rgb` | `sensor_msgs/Image` | 图像持续更新，目标应可见。 |
 | `/habitat/agent_X/camera_depth` | `sensor_msgs/Image` | 与位姿时间接近；MapROS 同步窗口为 `0.05 s`。 |
 | `/detector/agent_X/clouds_with_scores` | `plan_env/MultipleMasksWithConfidence` | `point_clouds`、`confidence_scores`、`label_indices` 长度相等；`label_indices=0` 为目标类。 |
-| `/blip2/agent_X/cosine_score` | `std_msgs/Float64` | 有有限数值；仅收到该值后才更新 ValueMap。 |
+| `/clip/agent_X/cosine_score` | `std_msgs/Float64` | 有有限数值；仅收到该值后才更新 ValueMap。 |
 | `/stage1/detector/detection` | `plan_env/Stage1Detection` | 检查目标、top1、分数、距离和 mask 面积，作为识别侧证据。 |
 
 阶段通过条件：三个 agent 的检测云及深度位姿均有频率；检测消息数组长度一致；
