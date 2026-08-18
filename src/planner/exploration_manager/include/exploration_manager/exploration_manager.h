@@ -11,7 +11,10 @@
 #include <fstream>
 #include <iostream>
 #include <memory>
+#include <string>
 #include <vector>
+
+#include <exploration_manager/exploration_data.h>
 
 // ROS core
 #include <ros/ros.h>
@@ -37,7 +40,6 @@ class FrontierMap2D;
 class Gcopter;
 class KinoAstar;
 struct ExplorationParam;
-struct ExplorationData;
 
 struct SemanticFrontier {
   Vector2d position;      ///< 2D position of the frontier
@@ -56,24 +58,16 @@ struct SemanticFrontier {
   }
 };
 
-enum EXPL_RESULT {
-  EXPLORATION,               ///< Normal exploration mode
-  SEARCH_BEST_OBJECT,        ///< Found high-confidence object
-  SEARCH_OVER_DEPTH_OBJECT,  ///< Searching over-depth object
-  SEARCH_SUSPICIOUS_OBJECT,  ///< Investigating suspicious object
-  NO_PASSABLE_FRONTIER,      ///< No reachable frontiers available
-  NO_COVERABLE_FRONTIER,     ///< No coverable frontiers found
-  SEARCH_EXTREME             ///< Extreme search mode activated
-};
-
 class ExplorationManager {
 public:
   ExplorationManager() = default;
   ~ExplorationManager();  // Explicit destructor declaration for shared_ptr with forward declaration
 
   void initialize(ros::NodeHandle& nh);
+  void resetEpisodeState();
 
-  int planNextBestPoint(const Vector3d& pos, const double& yaw);
+  int planNextBestPoint(const Vector3d& pos, const double& yaw, int agent_idx,
+      Eigen::Vector2d& out_next_pos, std::vector<Eigen::Vector2d>& out_next_best_path);
   bool planTrajectory(const Eigen::VectorXd& start, const Eigen::VectorXd& end, const Vector3d& ctrl);
   void getSortedSemanticFrontiers(const Vector2d& cur_pos, const vector<Vector2d>& frontiers,
       vector<SemanticFrontier>& sem_frontiers);
@@ -94,15 +88,15 @@ public:
 private:
   // Exploration Policy
   void chooseExplorationPolicy(Vector2d cur_pos, vector<Vector2d> frontiers,
-      Vector2d& next_best_pos, vector<Vector2d>& next_best_path);
+      Vector2d& next_best_pos, vector<Vector2d>& next_best_path, int agent_idx);
   void findClosestFrontierPolicy(Vector2d cur_pos, vector<Vector2d> frontiers,
-      Vector2d& next_best_pos, vector<Vector2d>& next_best_path);
+      Vector2d& next_best_pos, vector<Vector2d>& next_best_path, int agent_idx);
   void findHighestSemanticsFrontierPolicy(Vector2d cur_pos, vector<Vector2d> frontiers,
-      Vector2d& next_best_pos, vector<Vector2d>& next_best_path);
+      Vector2d& next_best_pos, vector<Vector2d>& next_best_path, int agent_idx);
   void hybridExplorePolicy(Vector2d cur_pos, vector<Vector2d> frontiers, Vector2d& next_best_pos,
-      vector<Vector2d>& next_best_path);
+      vector<Vector2d>& next_best_path, int agent_idx);
   void findTSPTourPolicy(Vector2d cur_pos, vector<Vector2d> frontiers, Vector2d& next_best_pos,
-      vector<Vector2d>& next_best_path);
+      vector<Vector2d>& next_best_path, int agent_idx);
 
   // Path Search Utils
   bool searchObjectPath(const Vector3d& start,
@@ -129,9 +123,15 @@ private:
       const Vector2d& cur_pos, const vector<Vector2d>& frontiers, Eigen::MatrixXd& cost_matrix);
   double computePathCost(const Vector2d& pos1, const Vector2d& pos2);
   vector<Vector2i> allNeighbors(const Eigen::Vector2i& idx, int grid_radius);
+  double getFrontierSemanticValue(const Vector2d& frontier);
+  int findFrontierIdByPosition(const Vector2d& frontier, bool dormant = false);
+  void setStrategyInfo(int agent_idx, const std::string& mode, const std::string& target_type,
+      int target_id, double semantic_score, const vector<Vector2d>& path,
+      const Vector2d& target_pos);
 
   ros::ServiceClient tsp_client_;         ///< ROS service client for TSP solver
   unique_ptr<RayCaster2D> ray_caster2d_;  ///< Ray casting for collision checking
+  pcl::shared_ptr<pcl::PointCloud<pcl::PointXYZ>> last_over_depth_object_cloud_;
 };
 
 inline bool ExplorationManager::searchFrontierPath(const Vector2d& start, const Vector2d& end,

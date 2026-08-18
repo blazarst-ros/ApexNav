@@ -1,3 +1,4 @@
+#这不是运行脚本，而是整个项目的全局参数管理中心。它定义了所有模型路径、ROS 话题名称和默认阈值
 class HABITAT_STATE:
     READY = 0
     ACTION_EXEC = 1
@@ -12,6 +13,7 @@ class ROS_STATE:
     WAIT_ACTION_FINISH = 3
     PUB_ACTION = 4
     FINISH = 5
+    FINISH_FAILURE = 6
 
 
 class ACTION:

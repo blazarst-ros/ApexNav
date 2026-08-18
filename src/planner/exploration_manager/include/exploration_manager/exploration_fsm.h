@@ -6,8 +6,11 @@
 
 // Standard C++ libraries
 #include <memory>
+#include <mutex>
 #include <string>
 #include <vector>
+
+#include <exploration_manager/exploration_data.h>
 
 // ROS core
 #include <ros/ros.h>
@@ -17,6 +20,7 @@
 #include <nav_msgs/Odometry.h>
 #include <std_msgs/Float64.h>
 #include <std_msgs/Int32.h>
+#include <std_msgs/String.h>
 #include <visualization_msgs/Marker.h>
 
 using Eigen::Vector2d;
@@ -28,7 +32,6 @@ using std::unique_ptr;
 using std::vector;
 
 namespace apexnav_planner {
-// Centralized constants for ExplorationFSM (mirrors the style of FSMConstants in fsm2.h)
 namespace FSMConstants {
 // Timers (s)
 constexpr double EXEC_TIMER_DURATION = 0.01;
@@ -40,15 +43,14 @@ constexpr double ACTION_ANGLE = M_PI / 6.0;
 
 // Distances (m)
 constexpr double STUCKING_DISTANCE = 0.05;       // consider stuck if movement < this
-constexpr double REACH_DISTANCE = 0.20;          // reach object distance
-constexpr double SOFT_REACH_DISTANCE = 0.45;     // soft reach distance for object
+constexpr double REACH_DISTANCE = 0.20;          // Habitat success distance
+constexpr double SOFT_REACH_DISTANCE = 0.20;     // no relaxed success distance
 constexpr double LOCAL_DISTANCE = 0.80;          // local target lookahead
 constexpr double FORWARD_DISTANCE = 0.15;        // min clearance for marking obstacles
 constexpr double FORCE_DORMANT_DISTANCE = 0.35;  // force dormant frontier if very close
 constexpr double MIN_SAFE_DISTANCE = 0.15;       // min safe distance to obstacles
 
 // Counters / thresholds
-constexpr int MAX_STUCKING_COUNT = 25;           // max consecutive stuck actions -> stop
 constexpr int MAX_STUCKING_NEXT_POS_COUNT = 14;  // times next_pos unchanged while stuck
 
 // Cost weights
@@ -60,42 +62,52 @@ constexpr double SAMPLE_NUM = 10.0;  // samples along a step for safety cost
 
 // Visualization / robot marker
 constexpr double VIS_SCALE_FACTOR = 1.8;  // multiply by map resolution
-constexpr double ROBOT_HEIGHT = 0.15;
+constexpr double ROBOT_HEIGHTS[NUM_AGENTS] = { 0.8, 1.5 };
 constexpr double ROBOT_RADIUS = 0.18;
 }  // namespace FSMConstants
 
-class FastPlannerManager;
 class ExplorationManager;
 class PlanningVisualization;
 struct FSMParam;
 struct FSMData;
 
-enum ROS_STATE { INIT, WAIT_TRIGGER, PLAN_ACTION, WAIT_ACTION_FINISH, PUB_ACTION, FINISH };
+enum ROS_STATE {
+  INIT = 0,
+  WAIT_TRIGGER = 1,
+  PLAN_ACTION = 2,
+  WAIT_ACTION_FINISH = 3,
+  PUB_ACTION = 4,
+  FINISH = 5,
+  FINISH_FAILURE = 6
+};
 enum ACTION { STOP, MOVE_FORWARD, TURN_LEFT, TURN_RIGHT, TURN_DOWN, TURN_UP };
 enum HABITAT_STATE { READY, ACTION_EXEC, ACTION_FINISH, EPISODE_FINISH };
 class ExplorationFSM {
 private:
   /* Planning Utils */
   ros::NodeHandle nh_;
-  shared_ptr<FastPlannerManager> planner_manager_;
   shared_ptr<ExplorationManager> expl_manager_;
-  shared_ptr<PlanningVisualization> visualization_;
+  vector<shared_ptr<PlanningVisualization>> visualization_;
 
   shared_ptr<FSMParam> fp_;
   shared_ptr<FSMData> fd_;
-  ROS_STATE state_;
+  ROS_STATE state_[NUM_AGENTS];
+  std::mutex data_mutex_;  // Protect fd_ and state_ array
 
   /* ROS Utils */
   ros::NodeHandle node_;
-  ros::Timer exec_timer_, vis_timer_, frontier_timer_;
-  ros::Subscriber trigger_sub_, odom_sub_, habitat_state_sub_, confidence_threshold_sub_;
-  ros::Publisher action_pub_, ros_state_pub_, expl_state_pub_, expl_result_pub_;
-  ros::Publisher robot_marker_pub_;
+  ros::Timer exec_timer_, frontier_timer_;
+  ros::Subscriber trigger_sub_, odom_sub_[NUM_AGENTS], habitat_state_sub_, confidence_threshold_sub_;
+  ros::Publisher action_pub_[NUM_AGENTS], expl_result_agent_pub_[NUM_AGENTS],
+      exploration_strategy_pub_[NUM_AGENTS], ros_state_pub_, ros_state_all_pub_,
+      expl_state_pub_, expl_result_pub_, expl_result_all_pub_, final_result_all_pub_,
+      reach_claim_pub_;
+  ros::Publisher robot_marker_pub_[NUM_AGENTS];
 
   /* Action Planner */
-  int callActionPlanner();
+  int callActionPlanner(int agent_idx);
   int planNextBestAction(Vector2d current_pos, double current_yaw, const vector<Vector2d>& path,
-      bool need_safety = true);
+      bool need_safety = true, int agent_idx = 0);
   Vector2d selectLocalTarget(
       const Vector2d& current_pos, const vector<Vector2d>& path, const double& local_distance);
   int decideNextAction(double current_yaw, double target_yaw);
@@ -104,20 +116,25 @@ private:
   double computeActionSafetyCost(const Vector2d& current_pos, const Vector2d& step);
   double computeActionTotalCost(const Vector2d& current_pos, double current_yaw,
       const Vector2d& target_pos, const Vector2d& step);
+  void markForwardCollision(const Vector2d& origin, double yaw);
 
   /* Helper functions */
   bool updateFrontierAndObject();
-  void transitState(ROS_STATE new_state, string pos_call);
+  void transitState(int agent_idx, ROS_STATE new_state, string pos_call);
   void wrapAngle(double& angle);
-  void publishRobotMarker();
+  void publishRobotMarker(int agent_idx);
+  void publishPlannerState();
+  void publishExplorationResults();
+  void publishExplorationStrategy(int agent_idx);
   void visualize();
   void clearVisMarker();
+  void resetEpisode();  ///< Lightweight reset for episode transition (no ROS object destruction)
 
   /* ROS callbacks */
   void FSMCallback(const ros::TimerEvent& e);
   void frontierCallback(const ros::TimerEvent& e);
   void triggerCallback(const geometry_msgs::PoseStampedConstPtr& msg);
-  void odometryCallback(const nav_msgs::OdometryConstPtr& msg);
+  void odometryCallback(const nav_msgs::OdometryConstPtr& msg, int agent_idx);
   void habitatStateCallback(const std_msgs::Int32ConstPtr& msg);
   void confidenceThresholdCallback(const std_msgs::Float64ConstPtr& msg);
 

@@ -1,0 +1,8 @@
+int32 label_index
+string label_name
+bool is_target
+uint32 cloud_points
+uint32 evidence_points
+uint32 detection_count
+float32 fused_confidence
+float32 competition_score

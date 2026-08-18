@@ -22,6 +22,12 @@ ValueMap::ValueMap(SDFMap2D* sdf_map, ros::NodeHandle& nh)
   confidence_buffer_ = vector<double>(voxel_num, 0.0);
 }
 
+void ValueMap::reset()
+{
+  fill(value_buffer_.begin(), value_buffer_.end(), 0.0);
+  fill(confidence_buffer_.begin(), confidence_buffer_.end(), 0.0);
+}
+
 void ValueMap::updateValueMap(const Vector2d& sensor_pos, const double& sensor_yaw,
     const vector<Vector2i>& free_grids, const double& itm_score)
 {
@@ -39,11 +45,14 @@ void ValueMap::updateValueMap(const Vector2d& sensor_pos, const double& sensor_y
     double last_value = value_buffer_[adr];
 
     // Apply confidence-weighted fusion with quadratic confidence combination
+    double total_confidence = now_confidence + last_confidence;
+    if (total_confidence <= 1e-9)
+      continue;
     confidence_buffer_[adr] =
         (now_confidence * now_confidence + last_confidence * last_confidence) /
-        (now_confidence + last_confidence);
+        total_confidence;
     value_buffer_[adr] = (now_confidence * now_value + last_confidence * last_value) /
-                         (now_confidence + last_confidence);
+                         total_confidence;
   }
 }
 

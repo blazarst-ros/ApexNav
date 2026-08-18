@@ -1,6 +1,7 @@
 
 data
 RuntimeData/model-cache/
+RuntimeData/Stage1_detector/
 
 outputs
 videos

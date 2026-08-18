@@ -1,0 +1,135 @@
+Lite ApexNav：双智能体 HM3D 仿真启动流程
+============================================
+
+本分支的双智能体模式保持 Lite 模型栈：YOLOE 检测、CLIP 图文匹配和离线
+LLM 答案。不需要启动 GroundingDINO、YOLOv7、BLIP、MobileSAM 或 Ollama。
+
+- 项目：`/home/uuufo/ApexNav-lite`
+- 环境：`apexnav-lite`
+- 数据：`data` 是到原 ApexNav 数据目录的软链接，不复制数据集。
+- 模式：两个 Habitat agent 在同一进程、同一 GPU 上运行；高度分别为 0.8 m
+  和 1.5 m，协作终止策略为 `cooperative`。
+- 所有终端均保持运行，停止时按终端 6 → 1 的反序 Ctrl-C。
+
+首次或源码更新后的编译
+------------------------
+
+```bash
+cd /home/uuufo/ApexNav-lite
+source /opt/ros/noetic/setup.bash
+conda activate apexnav-lite
+catkin_make -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
+  -DPYTHON_EXECUTABLE="$CONDA_PREFIX/bin/python" -j2
+```
+
+终端 1：ROS Master
+-------------------
+
+```bash
+source /opt/ros/noetic/setup.bash
+roscore
+```
+
+终端 2：CLIP 服务（端口 12182）
+-------------------------------
+
+```bash
+cd /home/uuufo/ApexNav-lite
+source /opt/ros/noetic/setup.bash
+conda activate apexnav-lite
+export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+export CLIP_DOWNLOAD_ROOT=/home/uuufo/ApexNav-lite/RuntimeData/model-cache/clip
+python -m vlm.itm.clipitm --port 12182
+```
+
+看到 `Hosting on port 12182` 后保持运行。
+
+终端 3：YOLOE 服务（端口 12184）
+--------------------------------
+
+```bash
+cd /home/uuufo/ApexNav-lite
+source /opt/ros/noetic/setup.bash
+conda activate apexnav-lite
+export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+export YOLOE_WEIGHTS=/home/uuufo/ApexNav-lite/RuntimeData/model-cache/yoloe-11l-seg.pt
+python -m vlm.detector.yoloe --port 12184 --weights "$YOLOE_WEIGHTS"
+```
+
+首次启动可下载 `mobileclip_blt.ts`，它是 YOLOE 的开放词汇文本编码器。
+
+终端 4：RViz
+-------------
+
+```bash
+cd /home/uuufo/ApexNav-lite
+source /opt/ros/noetic/setup.bash
+source devel/setup.bash
+roslaunch exploration_manager rviz.launch
+```
+
+该配置显示 `/habitat/agent_0/*` 和 `/habitat/agent_1/*` 的位姿、深度、
+前沿、共享地图和规划轨迹。
+
+终端 5：双智能体规划器与 TSP 求解器
+-------------------------------------
+
+```bash
+cd /home/uuufo/ApexNav-lite
+source /opt/ros/noetic/setup.bash
+source devel/setup.bash
+roslaunch exploration_manager exploration.launch
+```
+
+默认加载 HM3D-v2 多机 Lite 配置。若改跑 HM3D-v1 或 MP3D，在命令末尾传入：
+
+```bash
+evaluation_config:=/home/uuufo/ApexNav-lite/config/habitat_eval_hm3dv1_multiagent_lite.yaml
+```
+
+或将文件名改为 `habitat_eval_mp3d_multiagent_lite.yaml`。
+
+终端 6：双智能体 Habitat 评测
+-------------------------------
+
+```bash
+cd /home/uuufo/ApexNav-lite
+source /opt/ros/noetic/setup.bash
+conda activate apexnav-lite
+source devel/setup.bash
+export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+export LD_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu:/opt/ros/noetic/lib:$LD_LIBRARY_PATH
+export LD_PRELOAD=/usr/lib/x86_64-linux-gnu/libffi.so.7
+export PYTHONUNBUFFERED=1
+
+python habitat_evaluation.py --multiagent --dataset hm3dv2 \
+  test_epi_num=0 \
+  habitat.task.measurements.success.success_distance=1.2
+```
+
+`test_epi_num=0` 为第 0 条 episode。把 0 改为任意序号可单条测试。连续运行
+前 100 条而不重启 Habitat：
+
+```bash
+python habitat_evaluation.py --multiagent --dataset hm3dv2 \
+  test_episode_count=100 \
+  video_output_path=videos/test_hm3dv2_multiagent_first100_val \
+  habitat.task.measurements.success.success_distance=1.2
+```
+
+不要把 `test_epi_num` 和 `test_episode_count` 同时传入。输出记录位于指定的
+`video_output_path` 中的 `record.txt` 与 `continue.txt`；Stage-1 检测日志位于
+`RuntimeData/Stage1_detector/`。这些运行产物不会进入 Git。
+
+快速检查
+--------
+
+```bash
+source /opt/ros/noetic/setup.bash
+source /home/uuufo/ApexNav-lite/devel/setup.bash
+rosnode list
+rostopic list | rg 'agent_[01]|state_all|reach_claim|clip'
+```
+
+正常时可看到 `/exploration_node`、`/tsp_solver`、两个 agent 的 Habitat 话题，
+以及 `/ros/state_all`、`/ros/reach_claim`。

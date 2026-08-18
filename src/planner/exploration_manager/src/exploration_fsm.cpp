@@ -2,7 +2,12 @@
 #include <exploration_manager/exploration_manager.h>
 #include <exploration_manager/exploration_fsm.h>
 #include <exploration_manager/exploration_data.h>
+#include <exploration_manager/fsm_policy.h>
 #include <vis_utils/planning_visualization.h>
+#include <std_msgs/Int32MultiArray.h>
+#include <boost/bind/bind.hpp>
+#include <algorithm>
+#include <sstream>
 
 namespace apexnav_planner {
 void ExplorationFSM::init(ros::NodeHandle& nh)
@@ -14,10 +19,13 @@ void ExplorationFSM::init(ros::NodeHandle& nh)
   /* Initialize main modules */
   expl_manager_.reset(new ExplorationManager);
   expl_manager_->initialize(nh);
-  visualization_.reset(new PlanningVisualization(nh));
+  visualization_.resize(NUM_AGENTS);
+  for (int i = 0; i < NUM_AGENTS; ++i)
+    visualization_[i].reset(new PlanningVisualization(nh, i));
   fp_->vis_scale_ = expl_manager_->sdf_map_->getResolution() * FSMConstants::VIS_SCALE_FACTOR;
 
-  state_ = ROS_STATE::INIT;
+  for (int i = 0; i < NUM_AGENTS; ++i)
+    state_[i] = ROS_STATE::INIT;
 
   /* ROS Timer */
   exec_timer_ = nh.createTimer(
@@ -27,113 +35,218 @@ void ExplorationFSM::init(ros::NodeHandle& nh)
 
   /* ROS Subscriber */
   trigger_sub_ = nh.subscribe("/move_base_simple/goal", 10, &ExplorationFSM::triggerCallback, this);
-  odom_sub_ = nh.subscribe("/odom_world", 10, &ExplorationFSM::odometryCallback, this);
+  for (int i = 0; i < NUM_AGENTS; ++i) {
+    std::string odom_topic = "/habitat/agent_" + std::to_string(i) + "/odom";
+    odom_sub_[i] = nh.subscribe<nav_msgs::Odometry>(
+        odom_topic, 30,
+        boost::bind(&ExplorationFSM::odometryCallback, this, boost::placeholders::_1, i));
+  }
   habitat_state_sub_ =
-      nh.subscribe("/habitat/state", 10, &ExplorationFSM::habitatStateCallback, this);
+      nh.subscribe("/habitat/state", 30, &ExplorationFSM::habitatStateCallback, this);
   confidence_threshold_sub_ = node_.subscribe(
       "/detector/confidence_threshold", 10, &ExplorationFSM::confidenceThresholdCallback, this);
 
   /* ROS Publisher */
   ros_state_pub_ = nh.advertise<std_msgs::Int32>("/ros/state", 10);
+  ros_state_all_pub_ = nh.advertise<std_msgs::Int32MultiArray>("/ros/state_all", 10);
   expl_state_pub_ = nh.advertise<std_msgs::Int32>("/ros/expl_state", 10);
-  action_pub_ = nh.advertise<std_msgs::Int32>("/habitat/plan_action", 10);
   expl_result_pub_ = nh.advertise<std_msgs::Int32>("/ros/expl_result", 10);
-  robot_marker_pub_ = nh.advertise<visualization_msgs::Marker>("/robot", 10);
+  expl_result_all_pub_ = nh.advertise<std_msgs::Int32MultiArray>("/ros/expl_result_all", 10);
+  final_result_all_pub_ =
+      nh.advertise<std_msgs::Int32MultiArray>("/ros/final_result_all", 10);
+  reach_claim_pub_ = nh.advertise<std_msgs::Int32MultiArray>("/ros/reach_claim", 10);
+  for (int i = 0; i < NUM_AGENTS; ++i) {
+    action_pub_[i] = nh.advertise<std_msgs::Int32>(
+        "/habitat/plan_action_agent_" + std::to_string(i), 10);
+    expl_result_agent_pub_[i] = nh.advertise<std_msgs::Int32>(
+        "/ros/agent_" + std::to_string(i) + "/expl_result", 10);
+    exploration_strategy_pub_[i] = nh.advertise<std_msgs::String>(
+        "/ros/agent_" + std::to_string(i) + "/exploration_strategy", 10);
+    robot_marker_pub_[i] = nh.advertise<visualization_msgs::Marker>(
+        "/robot_agent_" + std::to_string(i), 10);
+  }
 }
 
-// FSM between ROS and Habitat for action planning and execution
+// FSM between ROS and Habitat for action planning and execution (round-robin over agents)
 void ExplorationFSM::FSMCallback(const ros::TimerEvent& e)
 {
   exec_timer_.stop();
-  std_msgs::Int32 ros_state_msg;
-  ros_state_msg.data = state_;
-  ros_state_pub_.publish(ros_state_msg);
-  switch (state_) {
-    case ROS_STATE::INIT: {
-      // Wait for odometry and target confidence threshold
-      if (!fd_->have_odom_ || !fd_->have_confidence_) {
-        ROS_WARN_THROTTLE(1.0, "No odom || No target confidence threshold.");
-        exec_timer_.start();
-        return;
+  std::lock_guard<std::mutex> lock(data_mutex_);
+
+  for (int agent_idx = 0; agent_idx < NUM_AGENTS; ++agent_idx) {
+    auto& ad = fd_->agent_[agent_idx];
+
+    switch (state_[agent_idx]) {
+      case ROS_STATE::INIT: {
+        // Wait for odometry and target confidence threshold
+        if (!ad.have_odom_ || !fd_->have_confidence_) {
+          ROS_WARN_THROTTLE(
+              1.0, "Agent %d: No odom || No target confidence threshold.", agent_idx);
+          continue;
+        }
+        // Go to WAIT_TRIGGER when prerequisites are ready
+        transitState(agent_idx, ROS_STATE::WAIT_TRIGGER, "FSM");
+        break;
       }
-      // Go to WAIT_TRIGGER when prerequisites are ready
-      clearVisMarker();
-      transitState(ROS_STATE::WAIT_TRIGGER, "FSM");
-      break;
-    }
 
-    case ROS_STATE::WAIT_TRIGGER: {
-      // Do nothing but wait for trigger
-      ROS_WARN_THROTTLE(1.0, "Wait for trigger.");
-      break;
-    }
+      case ROS_STATE::WAIT_TRIGGER: {
+        if (!ad.trigger_) {
+          ROS_WARN_THROTTLE(1.0, "Agent %d: Wait for trigger.", agent_idx);
+        }
+        break;
+      }
 
-    case ROS_STATE::FINISH: {
-      if (!fd_->have_finished_) {
-        fd_->have_finished_ = true;
-        clearVisMarker();
+      case ROS_STATE::FINISH: {
+        ROS_WARN_THROTTLE(1.0, "Agent %d: Waiting in reach-claim team terminal state.", agent_idx);
+        break;
+      }
+
+      case ROS_STATE::FINISH_FAILURE: {
+        if (!ad.have_finished_) {
+          ad.have_finished_ = true;
+          if (agent_idx < static_cast<int>(expl_manager_->ed_->strategy_infos_.size())) {
+            auto& info = expl_manager_->ed_->strategy_infos_[agent_idx];
+            info.agent_id = agent_idx;
+            info.mode = "FINISH_FAILURE";
+            info.target_type = "NONE";
+            info.target_id = -1;
+            info.path_length = -1.0;
+          }
+          std_msgs::Int32 action_msg;
+          action_msg.data = ACTION::STOP;
+          action_pub_[agent_idx].publish(action_msg);
+          publishExplorationStrategy(agent_idx);
+          ROS_WARN("Agent %d failed exploration (final_result=%d); other agents continue.",
+              agent_idx, ad.final_result_);
+        }
+        break;
+      }
+
+      case ROS_STATE::PLAN_ACTION: {
+        if (ad.init_action_count_ < 1 + 12 + 1 + 12) {
+          if (ad.init_action_count_ < 1)
+            ad.newest_action_ = ACTION::TURN_DOWN;
+          else if (ad.init_action_count_ < 1 + 12)
+            ad.newest_action_ = ACTION::TURN_LEFT;
+          else if (ad.init_action_count_ < 1 + 12 + 1)
+            ad.newest_action_ = ACTION::TURN_UP;
+          else
+            ad.newest_action_ = ACTION::TURN_LEFT;
+          ROS_WARN("Agent %d Init Mode Process -----> (%d/26)", agent_idx, ad.init_action_count_);
+          ad.init_action_count_++;
+          transitState(agent_idx, ROS_STATE::PUB_ACTION, "FSM");
+          updateFrontierAndObject();
+        }
+        else {
+          // Main planning phase
+          ad.start_pt_ = ad.odom_pos_;
+          ad.start_yaw_ = ad.odom_yaw_;
+
+          auto t1 = ros::Time::now();
+          ad.final_result_ = callActionPlanner(agent_idx);
+          double call_action_planner_time = (ros::Time::now() - t1).toSec();
+          ROS_INFO_THROTTLE(
+              10.0, "[Agent %d] Planning process time = %.3f s", agent_idx, call_action_planner_time);
+
+          std_msgs::Int32 expl_state_msg;
+          expl_state_msg.data = ad.final_result_;
+          expl_state_pub_.publish(expl_state_msg);
+          if (ad.final_result_ == FINAL_RESULT::REACH_OBJECT) {
+            std_msgs::Int32MultiArray reach_claim_msg;
+            reach_claim_msg.data = {agent_idx, FINAL_RESULT::REACH_OBJECT};
+            reach_claim_pub_.publish(reach_claim_msg);
+            ROS_WARN("Agent %d reached an object candidate; broadcasting STOP to all agents.",
+                agent_idx);
+            for (int stop_idx = 0; stop_idx < NUM_AGENTS; ++stop_idx) {
+              std_msgs::Int32 action_msg;
+              action_msg.data = ACTION::STOP;
+              action_pub_[stop_idx].publish(action_msg);
+              fd_->agent_[stop_idx].have_finished_ = true;
+              transitState(stop_idx, ROS_STATE::FINISH, "Reach Object");
+            }
+          }
+          else if (ad.final_result_ == FINAL_RESULT::EXPLORE ||
+              ad.final_result_ == FINAL_RESULT::SEARCH_OBJECT)
+            transitState(agent_idx, ROS_STATE::PUB_ACTION, "FSM");
+          else
+            transitState(agent_idx, ROS_STATE::FINISH_FAILURE, "Planner Failure");
+        }
+        visualize();
+        break;
+      }
+
+      case ROS_STATE::PUB_ACTION: {
         std_msgs::Int32 action_msg;
-        action_msg.data = ACTION::STOP;
-        action_pub_.publish(action_msg);
+        action_msg.data = ad.newest_action_;
+        action_pub_[agent_idx].publish(action_msg);
+        transitState(agent_idx, ROS_STATE::WAIT_ACTION_FINISH, "FSM");
+        break;
       }
-      ROS_WARN_THROTTLE(1.0, "Finish One Episode!!!");
-      break;
-    }
 
-    case ROS_STATE::PLAN_ACTION: {
-      // Initial action sequence: perform orientation calibration turns
-      if (fd_->init_action_count_ < 1 + 12 + 1 + 12) {
-        if (fd_->init_action_count_ < 1)
-          fd_->newest_action_ = ACTION::TURN_DOWN;
-        else if (fd_->init_action_count_ < 1 + 12)
-          fd_->newest_action_ = ACTION::TURN_LEFT;
-        else if (fd_->init_action_count_ < 1 + 12 + 1)
-          fd_->newest_action_ = ACTION::TURN_UP;
-        else
-          fd_->newest_action_ = ACTION::TURN_LEFT;
-        ROS_WARN("Init Mode Process -----> (%d/26)", fd_->init_action_count_);
-        fd_->init_action_count_++;
-        transitState(ROS_STATE::PUB_ACTION, "FSM");
-        updateFrontierAndObject();
+      case ROS_STATE::WAIT_ACTION_FINISH: {
+        break;
       }
-      else {
-        // Main planning phase: determine robot pose and call action planner
-        fd_->start_pt_ = fd_->odom_pos_;
-        fd_->start_yaw_(0) = fd_->odom_yaw_;
-
-        auto t1 = ros::Time::now();
-        fd_->final_result_ = callActionPlanner();
-        double call_action_planner_time = (ros::Time::now() - t1).toSec();
-        ROS_INFO_THROTTLE(
-            10.0, "[Calculating Time] Planning process time = %.3f s", call_action_planner_time);
-
-        std_msgs::Int32 expl_state_msg;
-        expl_state_msg.data = fd_->final_result_;
-        expl_state_pub_.publish(expl_state_msg);
-        if (fd_->final_result_ == FINAL_RESULT::EXPLORE ||
-            fd_->final_result_ == FINAL_RESULT::SEARCH_OBJECT)
-          transitState(ROS_STATE::PUB_ACTION, "FSM");
-        else
-          transitState(ROS_STATE::FINISH, "FSM");
-      }
-      visualize();
-      break;
-    }
-
-    case ROS_STATE::PUB_ACTION: {
-      std_msgs::Int32 action_msg;
-      action_msg.data = fd_->newest_action_;
-      action_pub_.publish(action_msg);
-      transitState(ROS_STATE::WAIT_ACTION_FINISH, "FSM");
-      break;
-    }
-
-    case ROS_STATE::WAIT_ACTION_FINISH: {
-      exec_timer_.start();
-      break;
     }
   }
+  publishPlannerState();
   exec_timer_.start();
+}
+
+void ExplorationFSM::publishPlannerState()
+{
+  std_msgs::Int32MultiArray state_all_msg;
+  std_msgs::Int32MultiArray final_result_all_msg;
+  state_all_msg.data.resize(NUM_AGENTS);
+  final_result_all_msg.data.resize(NUM_AGENTS);
+  for (int agent_idx = 0; agent_idx < NUM_AGENTS; ++agent_idx) {
+    state_all_msg.data[agent_idx] = state_[agent_idx];
+    final_result_all_msg.data[agent_idx] = fd_->agent_[agent_idx].final_result_;
+  }
+
+  std_msgs::Int32 ros_state_msg;
+  ros_state_msg.data = state_[0];
+  ros_state_pub_.publish(ros_state_msg);
+  ros_state_all_pub_.publish(state_all_msg);
+  final_result_all_pub_.publish(final_result_all_msg);
+}
+
+void ExplorationFSM::publishExplorationResults()
+{
+  std_msgs::Int32MultiArray expl_result_all_msg;
+  expl_result_all_msg.data.resize(NUM_AGENTS);
+  for (int agent_idx = 0; agent_idx < NUM_AGENTS; ++agent_idx) {
+    expl_result_all_msg.data[agent_idx] = fd_->agent_[agent_idx].expl_result_;
+    std_msgs::Int32 expl_result_agent_msg;
+    expl_result_agent_msg.data = fd_->agent_[agent_idx].expl_result_;
+    expl_result_agent_pub_[agent_idx].publish(expl_result_agent_msg);
+    publishExplorationStrategy(agent_idx);
+  }
+
+  expl_result_all_pub_.publish(expl_result_all_msg);
+}
+
+void ExplorationFSM::publishExplorationStrategy(int agent_idx)
+{
+  if (agent_idx < 0 || agent_idx >= NUM_AGENTS)
+    return;
+  const auto& infos = expl_manager_->ed_->strategy_infos_;
+  if (agent_idx >= static_cast<int>(infos.size()))
+    return;
+
+  const auto& info = infos[agent_idx];
+  std_msgs::String msg;
+  std::ostringstream ss;
+  ss << "{"
+     << "\"agent_id\":" << info.agent_id << ","
+     << "\"mode\":\"" << info.mode << "\","
+     << "\"target_type\":\"" << info.target_type << "\","
+     << "\"target_id\":" << info.target_id << ","
+     << "\"semantic_score\":" << info.semantic_score << ","
+     << "\"path_length\":" << info.path_length << ","
+     << "\"target_pos\":[" << info.target_pos(0) << "," << info.target_pos(1) << "]"
+     << "}";
+  msg.data = ss.str();
+  exploration_strategy_pub_[agent_idx].publish(msg);
 }
 
 /**
@@ -143,7 +256,7 @@ void ExplorationFSM::FSMCallback(const ros::TimerEvent& e)
  * This is the core planning function that decides what action the robot should take next.
  * It handles obstacle avoidance, frontier exploration, object search, and stuck recovery.
  */
-int ExplorationFSM::callActionPlanner()
+int ExplorationFSM::callActionPlanner(int agent_idx)
 {
   const double stucking_distance = FSMConstants::STUCKING_DISTANCE;
   const double reach_distance = FSMConstants::REACH_DISTANCE;
@@ -152,133 +265,135 @@ int ExplorationFSM::callActionPlanner()
   bool frontier_change_flag = updateFrontierAndObject();
 
   int expl_res, final_res;
-  Eigen::Vector2d current_pos = Eigen::Vector2d(fd_->start_pt_(0), fd_->start_pt_(1));
-  Eigen::Vector2d last_pos = Eigen::Vector2d(fd_->last_start_pos_(0), fd_->last_start_pos_(1));
-  double current_yaw = fd_->start_yaw_(0);
-  fd_->last_start_pos_ = fd_->start_pt_;
+  auto& ad = fd_->agent_[agent_idx];
+  Eigen::Vector2d current_pos = Eigen::Vector2d(ad.start_pt_(0), ad.start_pt_(1));
+  Eigen::Vector2d last_pos = Eigen::Vector2d(ad.last_start_pos_(0), ad.last_start_pos_(1));
+  double current_yaw = ad.start_yaw_;
+  ad.last_start_pos_ = ad.start_pt_;
+  const double planar_displacement = (current_pos - last_pos).norm();
+  const int last_action = ad.newest_action_;
+  const bool failed_forward = isFailedForwardAction(
+      last_action, ACTION::MOVE_FORWARD, planar_displacement, stucking_distance);
 
   // Reach the object - check if close enough to target object
-  if (fd_->final_result_ == FINAL_RESULT::SEARCH_OBJECT &&
-      (current_pos - expl_manager_->ed_->next_pos_).norm() < reach_distance) {
-    ROS_ERROR("Reach the object successfully!!!");
+  if (ad.final_result_ == FINAL_RESULT::SEARCH_OBJECT &&
+      (current_pos - ad.planned_next_pos_).norm() < reach_distance) {
+    ROS_ERROR("Agent %d: Reach the object successfully!!!", agent_idx);
     final_res = FINAL_RESULT::REACH_OBJECT;
     return final_res;
   }
 
-  /*******  Escape-from-stuck logic START *******/
-  // Detect if robot is stuck and initiate escape sequence
-  int last_action = fd_->newest_action_;
-  if (!fd_->escape_stucking_flag_ && (current_pos - last_pos).norm() < stucking_distance &&
-      last_action == ACTION::MOVE_FORWARD) {
-    if (fd_->final_result_ == FINAL_RESULT::SEARCH_OBJECT &&
-        (current_pos - expl_manager_->ed_->next_pos_).norm() < soft_reach_distance) {
-      ROS_ERROR("Reach the object successfully!!!");
+  // Escape-from-stuck logic
+  if (!ad.escape_stucking_flag_ && failed_forward) {
+    if (ad.final_result_ == FINAL_RESULT::SEARCH_OBJECT &&
+        (current_pos - ad.planned_next_pos_).norm() < soft_reach_distance) {
+      ROS_ERROR("Agent %d: Reach the object successfully!!!", agent_idx);
       final_res = FINAL_RESULT::REACH_OBJECT;
       return final_res;
     }
 
     bool past_stucking_flag = false;
-    for (auto stucking_point : fd_->stucking_points_) {
+    for (auto stucking_point : ad.stucking_points_) {
       Vector2d stucking_pos = Vector2d(stucking_point(0), stucking_point(1));
       double stucking_yaw = stucking_point(2);
       if ((stucking_pos - current_pos).norm() < stucking_distance &&
           fabs(stucking_yaw - current_yaw) < FSMConstants::ACTION_ANGLE) {
         past_stucking_flag = true;
-        ROS_ERROR("Still stuck at the same place");
+        ROS_ERROR("Agent %d: Still stuck at the same place", agent_idx);
         break;
       }
     }
     if (!past_stucking_flag) {
-      fd_->escape_stucking_flag_ = true;
-      fd_->escape_stucking_count_ = 0;
-      fd_->escape_stucking_pos_ = current_pos;
-      fd_->escape_stucking_yaw_ = current_yaw;
+      ad.escape_stucking_flag_ = true;
+      ad.escape_stucking_count_ = 0;
+      ad.escape_stucking_pos_ = current_pos;
+      ad.escape_stucking_yaw_ = current_yaw;
     }
-  }
-
-  if (fd_->escape_stucking_flag_ && (current_pos - last_pos).norm() >= stucking_distance) {
-    ROS_ERROR("Escaped from stuck state.");
-    fd_->escape_stucking_flag_ = false;
-  }
-
-  if (fd_->escape_stucking_flag_) {
-    ROS_ERROR("Escaping stuck...");
-    if (fd_->escape_stucking_count_ == 0)
-      fd_->newest_action_ = ACTION::TURN_RIGHT;
-    else if (fd_->escape_stucking_count_ == 1)
-      fd_->newest_action_ = ACTION::MOVE_FORWARD;
-    else if (fd_->escape_stucking_count_ == 2)
-      fd_->newest_action_ = ACTION::TURN_RIGHT;
-    else if (fd_->escape_stucking_count_ == 3)
-      fd_->newest_action_ = ACTION::MOVE_FORWARD;
-    else if (fd_->escape_stucking_count_ == 4)
-      fd_->newest_action_ = ACTION::TURN_LEFT;
-    else if (fd_->escape_stucking_count_ == 5)
-      fd_->newest_action_ = ACTION::TURN_LEFT;
-    else if (fd_->escape_stucking_count_ == 6)
-      fd_->newest_action_ = ACTION::TURN_LEFT;
-    else if (fd_->escape_stucking_count_ == 7)
-      fd_->newest_action_ = ACTION::MOVE_FORWARD;
-    else if (fd_->escape_stucking_count_ == 8)
-      fd_->newest_action_ = ACTION::TURN_LEFT;
-    else if (fd_->escape_stucking_count_ == 9)
-      fd_->newest_action_ = ACTION::MOVE_FORWARD;
     else {
-      // Failed to escape - mark area as occupied and add to stuck points
-      ROS_ERROR("Cannot escape stuck state.");
-      fd_->escape_stucking_flag_ = false;
-      expl_manager_->sdf_map_->setForceOccGrid(current_pos);
-      double forward_distance = FSMConstants::FORWARD_DISTANCE;
-      Eigen::Vector2d forward_pos = fd_->escape_stucking_pos_;
-      forward_pos(0) += forward_distance * cos(fd_->escape_stucking_yaw_);
-      forward_pos(1) += forward_distance * sin(fd_->escape_stucking_yaw_);
-      expl_manager_->sdf_map_->setForceOccGrid(forward_pos);
-      forward_distance = FSMConstants::FORWARD_DISTANCE * 2.0;
-      forward_pos = fd_->escape_stucking_pos_;
-      forward_pos(0) += forward_distance * cos(fd_->escape_stucking_yaw_);
-      forward_pos(1) += forward_distance * sin(fd_->escape_stucking_yaw_);
-      expl_manager_->sdf_map_->setForceOccGrid(forward_pos);
-      fd_->dormant_frontier_flag_ = true;
+      markForwardCollision(current_pos, current_yaw);
+      ad.stucking_action_count_ = 0;
+      ad.replan_flag_ = true;
+      ad.dormant_frontier_flag_ = true;
+    }
+  }
+
+  if (ad.escape_stucking_flag_ && (current_pos - last_pos).norm() >= stucking_distance) {
+    ROS_ERROR("Agent %d: Escaped from stuck state.", agent_idx);
+    ad.escape_stucking_flag_ = false;
+  }
+
+  if (ad.escape_stucking_flag_) {
+    ROS_ERROR("Agent %d: Escaping stuck...", agent_idx);
+    if (ad.escape_stucking_count_ == 0)
+      ad.newest_action_ = ACTION::TURN_RIGHT;
+    else if (ad.escape_stucking_count_ == 1)
+      ad.newest_action_ = ACTION::MOVE_FORWARD;
+    else if (ad.escape_stucking_count_ == 2)
+      ad.newest_action_ = ACTION::TURN_RIGHT;
+    else if (ad.escape_stucking_count_ == 3)
+      ad.newest_action_ = ACTION::MOVE_FORWARD;
+    else if (ad.escape_stucking_count_ == 4)
+      ad.newest_action_ = ACTION::TURN_LEFT;
+    else if (ad.escape_stucking_count_ == 5)
+      ad.newest_action_ = ACTION::TURN_LEFT;
+    else if (ad.escape_stucking_count_ == 6)
+      ad.newest_action_ = ACTION::TURN_LEFT;
+    else if (ad.escape_stucking_count_ == 7)
+      ad.newest_action_ = ACTION::MOVE_FORWARD;
+    else if (ad.escape_stucking_count_ == 8)
+      ad.newest_action_ = ACTION::TURN_LEFT;
+    else if (ad.escape_stucking_count_ == 9)
+      ad.newest_action_ = ACTION::MOVE_FORWARD;
+    else {
+      ad.escape_stucking_flag_ = false;
+      markForwardCollision(ad.escape_stucking_pos_, ad.escape_stucking_yaw_);
+      ad.stucking_action_count_ = 0;
+      ad.replan_flag_ = true;
+      ad.dormant_frontier_flag_ = true;
       Vector3d stucking_point(
-          fd_->escape_stucking_pos_(0), fd_->escape_stucking_pos_(1), fd_->escape_stucking_yaw_);
-      fd_->stucking_points_.push_back(stucking_point);
+          ad.escape_stucking_pos_(0), ad.escape_stucking_pos_(1), ad.escape_stucking_yaw_);
+      ad.stucking_points_.push_back(stucking_point);
     }
 
-    if (fd_->escape_stucking_flag_) {
-      fd_->escape_stucking_count_++;
-      return fd_->final_result_;
+    if (ad.escape_stucking_flag_) {
+      ad.escape_stucking_count_++;
+      return ad.final_result_;
     }
   }
 
-  /*******  Decide whether to replan path (stability heuristic) START *******/
-  // Use path stability to reduce oscillation between different frontier targets
-  vector<Vector2d> last_next_best_path = expl_manager_->ed_->next_best_path_;
-  Vector2d last_next_pos = expl_manager_->ed_->next_pos_;
-  if (fd_->dormant_frontier_flag_) {
-    fd_->replan_flag_ = true;
-    fd_->dormant_frontier_flag_ = false;
+  // Replan path (stability heuristic) — use per-agent data
+  vector<Vector2d> last_next_best_path = ad.planned_next_best_path_;
+  Vector2d last_next_pos = ad.planned_next_pos_;
+  if (ad.dormant_frontier_flag_) {
+    ad.replan_flag_ = true;
+    ad.dormant_frontier_flag_ = false;
   }
-  else if (fd_->final_result_ == FINAL_RESULT::EXPLORE && !frontier_change_flag)
-    fd_->replan_flag_ = false;
+  else if (ad.final_result_ == FINAL_RESULT::EXPLORE && !frontier_change_flag)
+    ad.replan_flag_ = false;
 
-  expl_res = expl_manager_->planNextBestPoint(fd_->start_pt_, fd_->start_yaw_(0));
+  // Release previous frontier claim if replanning
+  if (ad.replan_flag_)
+    expl_manager_->frontier_map2d_->releaseClaimByAgent(agent_idx);
+
+  expl_res = expl_manager_->planNextBestPoint(
+      ad.start_pt_, ad.start_yaw_, agent_idx, ad.planned_next_pos_, ad.planned_next_best_path_);
+  ad.expl_result_ = expl_res;
 
   if (expl_res != EXPL_RESULT::EXPLORATION) {
-    fd_->replan_flag_ = true;
+    ad.replan_flag_ = true;
   }
-  if (expl_res == EXPL_RESULT::EXPLORATION && !fd_->replan_flag_) {
-    expl_manager_->ed_->next_best_path_ = last_next_best_path;
-    expl_manager_->ed_->next_pos_ = last_next_pos;
-    fd_->replan_flag_ = true;
+  if (expl_res == EXPL_RESULT::EXPLORATION && !ad.replan_flag_) {
+    // Keep previous path — don't overwrite with new planning result
+    ad.planned_next_best_path_ = last_next_best_path;
+    ad.planned_next_pos_ = last_next_pos;
+    ad.replan_flag_ = true;
   }
-  /*******  Decide whether to replan path (stability heuristic) END *******/
 
-  // Publish exploration result to monitor
   std_msgs::Int32 expl_result_msg;
   expl_result_msg.data = expl_res;
   expl_result_pub_.publish(expl_result_msg);
+  publishExplorationResults();
 
-  // Determine current high-level state based on exploration results
   if (expl_res == EXPL_RESULT::EXPLORATION)
     final_res = FINAL_RESULT::EXPLORE;
   else if (expl_res == EXPL_RESULT::NO_COVERABLE_FRONTIER ||
@@ -287,81 +402,80 @@ int ExplorationFSM::callActionPlanner()
   else
     final_res = FINAL_RESULT::SEARCH_OBJECT;
 
-  if (final_res == FINAL_RESULT::NO_FRONTIER || expl_manager_->ed_->next_best_path_.empty()) {
-    ROS_WARN("No (passable) frontier");
+  // Release frontier claim when switching to object search
+  if (final_res == FINAL_RESULT::SEARCH_OBJECT)
+    expl_manager_->frontier_map2d_->releaseClaimByAgent(agent_idx);
+
+  if (final_res == FINAL_RESULT::NO_FRONTIER || ad.planned_next_best_path_.empty()) {
+    ROS_WARN("Agent %d: No (passable) frontier", agent_idx);
     return final_res;
   }
 
-  Eigen::Vector2d end_pos = expl_manager_->ed_->next_pos_;
-  Eigen::Vector2d last_end_pos = fd_->last_next_pos_;
-  fd_->last_next_pos_ = end_pos;
+  Eigen::Vector2d end_pos = ad.planned_next_pos_;
+  Eigen::Vector2d last_end_pos = ad.last_next_pos_;
+  ad.last_next_pos_ = end_pos;
   double min_dist = (current_pos - end_pos).norm();
-  ROS_WARN("To the next point (%.2fm %.2fm), distance = %.2f m", end_pos(0), end_pos(1), min_dist);
+  ROS_WARN("Agent %d: To the next point (%.2fm %.2fm), distance = %.2f m",
+      agent_idx, end_pos(0), end_pos(1), min_dist);
 
   // Handling being stuck while exploring toward a specific frontier
   if (final_res == FINAL_RESULT::EXPLORE) {
     // Force dormant if very close to target but still exploring
     if (min_dist < FSMConstants::FORCE_DORMANT_DISTANCE) {
-      ROS_ERROR("Force set dormant frontier.");
+      ROS_ERROR("Agent %d: Force set dormant frontier.", agent_idx);
       expl_manager_->frontier_map2d_->setForceDormantFrontier(end_pos);
-      fd_->dormant_frontier_flag_ = true;
+      ad.dormant_frontier_flag_ = true;
     }
 
     // Count consecutive times with same target position while stuck
     if ((end_pos - last_end_pos).norm() < 1e-3 &&
         (current_pos - last_pos).norm() < stucking_distance) {
-      fd_->stucking_next_pos_count_++;
-      ROS_ERROR_COND(fd_->stucking_next_pos_count_ > 8, "stucking_next_pos_count_ = %d",
-          fd_->stucking_next_pos_count_);
+      ad.stucking_next_pos_count_++;
+      ROS_ERROR_COND(ad.stucking_next_pos_count_ > 8, "Agent %d: stucking_next_pos_count_ = %d",
+          agent_idx, ad.stucking_next_pos_count_);
     }
     else
-      fd_->stucking_next_pos_count_ = 0;
+      ad.stucking_next_pos_count_ = 0;
 
     // Mark frontier as dormant if stuck too long with same target
-    if (fd_->stucking_next_pos_count_ >= FSMConstants::MAX_STUCKING_NEXT_POS_COUNT) {
-      ROS_ERROR("Set dormant frontier.");
-      fd_->stucking_action_count_ = 0;
-      fd_->stucking_next_pos_count_ = 0;
+    if (ad.stucking_next_pos_count_ >= FSMConstants::MAX_STUCKING_NEXT_POS_COUNT) {
+      ROS_ERROR("Agent %d: Set dormant frontier.", agent_idx);
+      ad.stucking_action_count_ = 0;
+      ad.stucking_next_pos_count_ = 0;
       expl_manager_->frontier_map2d_->setForceDormantFrontier(end_pos);
-      fd_->dormant_frontier_flag_ = true;
+      ad.dormant_frontier_flag_ = true;
     }
   }
 
-  // Track consecutive stuck actions globally
-  if ((current_pos - last_pos).norm() < stucking_distance) {
-    fd_->stucking_action_count_++;
-    ROS_ERROR_COND(fd_->stucking_action_count_ > 15, "Stucking action count = %d",
-        fd_->stucking_action_count_);
+  // Track failed forward attempts only. Turns and camera actions are not
+  // evidence that the robot is physically stuck.
+  if (failed_forward) {
+    ad.stucking_action_count_++;
+    ROS_ERROR("Agent %d: Failed forward action count = %d", agent_idx,
+        ad.stucking_action_count_);
   }
-  else
-    fd_->stucking_action_count_ = 0;
-
-  // If stuck for too long globally, terminate episode
-  if (fd_->stucking_action_count_ >= FSMConstants::MAX_STUCKING_COUNT) {
-    ROS_ERROR("Stuck for too long, stopping episode.");
-    final_res = FINAL_RESULT::STUCKING;
-    return final_res;
-  }
+  else if (planar_displacement >= stucking_distance)
+    ad.stucking_action_count_ = 0;
 
   // Plan specific action based on exploration result
   if (expl_res == EXPL_RESULT::SEARCH_EXTREME)
-    fd_->newest_action_ =
-        planNextBestAction(current_pos, current_yaw, expl_manager_->ed_->next_best_path_, false);
+    ad.newest_action_ =
+        planNextBestAction(current_pos, current_yaw, ad.planned_next_best_path_, false, agent_idx);
   else
-    fd_->newest_action_ =
-        planNextBestAction(current_pos, current_yaw, expl_manager_->ed_->next_best_path_);
+    ad.newest_action_ =
+        planNextBestAction(current_pos, current_yaw, ad.planned_next_best_path_, true, agent_idx);
 
   return final_res;
 }
 
 int ExplorationFSM::planNextBestAction(
-    Vector2d current_pos, double current_yaw, const vector<Vector2d>& path, bool need_safety)
+    Vector2d current_pos, double current_yaw, const vector<Vector2d>& path, bool need_safety, int agent_idx)
 {
   const double local_distance = FSMConstants::LOCAL_DISTANCE;
 
   // Update target position based on path and local distance
   Vector2d local_pos = selectLocalTarget(current_pos, path, local_distance);
-  fd_->local_pos_ = local_pos;
+  fd_->agent_[agent_idx].local_pos_ = local_pos;
 
   // Compute the best step considering obstacles and safety
   Vector2d best_step;
@@ -506,77 +620,89 @@ void ExplorationFSM::visualize()
     return vec3d;
   };
 
-  // Draw frontier
   static int last_ftr2d_num = 0;
-  for (int i = 0; i < (int)ed_ptr->frontiers_.size(); ++i) {
-    visualization_->drawCubes(vec2dTo3d(ed_ptr->frontiers_[i]), fp_->vis_scale_,
-        visualization_->getColor(double(i) / ed_ptr->frontiers_.size(), 1.0), "frontier", i, 4);
-  }
-  for (int i = ed_ptr->frontiers_.size(); i < last_ftr2d_num; ++i) {
-    visualization_->drawCubes({}, fp_->vis_scale_, Vector4d(0, 0, 0, 1), "frontier", i, 4);
-  }
-  last_ftr2d_num = ed_ptr->frontiers_.size();
-
-  // Draw dormant frontier
   static int last_dftr2d_num = 0;
-  for (int i = 0; i < (int)ed_ptr->dormant_frontiers_.size(); ++i) {
-    visualization_->drawCubes(vec2dTo3d(ed_ptr->dormant_frontiers_[i]), fp_->vis_scale_,
-        Vector4d(0, 0, 0, 1), "dormant_frontier", i, 4);
-  }
-  for (int i = ed_ptr->dormant_frontiers_.size(); i < last_dftr2d_num; ++i) {
-    visualization_->drawCubes({}, fp_->vis_scale_, Vector4d(0, 0, 0, 1), "dormant_frontier", i, 4);
-  }
-  last_dftr2d_num = ed_ptr->dormant_frontiers_.size();
-
-  // Draw object
-  // static int last_obj_num = 0;
-  // for (int i = 0; i < (int)ed_ptr->objects_.size(); ++i) {
-  //   visualization_->drawCubes(vec2dTo3d(ed_ptr->objects_[i]), fp_->vis_scale_,
-  //       visualization_->getColor(double(i) / ed_ptr->objects_.size(), 1.0), "object", i, 4);
-  // }
-  // for (int i = ed_ptr->objects_.size(); i < last_obj_num; ++i) {
-  //   visualization_->drawCubes({}, fp_->vis_scale_, Vector4d(0, 0, 0, 1), "object", i, 4);
-  // }
-  // last_obj_num = ed_ptr->objects_.size();
-
   static int last_obj_num = 0;
-  for (int i = 0; i < (int)ed_ptr->objects_.size(); ++i) {
-    int label = ed_ptr->object_labels_[i];
-    visualization_->drawCubes(vec2dTo3d(ed_ptr->objects_[i]), fp_->vis_scale_,
-        visualization_->getColor(double(label) / 5.0, 1.0), "object", i, 4);
+  const size_t object_count = std::min(ed_ptr->objects_.size(), ed_ptr->object_labels_.size());
+  if (ed_ptr->objects_.size() != ed_ptr->object_labels_.size()) {
+    ROS_ERROR_THROTTLE(1.0, "object label count mismatch: objects=%zu labels=%zu",
+        ed_ptr->objects_.size(), ed_ptr->object_labels_.size());
   }
-  for (int i = ed_ptr->objects_.size(); i < last_obj_num; ++i) {
-    visualization_->drawCubes({}, fp_->vis_scale_, Vector4d(0, 0, 0, 1), "object", i, 4);
+
+  // Publish shared map markers (frontiers, objects, TSP tour) to EVERY agent's topic
+  // so each agent's RViz panel receives them under its own topic namespace
+  for (int agent_idx = 0; agent_idx < NUM_AGENTS; ++agent_idx) {
+    auto& agent_vis = visualization_[agent_idx];
+
+    // Draw frontier
+    for (int i = 0; i < (int)ed_ptr->frontiers_.size(); ++i) {
+      agent_vis->drawCubes(vec2dTo3d(ed_ptr->frontiers_[i]), fp_->vis_scale_,
+          agent_vis->getColor(double(i) / ed_ptr->frontiers_.size(), 1.0), "frontier", i, 4);
+    }
+    for (int i = ed_ptr->frontiers_.size(); i < last_ftr2d_num; ++i) {
+      agent_vis->drawCubes({}, fp_->vis_scale_, Vector4d(0, 0, 0, 1), "frontier", i, 4);
+    }
+
+    // Draw dormant frontier
+    for (int i = 0; i < (int)ed_ptr->dormant_frontiers_.size(); ++i) {
+      agent_vis->drawCubes(vec2dTo3d(ed_ptr->dormant_frontiers_[i]), fp_->vis_scale_,
+          Vector4d(0, 0, 0, 1), "dormant_frontier", i, 4);
+    }
+    for (int i = ed_ptr->dormant_frontiers_.size(); i < last_dftr2d_num; ++i) {
+      agent_vis->drawCubes({}, fp_->vis_scale_, Vector4d(0, 0, 0, 1), "dormant_frontier", i, 4);
+    }
+
+    // Draw object only where geometry and semantic labels agree.
+    for (size_t i = 0; i < object_count; ++i) {
+      int label = ed_ptr->object_labels_[i];
+      agent_vis->drawCubes(vec2dTo3d(ed_ptr->objects_[i]), fp_->vis_scale_,
+          agent_vis->getColor(double(label) / 5.0, 1.0), "object", i, 4);
+    }
+    for (int i = ed_ptr->objects_.size(); i < last_obj_num; ++i) {
+      agent_vis->drawCubes({}, fp_->vis_scale_, Vector4d(0, 0, 0, 1), "object", i, 4);
+    }
+
+    // Draw TSP tour (shared)
+    agent_vis->drawLines(vec2dTo3d(ed_ptr->tsp_tour_), fp_->vis_scale_ / 1.25,
+        Vector4d(0.2, 1, 0.2, 1), "tsp_tour", 0, 6);
   }
-  last_obj_num = ed_ptr->objects_.size();
 
-  // Draw next best path
-  visualization_->drawLines(vec2dTo3d(ed_ptr->next_best_path_), fp_->vis_scale_,
-      Vector4d(1, 0.2, 0.2, 1), "next_path", 1, 6);
+  last_ftr2d_num = ed_ptr->frontiers_.size();
+  last_dftr2d_num = ed_ptr->dormant_frontiers_.size();
+  last_obj_num = object_count;
 
-  // Draw next local point
-  vector<Vector2d> local_points;
-  local_points.push_back(fd_->local_pos_);
-  visualization_->drawSpheres(vec2dTo3d(local_points), fp_->vis_scale_ * 3,
-      Vector4d(0.2, 0.2, 1.0, 1), "local_point", 1, 6);
+  // Draw per-agent trajectories and paths
+  for (int agent_idx = 0; agent_idx < NUM_AGENTS; ++agent_idx) {
+    auto& agent_vis = visualization_[agent_idx];
+    auto& ad = fd_->agent_[agent_idx];
 
-  visualization_->drawLines(vec2dTo3d(ed_ptr->tsp_tour_), fp_->vis_scale_ / 1.25,
-      Vector4d(0.2, 1, 0.2, 1), "tsp_tour", 0, 6);
+    // Draw next best path for this agent (per-agent, decoupled)
+    agent_vis->drawLines(vec2dTo3d(ad.planned_next_best_path_), fp_->vis_scale_,
+        Vector4d(1, 0.2, 0.2, 1), "next_path", 1, 6);
 
-  visualization_->drawSpheres(vec2dTo3d(fd_->traveled_path_), fp_->vis_scale_ * 1.5,
-      Vector4d(2.0 / 255.0, 111.0 / 255.0, 197.0 / 255.0, 1), "traveled_path", 1, 6);
+    // Draw next local point for this agent
+    vector<Vector2d> local_points;
+    local_points.push_back(ad.local_pos_);
+    agent_vis->drawSpheres(vec2dTo3d(local_points), fp_->vis_scale_ * 3,
+        Vector4d(0.2, 0.2, 1.0, 1), "local_point", 1, 6);
+
+    // Draw traveled path for this agent
+    agent_vis->drawSpheres(vec2dTo3d(ad.traveled_path_), fp_->vis_scale_ * 1.5,
+        Vector4d(2.0 / 255.0, 111.0 / 255.0, 197.0 / 255.0, 1), "traveled_path", 1, 6);
+  }
 }
 
 void ExplorationFSM::clearVisMarker()
 {
-  auto ed_ptr = expl_manager_->ed_;
-  for (int i = 0; i < 500; ++i) {
-    visualization_->drawCubes({}, fp_->vis_scale_, Vector4d(0, 0, 0, 1), "frontier", i, 4);
-    visualization_->drawCubes({}, fp_->vis_scale_, Vector4d(0, 0, 0, 1), "dormant_frontier", i, 4);
-    visualization_->drawCubes({}, fp_->vis_scale_, Vector4d(0, 0, 0, 1), "object", i, 4);
+  for (int agent_idx = 0; agent_idx < NUM_AGENTS; ++agent_idx) {
+    auto& agent_vis = visualization_[agent_idx];
+    for (int i = 0; i < 500; ++i) {
+      agent_vis->drawCubes({}, fp_->vis_scale_, Vector4d(0, 0, 0, 1), "frontier", i, 4);
+      agent_vis->drawCubes({}, fp_->vis_scale_, Vector4d(0, 0, 0, 1), "dormant_frontier", i, 4);
+      agent_vis->drawCubes({}, fp_->vis_scale_, Vector4d(0, 0, 0, 1), "object", i, 4);
+    }
+    agent_vis->drawLines({}, fp_->vis_scale_, Vector4d(0, 0, 1, 1), "next_path", 1, 6);
   }
-
-  visualization_->drawLines({}, fp_->vis_scale_, Vector4d(0, 0, 1, 1), "next_path", 1, 6);
 }
 
 bool ExplorationFSM::updateFrontierAndObject()
@@ -585,11 +711,16 @@ bool ExplorationFSM::updateFrontierAndObject()
   auto frt_map = expl_manager_->frontier_map2d_;
   auto obj_map = expl_manager_->object_map2d_;
   auto ed = expl_manager_->ed_;
-  Eigen::Vector2d start_pos2d = Eigen::Vector2d(fd_->start_pt_(0), fd_->start_pt_(1));
 
   change_flag = frt_map->isAnyFrontierChanged();
   frt_map->searchFrontiers();
-  change_flag |= frt_map->dormantSeenFrontiers(start_pos2d, fd_->start_yaw_(0));
+  for (int i = 0; i < NUM_AGENTS; ++i) {
+    if (!fd_->agent_[i].have_odom_)
+      continue;
+    const Eigen::Vector2d sensor_pos(
+        fd_->agent_[i].odom_pos_(0), fd_->agent_[i].odom_pos_(1));
+    change_flag |= frt_map->dormantSeenFrontiers(sensor_pos, fd_->agent_[i].odom_yaw_);
+  }
   frt_map->getFrontiers(ed->frontiers_, ed->frontier_averages_);
   frt_map->getDormantFrontiers(ed->dormant_frontiers_, ed->dormant_frontier_averages_);
   obj_map->getObjects(ed->objects_, ed->object_averages_, ed->object_labels_);
@@ -597,136 +728,209 @@ bool ExplorationFSM::updateFrontierAndObject()
   return change_flag;
 }
 
+// Lightweight episode reset — only resets FSM state and agent data.
+// Does NOT destroy/recreate ROS objects (timers, subscribers, publishers, maps).
+// This is safe to call from any callback even with AsyncSpinner,
+// unlike init(nh_) which destroys objects that other threads may be using.
+void ExplorationFSM::resetEpisode()
+{
+  // Reset FSM state for all agents
+  for (int i = 0; i < NUM_AGENTS; ++i)
+    state_[i] = ROS_STATE::INIT;
+
+  // Reset per-agent FSM data
+  fd_.reset(new FSMData);
+
+  // Reset exploration manager maps (SDF, frontier, object, value) without
+  // destroying the ROS interface (MapROS subscribers/publishers stay alive).
+  // Note: sdf_map_->resetMap() already resets object_map2d_ and value_map_.
+  expl_manager_->sdf_map_->resetMap();
+  expl_manager_->frontier_map2d_->reset();
+  expl_manager_->ed_.reset(new ExplorationData);
+  expl_manager_->resetEpisodeState();
+
+  clearVisMarker();
+  publishPlannerState();
+  publishExplorationResults();
+  ROS_WARN("Episode reset — FSM back to INIT, maps cleared.");
+}
+
+void ExplorationFSM::markForwardCollision(const Vector2d& origin, double yaw)
+{
+  for (int step = 1; step <= 2; ++step) {
+    const double distance = FSMConstants::FORWARD_DISTANCE * step;
+    Vector2d forward_pos = origin;
+    forward_pos(0) += distance * cos(yaw);
+    forward_pos(1) += distance * sin(yaw);
+    expl_manager_->sdf_map_->setForceOccGrid(forward_pos);
+  }
+}
+
 // Receive Habitat state messages
 void ExplorationFSM::habitatStateCallback(const std_msgs::Int32ConstPtr& msg)
 {
-  if (msg->data == HABITAT_STATE::ACTION_FINISH && state_ == ROS_STATE::WAIT_ACTION_FINISH)
-    transitState(PLAN_ACTION, "Habitat Finish Action");
+  std::lock_guard<std::mutex> lock(data_mutex_);
+  if (msg->data == HABITAT_STATE::ACTION_FINISH) {
+    // Trigger all agents that are waiting for action finish
+    for (int agent_idx = 0; agent_idx < NUM_AGENTS; ++agent_idx) {
+      if (state_[agent_idx] == ROS_STATE::WAIT_ACTION_FINISH) {
+        transitState(agent_idx, ROS_STATE::PLAN_ACTION, "Habitat Finish Action");
+      }
+    }
+  }
   if (msg->data == HABITAT_STATE::EPISODE_FINISH)
-    init(nh_);
+    resetEpisode();
   return;
 }
 
 // Periodically update frontiers and visualize in idle states
 void ExplorationFSM::frontierCallback(const ros::TimerEvent& e)
 {
-  if (state_ != ROS_STATE::WAIT_TRIGGER && state_ != ROS_STATE::FINISH)
+  bool all_wait = true;
+  {
+    std::lock_guard<std::mutex> lock(data_mutex_);
+    for (int i = 0; i < NUM_AGENTS; ++i) {
+      if (state_[i] != ROS_STATE::WAIT_TRIGGER && state_[i] != ROS_STATE::FINISH &&
+          state_[i] != ROS_STATE::FINISH_FAILURE) {
+        all_wait = false;
+        break;
+      }
+    }
+  }
+  if (!all_wait)
     return;
 
-  updateFrontierAndObject();
-  visualize();
+  {
+    std::lock_guard<std::mutex> lock(data_mutex_);
+    updateFrontierAndObject();
+    visualize();
+  }
 }
 
 // Receive user trigger to start exploration
 void ExplorationFSM::triggerCallback(const geometry_msgs::PoseStampedConstPtr& msg)
 {
-  if (state_ != ROS_STATE::WAIT_TRIGGER)
-    return;
-  fd_->trigger_ = true;
-  cout << "Triggered!" << endl;
-  transitState(PLAN_ACTION, "triggerCallback");
+  std::lock_guard<std::mutex> lock(data_mutex_);
+  // Trigger all agents that are in WAIT_TRIGGER state
+  bool any_triggered = false;
+  for (int i = 0; i < NUM_AGENTS; ++i) {
+    if (state_[i] == ROS_STATE::WAIT_TRIGGER) {
+      fd_->agent_[i].trigger_ = true;
+      transitState(i, ROS_STATE::PLAN_ACTION, "triggerCallback");
+      any_triggered = true;
+    }
+  }
+  if (any_triggered)
+    cout << "Triggered all agents!" << endl;
 }
 
-// Receive robot odometry and update traveled path + marker
-void ExplorationFSM::odometryCallback(const nav_msgs::OdometryConstPtr& msg)
+void ExplorationFSM::odometryCallback(const nav_msgs::OdometryConstPtr& msg, int agent_idx)
 {
-  fd_->odom_pos_(0) = msg->pose.pose.position.x;
-  fd_->odom_pos_(1) = msg->pose.pose.position.y;
-  fd_->odom_pos_(2) = msg->pose.pose.position.z;
+  std::lock_guard<std::mutex> lock(data_mutex_);
+  auto& ad = fd_->agent_[agent_idx];
 
-  fd_->odom_orient_.w() = msg->pose.pose.orientation.w;
-  fd_->odom_orient_.x() = msg->pose.pose.orientation.x;
-  fd_->odom_orient_.y() = msg->pose.pose.orientation.y;
-  fd_->odom_orient_.z() = msg->pose.pose.orientation.z;
+  ad.odom_pos_(0) = msg->pose.pose.position.x;
+  ad.odom_pos_(1) = msg->pose.pose.position.y;
+  ad.odom_pos_(2) = msg->pose.pose.position.z;
 
-  Eigen::Vector3d rot_x = fd_->odom_orient_.toRotationMatrix().block<3, 1>(0, 0);
-  fd_->odom_yaw_ = atan2(rot_x(1), rot_x(0));
+  ad.odom_orient_.w() = msg->pose.pose.orientation.w;
+  ad.odom_orient_.x() = msg->pose.pose.orientation.x;
+  ad.odom_orient_.y() = msg->pose.pose.orientation.y;
+  ad.odom_orient_.z() = msg->pose.pose.orientation.z;
 
-  fd_->have_odom_ = true;
+  Eigen::Vector3d rot_x = ad.odom_orient_.toRotationMatrix().block<3, 1>(0, 0);
+  ad.odom_yaw_ = atan2(rot_x(1), rot_x(0));
 
-  Vector2d odom_pos2d = Vector2d(fd_->odom_pos_(0), fd_->odom_pos_(1));
-  if (fd_->traveled_path_.empty())
-    fd_->traveled_path_.push_back(odom_pos2d);
-  else if ((fd_->traveled_path_.back() - odom_pos2d).norm() > 1e-2)
-    fd_->traveled_path_.push_back(odom_pos2d);
+  ad.have_odom_ = true;
 
-  publishRobotMarker();
+  Vector2d odom_pos2d = Vector2d(ad.odom_pos_(0), ad.odom_pos_(1));
+  if (ad.traveled_path_.empty())
+    ad.traveled_path_.push_back(odom_pos2d);
+  else if ((ad.traveled_path_.back() - odom_pos2d).norm() > 1e-2)
+    ad.traveled_path_.push_back(odom_pos2d);
+
+  publishRobotMarker(agent_idx);
 }
 
-void ExplorationFSM::publishRobotMarker()
+void ExplorationFSM::publishRobotMarker(int agent_idx)
 {
-  const double robot_height = FSMConstants::ROBOT_HEIGHT;
+  auto& ad = fd_->agent_[agent_idx];
+  const double robot_height = FSMConstants::ROBOT_HEIGHTS[agent_idx];
   const double robot_radius = FSMConstants::ROBOT_RADIUS;
+
+  string agent_ns = "agent_" + std::to_string(agent_idx);
 
   // Create robot body cylinder marker
   visualization_msgs::Marker robot_marker;
   robot_marker.header.frame_id = "world";
   robot_marker.header.stamp = ros::Time::now();
-  robot_marker.ns = "robot_position";
+  robot_marker.ns = agent_ns + "_robot";
   robot_marker.id = 0;
   robot_marker.type = visualization_msgs::Marker::CYLINDER;
   robot_marker.action = visualization_msgs::Marker::ADD;
 
-  // Set cylinder position
-  robot_marker.pose.position.x = fd_->odom_pos_(0);
-  robot_marker.pose.position.y = fd_->odom_pos_(1);
-  robot_marker.pose.position.z = fd_->odom_pos_(2) + robot_height / 2.0;
+  robot_marker.pose.position.x = ad.odom_pos_(0);
+  robot_marker.pose.position.y = ad.odom_pos_(1);
+  robot_marker.pose.position.z = ad.odom_pos_(2) + robot_height / 2.0;
 
-  // Set cylinder orientation
-  robot_marker.pose.orientation.x = fd_->odom_orient_.x();
-  robot_marker.pose.orientation.y = fd_->odom_orient_.y();
-  robot_marker.pose.orientation.z = fd_->odom_orient_.z();
-  robot_marker.pose.orientation.w = fd_->odom_orient_.w();
+  robot_marker.pose.orientation.x = ad.odom_orient_.x();
+  robot_marker.pose.orientation.y = ad.odom_orient_.y();
+  robot_marker.pose.orientation.z = ad.odom_orient_.z();
+  robot_marker.pose.orientation.w = ad.odom_orient_.w();
 
-  // Set cylinder dimensions
-  robot_marker.scale.x = robot_radius * 2;  // Diameter
-  robot_marker.scale.y = robot_radius * 2;  // Diameter
-  robot_marker.scale.z = robot_height;      // Height
+  robot_marker.scale.x = robot_radius * 2;
+  robot_marker.scale.y = robot_radius * 2;
+  robot_marker.scale.z = robot_height;
 
-  // Set cylinder color (blue)
-  robot_marker.color.r = 50.0 / 255.0;
-  robot_marker.color.g = 50.0 / 255.0;
-  robot_marker.color.b = 255.0 / 255.0;
+  const std::vector<Vector4d> body_colors = {
+      Vector4d(50.0 / 255.0, 50.0 / 255.0, 255.0 / 255.0, 1.0),
+      Vector4d(255.0 / 255.0, 50.0 / 255.0, 50.0 / 255.0, 1.0),
+      Vector4d(50.0 / 255.0, 180.0 / 255.0, 80.0 / 255.0, 1.0)};
+  const Vector4d& body_color = body_colors[agent_idx % body_colors.size()];
+  robot_marker.color.r = body_color(0);
+  robot_marker.color.g = body_color(1);
+  robot_marker.color.b = body_color(2);
   robot_marker.color.a = 1.0;
 
   // Create direction arrow marker
   visualization_msgs::Marker arrow_marker;
   arrow_marker.header.frame_id = "world";
   arrow_marker.header.stamp = ros::Time::now();
-  arrow_marker.ns = "robot_direction";
+  arrow_marker.ns = agent_ns + "_robot_dir";
   arrow_marker.id = 1;
   arrow_marker.type = visualization_msgs::Marker::ARROW;
   arrow_marker.action = visualization_msgs::Marker::ADD;
 
-  // Set arrow position
-  arrow_marker.pose.position.x = fd_->odom_pos_(0);
-  arrow_marker.pose.position.y = fd_->odom_pos_(1);
-  arrow_marker.pose.position.z = fd_->odom_pos_(2) + robot_height;
+  arrow_marker.pose.position.x = ad.odom_pos_(0);
+  arrow_marker.pose.position.y = ad.odom_pos_(1);
+  arrow_marker.pose.position.z = ad.odom_pos_(2) + robot_height;
 
-  // Set arrow orientation
-  arrow_marker.pose.orientation.x = fd_->odom_orient_.x();
-  arrow_marker.pose.orientation.y = fd_->odom_orient_.y();
-  arrow_marker.pose.orientation.z = fd_->odom_orient_.z();
-  arrow_marker.pose.orientation.w = fd_->odom_orient_.w();
+  arrow_marker.pose.orientation.x = ad.odom_orient_.x();
+  arrow_marker.pose.orientation.y = ad.odom_orient_.y();
+  arrow_marker.pose.orientation.z = ad.odom_orient_.z();
+  arrow_marker.pose.orientation.w = ad.odom_orient_.w();
 
-  // Set arrow dimensions
-  arrow_marker.scale.x = robot_radius + 0.13;  // Arrow length
-  arrow_marker.scale.y = 0.08;                 // Arrow width
-  arrow_marker.scale.z = 0.08;                 // Arrow thickness
+  arrow_marker.scale.x = robot_radius + 0.13;
+  arrow_marker.scale.y = 0.08;
+  arrow_marker.scale.z = 0.08;
 
-  // Set arrow color (green)
-  arrow_marker.color.r = 10.0 / 255.0;
-  arrow_marker.color.g = 255.0 / 255.0;
-  arrow_marker.color.b = 10.0 / 255.0;
+  const std::vector<Vector4d> arrow_colors = {
+      Vector4d(10.0 / 255.0, 255.0 / 255.0, 10.0 / 255.0, 1.0),
+      Vector4d(255.0 / 255.0, 165.0 / 255.0, 10.0 / 255.0, 1.0),
+      Vector4d(40.0 / 255.0, 210.0 / 255.0, 255.0 / 255.0, 1.0)};
+  const Vector4d& arrow_color = arrow_colors[agent_idx % arrow_colors.size()];
+  arrow_marker.color.r = arrow_color(0);
+  arrow_marker.color.g = arrow_color(1);
+  arrow_marker.color.b = arrow_color(2);
   arrow_marker.color.a = 1.0;
 
-  // Publish both markers
-  robot_marker_pub_.publish(robot_marker);
-  robot_marker_pub_.publish(arrow_marker);
+  robot_marker_pub_[agent_idx].publish(robot_marker);
+  robot_marker_pub_[agent_idx].publish(arrow_marker);
 }
 
 void ExplorationFSM::confidenceThresholdCallback(const std_msgs::Float64ConstPtr& msg)
 {
+  std::lock_guard<std::mutex> lock(data_mutex_);
   if (fd_->have_confidence_)
     return;
   fd_->have_confidence_ = true;
@@ -734,12 +938,13 @@ void ExplorationFSM::confidenceThresholdCallback(const std_msgs::Float64ConstPtr
 }
 
 // Transition FSM state and log the change
-void ExplorationFSM::transitState(ROS_STATE new_state, string pos_call)
+// Caller must hold data_mutex_
+void ExplorationFSM::transitState(int agent_idx, ROS_STATE new_state, string pos_call)
 {
-  int pre_s = int(state_);
-  state_ = new_state;
-  cout << "[ " + pos_call + "]: from " + fd_->state_str_[pre_s] + " to " +
-              fd_->state_str_[int(new_state)]
+  int pre_s = int(state_[agent_idx]);
+  state_[agent_idx] = new_state;
+  cout << "[Agent " << agent_idx << " " + pos_call + "]: from " + stateName(pre_s) +
+              " to " + stateName(int(new_state))
        << endl;
 }
 }  // namespace apexnav_planner

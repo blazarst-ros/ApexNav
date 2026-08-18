@@ -20,6 +20,9 @@ Usage:
     # Test specific episode
     python habitat_evaluation.py --dataset hm3dv2 test_epi_num=10
 
+    # Run two cooperating Habitat agents with the Lite YOLOE/CLIP pipeline
+    python habitat_evaluation.py --multiagent --dataset hm3dv2
+
 Author: Zager-Zhang
 """
 
@@ -169,9 +172,14 @@ def _parse_dataset_arg():
         default="hm3dv2",
         help="Choose dataset: hm3dv1, hm3dv2 or mp3d (default: hm3dv2)",
     )
+    parser.add_argument(
+        "--multiagent",
+        action="store_true",
+        help="Run the Lite two-agent MultiAgentSim-v0 evaluation pipeline.",
+    )
     # Keep unknown so users can still pass Hydra-style overrides (e.g., key=value)
     args, unknown = parser.parse_known_args()
-    return args.dataset, unknown
+    return args.dataset, args.multiagent, unknown
 
 
 def _absolutize_habitat_paths(cfg: DictConfig) -> None:
@@ -666,12 +674,21 @@ if __name__ == "__main__":
     rospy.init_node("habitat_eval_node", anonymous=True)
 
     try:
-        dataset, overrides = _parse_dataset_arg()
-        cfg_name = f"habitat_eval_{dataset}"
+        dataset, multiagent, overrides = _parse_dataset_arg()
+        cfg_name = (
+            f"habitat_eval_{dataset}_multiagent_lite"
+            if multiagent
+            else f"habitat_eval_{dataset}"
+        )
         # Compose the chosen config and pass through extra Hydra overrides
         with initialize(version_base=None, config_path="config"):
             cfg = compose(config_name=cfg_name, overrides=overrides)
-        main(cfg)
+        if multiagent:
+            from habitat_evaluation_multiagent import main as multiagent_main
+
+            multiagent_main(cfg)
+        else:
+            main(cfg)
     except Exception as e:
         print(f"Unexpected error occurred: {e}")
         rospy.signal_shutdown("Shutdown due to error")

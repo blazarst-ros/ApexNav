@@ -19,6 +19,7 @@
 #include <std_msgs/Float64.h>
 #include <std_msgs/Int32.h>
 #include <std_msgs/Empty.h>
+#include <std_msgs/String.h>
 #include <visualization_msgs/Marker.h>
 #include <trajectory_manager/PolyTraj.h>
 
@@ -45,7 +46,7 @@ constexpr double REPLAN_DISTANCE_THRESHOLD = 0.5;     // Trigger replan if devia
 // Distances (m)
 constexpr double STUCKING_DISTANCE = 0.05;
 constexpr double REACH_DISTANCE = 0.20;
-constexpr double SOFT_REACH_DISTANCE = 0.45;
+constexpr double SOFT_REACH_DISTANCE = 0.20;
 constexpr double LOCAL_DISTANCE = 0.80;
 constexpr double FORWARD_DISTANCE = 0.15;
 constexpr double FORCE_DORMANT_DISTANCE = 0.35;
@@ -69,7 +70,6 @@ constexpr double ROBOT_HEIGHT = 0.15;
 constexpr double ROBOT_RADIUS = 0.18;
 }  // namespace FSMConstantsReal
 
-class FastPlannerManager;
 class ExplorationManager;
 class PlanningVisualization;
 struct FSMParam;
@@ -108,7 +108,6 @@ class ExplorationFSMReal {
 private:
   /* Planning Utils */
   ros::NodeHandle nh_;
-  std::shared_ptr<FastPlannerManager> planner_manager_;
   std::shared_ptr<ExplorationManager> expl_manager_;
   std::shared_ptr<PlanningVisualization> visualization_;
 
@@ -121,14 +120,14 @@ private:
   ros::Timer exec_timer_, frontier_timer_, safety_timer_;
   ros::Subscriber trigger_sub_, goal_sub_, odom_sub_, confidence_threshold_sub_;
   ros::Subscriber traj_finish_sub_;  // TODO: Subscribe to trajectory execution status
-  
-  ros::Publisher ros_state_pub_, expl_state_pub_, expl_result_pub_;
+
+  ros::Publisher ros_state_pub_, expl_state_pub_, expl_result_pub_, exploration_strategy_pub_;
   ros::Publisher robot_marker_pub_;
-  
+
   // Real-world specific: trajectory control publishers
   ros::Publisher poly_traj_pub_;   // Publish polynomial trajectory
   ros::Publisher stop_pub_;        // Emergency stop signal
-  
+
   /* Trajectory execution status */
   // Trajectory state is tracked in fd_->static_state_
 
@@ -137,7 +136,7 @@ private:
   void polyTraj2ROSMsg(const LocalTrajectory& local_traj, trajectory_manager::PolyTraj& poly_msg);
   void selectLocalTarget(const Eigen::Vector2d& current_pos, const std::vector<Eigen::Vector2d>& path,
       const double& local_distance, Eigen::Vector2d& target_pos, double& target_yaw);
-  
+
   // Safety and stuck detection
   void emergencyStop();
   bool checkNeedReplan();
@@ -149,6 +148,7 @@ private:
   void transitState(RealFSM::State new_state, std::string pos_call);
   void wrapAngle(double& angle);
   void publishRobotMarker();
+  void publishExplorationStrategy();
   void visualize();
   void clearVisMarker();
 

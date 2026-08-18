@@ -29,7 +29,6 @@ ObjectMap2D::ObjectMap2D(SDFMap2D* sdf_map, ros::NodeHandle& nh)
   min_confidence_ = -1.0;  // Default to accept all detections
   nh.param("object/min_observation_num", min_observation_num_, 2);
   nh.param("object/fusion_type", fusion_type_, 1);
-  nh.param("object/use_observation", use_observation_, true);
   nh.param("object/vis_cloud", is_vis_cloud_, false);
 
   // Setup ROS communication
@@ -44,6 +43,17 @@ ObjectMap2D::ObjectMap2D(SDFMap2D* sdf_map, ros::NodeHandle& nh)
 
   // Set point cloud processing parameters
   leaf_size_ = 0.1f;  // Voxel grid leaf size for downsampling
+  class_names_.push_back("target");
+}
+
+void ObjectMap2D::reset()
+{
+  objects_.clear();
+  fill(object_buffer_.begin(), object_buffer_.end(), 0);
+  fill(object_indexs_.begin(), object_indexs_.end(), -1);
+  all_object_clouds_.reset(new pcl::PointCloud<pcl::PointXYZ>());
+  over_depth_object_cloud_.reset(new pcl::PointCloud<pcl::PointXYZ>());
+  publishObjectClouds();
 }
 
 void ObjectMap2D::setConfidenceThreshold(double val)
@@ -52,83 +62,75 @@ void ObjectMap2D::setConfidenceThreshold(double val)
   ROS_INFO("Set Confidence Threshold = %f", val);
 }
 
-/**
- * @brief Process observation clouds to adjust detection confidence
- *
- * This function handles negative evidence from visual observations where
- * objects were expected but not detected. It computes spatial overlap
- * between observation regions and existing detections to reduce confidence
- * scores, improving the robustness of the semantic mapping system.
- *
- * @param observation_clouds Vector of point clouds representing observed regions
- * @param itm_score Image-text matching score for context weighting
- */
-void ObjectMap2D::inputObservationObjectsCloud(
-    const vector<pcl::shared_ptr<pcl::PointCloud<pcl::PointXYZ>>> observation_clouds,
-    const double& itm_score)
+void ObjectMap2D::ensureLabelCapacity(size_t label_count)
 {
-  // Only process observations in fusion mode with observation enabled
-  if (fusion_type_ != 1 || !use_observation_)
+  if (label_count == 0)
+    label_count = 1;
+  while (class_names_.size() < label_count)
+    class_names_.push_back("label_" + std::to_string(class_names_.size()));
+  label_count = class_names_.size();
+  for (auto& object : objects_) {
+    object.clouds_.resize(label_count);
+    object.confidence_scores_.resize(label_count, 0.0);
+    object.observation_nums_.resize(label_count, 0);
+    object.observation_cloud_sums_.resize(label_count, 0);
+  }
+}
+
+void ObjectMap2D::setClassNames(const vector<string>& class_names)
+{
+  if (class_names.empty())
     return;
+  if (objects_.empty())
+    class_names_ = class_names;
+  else {
+    if (class_names_.size() < class_names.size())
+      class_names_.resize(class_names.size());
+    for (size_t i = 0; i < class_names.size(); ++i)
+      class_names_[i] = class_names[i];
+  }
+  for (size_t i = 0; i < class_names_.size(); ++i) {
+    if (class_names_[i].empty())
+      class_names_[i] = "label_" + std::to_string(i);
+  }
+  ensureLabelCapacity(class_names_.size());
+}
 
-  // Process each observation cloud against corresponding objects
-  for (int i = 0; i < (int)observation_clouds.size(); i++) {
-    auto observation_cloud = observation_clouds[i];
-    auto object = objects_[i];
-
-    if (observation_cloud->points.empty())
-      continue;
-
-    // Check overlap with each possible object classification
-    for (int label = 0; label < 5; ++label) {
-      if (object.confidence_scores_[label] < 1e-3)
-        continue;  // Skip labels with negligible confidence
-
-      // Setup spatial search for overlap computation
-      pcl::KdTreeFLANN<pcl::PointXYZ> kdtree;
-      kdtree.setInputCloud(observation_cloud);
-      double distance_threshold = leaf_size_ * 1.1;  // Spatial overlap threshold
-      int overlap_count = 0;
-
-      // Count overlapping points between object and observation clouds
-      for (const auto& point : object.clouds_[label]->points) {
-        std::vector<int> point_idx_search;
-        std::vector<float> point_squared_distance;
-        if (kdtree.nearestKSearch(point, 1, point_idx_search, point_squared_distance) > 0) {
-          // Points within threshold are considered overlapping
-          if (point_squared_distance[0] <= distance_threshold * distance_threshold) {
-            overlap_count++;
-          }
-        }
-      }
-
-      // Skip if no spatial overlap detected
-      if (overlap_count == 0)
-        continue;
-
-      // Update confidence scores based on negative observation evidence
-      auto& merged_object = objects_[i];
-      merged_object.observation_cloud_sums_[label] += overlap_count;
-      int total_last = merged_object.clouds_[label]->points.size();
-      double confidence_last = merged_object.confidence_scores_[label];
-      int observation_now = overlap_count;
-      double confidence_now = 0.0;  // Negative evidence has zero confidence
-      if (label == 0)
-        confidence_now = itm_score;  // Use ITM score for primary label
-      int total_now = merged_object.clouds_[label]->points.size();
-
-      // Apply confidence fusion algorithm
-      merged_object.confidence_scores_[label] = fusionConfidenceScore(total_last, confidence_last,
-          observation_now, confidence_now, total_now, merged_object.observation_cloud_sums_[label]);
-      printFusionInfo(merged_object, label, "[Observation]");
-      // ROS_WARN("[Observation] id = %d label = %d overlap_count = %d object_cloud = %ld",
-      //     merged_object.id_, label, overlap_count, object.clouds_[label]->points.size());
+void ObjectMap2D::getObjectSnapshots(vector<ObjectClusterSnapshot>& snapshots) const
+{
+  snapshots.clear();
+  snapshots.reserve(objects_.size());
+  for (const auto& object : objects_) {
+    ObjectClusterSnapshot snapshot;
+    snapshot.cluster_id = object.id_;
+    snapshot.centroid = object.average_;
+    snapshot.cells = object.cells_;
+    snapshot.best_label = object.best_label_;
+    for (size_t label = 0; label < object.clouds_.size(); ++label) {
+      ObjectLabelSnapshot label_snapshot;
+      label_snapshot.label_index = static_cast<int>(label);
+      label_snapshot.label_name = label < class_names_.size()
+          ? class_names_[label]
+          : "label_" + std::to_string(label);
+      label_snapshot.cloud_points = object.clouds_[label]
+          ? static_cast<int>(object.clouds_[label]->points.size())
+          : 0;
+      label_snapshot.evidence_points = object.observation_cloud_sums_[label];
+      label_snapshot.detection_count = object.observation_nums_[label];
+      label_snapshot.confidence = object.confidence_scores_[label];
+      snapshot.labels.push_back(label_snapshot);
     }
+    snapshots.push_back(snapshot);
   }
 }
 
 int ObjectMap2D::searchSingleObjectCluster(const DetectedObject& detected_object)
 {
+  if (detected_object.label < 0) {
+    ROS_ERROR("Ignoring object with invalid negative label %d", detected_object.label);
+    return -1;
+  }
+  ensureLabelCapacity(static_cast<size_t>(detected_object.label) + 1);
   auto object_cloud = detected_object.cloud;
 
   // Initialize clustering analysis variables
@@ -222,7 +224,7 @@ void ObjectMap2D::updateObjectBestLabel(int obj_idx)
   for (int label = 0; label < (int)objects_[obj_idx].clouds_.size(); label++) {
     auto obs_sum = objects_[obj_idx].observation_cloud_sums_[label];
     auto score = objects_[obj_idx].confidence_scores_[label];
-    int func_score = obs_sum * score;  // Combined reliability metric
+    double func_score = obs_sum * score;  // Combined reliability metric
 
     if (func_score > max_func_score) {
       max_func_score = func_score;
@@ -238,7 +240,7 @@ void ObjectMap2D::createNewObjectCluster(
   int label = detected_object.label;
 
   // Initialize new object cluster with unique ID
-  ObjectCluster obj;
+  ObjectCluster obj(class_names_.size());
   obj.id_ = (int)objects_.size();
   obj.max_seen_count_ = 0;
   obj.good_cells_.clear();
@@ -591,13 +593,14 @@ void ObjectMap2D::getTopConfidenceObjectCloud(
   else {
     // Apply confidence filtering with functional scoring
     for (auto object : objects_) {
-      int max_func_score = 0, best_label = -1;
+      double max_func_score = 0.0;
+      int best_label = -1;
 
       // Find best label using functional score (observation count * confidence)
       for (int label = 0; label < (int)object.clouds_.size(); label++) {
         auto obs_sum = object.observation_cloud_sums_[label];
         auto score = object.confidence_scores_[label];
-        int func_score = obs_sum * score;
+        double func_score = obs_sum * score;
         if (func_score > max_func_score) {
           max_func_score = func_score;
           best_label = label;

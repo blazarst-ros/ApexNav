@@ -1,4 +1,72 @@
-from params import FINAL_RESULT, EXPL_RESULT
+from params import FINAL_RESULT, EXPL_RESULT, ROS_STATE
+
+
+def should_end_multiagent_episode(
+    ros_states,
+    step_counts,
+    max_episode_steps,
+    reach_stop_queued,
+    reach_claim_stop_executed,
+):
+    """Return whether a cooperative multi-agent episode may terminate.
+
+    A planner failure is local to one agent.  It becomes a team failure only
+    after every remaining agent has either entered FINISH_FAILURE or exhausted
+    Habitat's hard step budget.  A reach claim has its own stronger handshake:
+    termination waits until the claiming agent's Habitat STOP was executed.
+    """
+    return get_multiagent_termination_reason(
+        ros_states,
+        step_counts,
+        max_episode_steps,
+        reach_stop_queued,
+        reach_claim_stop_executed,
+    ) is not None
+
+
+def get_multiagent_termination_reason(
+    ros_states,
+    step_counts,
+    max_episode_steps,
+    reach_stop_queued,
+    reach_claim_stop_executed,
+):
+    """Return the team-level exit cause, or ``None`` while work remains."""
+    if reach_stop_queued:
+        return "reach_claim" if reach_claim_stop_executed else None
+
+    if len(ros_states) != len(step_counts):
+        raise ValueError("ros_states and step_counts must describe the same agents")
+    if not ros_states:
+        return None
+
+    if not all(
+        state == ROS_STATE.FINISH_FAILURE or steps >= max_episode_steps
+        for state, steps in zip(ros_states, step_counts)
+    ):
+        return None
+
+    if all(state == ROS_STATE.FINISH_FAILURE for state in ros_states):
+        return "all_failed"
+    return "step_limit"
+
+
+def get_reach_claim_outcome(
+    final_state, claim_agent_idx, claim_distance_to_goal, success_distance, stop_executed
+):
+    """Classify a planner reach claim with Habitat's native STOP semantics.
+
+    A reach claim is only a candidate-object assertion.  It becomes success
+    only when the claiming agent actually executes STOP strictly inside the
+    Habitat success radius; otherwise it is a false positive.
+    """
+    if final_state != FINAL_RESULT.REACH_OBJECT or claim_agent_idx is None:
+        return None
+    if not stop_executed:
+        return "pending stop"
+    if claim_distance_to_goal < success_distance:
+        return "success"
+    return "false positive"
 
 
 def is_on_same_floor(height, ref_floor_height=None, ceiling_height=2.0, episode=None):

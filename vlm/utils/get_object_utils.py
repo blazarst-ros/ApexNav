@@ -8,6 +8,18 @@ from vlm.utils.get_itm_message import get_itm_message
 yoloe_detector = YOLOEClient(port=12184)
 
 
+def get_object_class_names(right_label, similar_answer):
+    """Return the shared object-map label dictionary for one episode.
+
+    Index zero is always the target; subsequent indices align with the
+    semantic aliases used by :func:`get_object`.  The multi-agent C++ map
+    consumes this dictionary together with ``label_indices``.
+    """
+    target_aliases = [label.strip() for label in right_label.split("|") if label.strip()]
+    target_name = target_aliases[0] if target_aliases else "target"
+    return [target_name] + [str(label).strip() for label in similar_answer if str(label).strip()]
+
+
 def get_segmentation(segmented_img, idx, detections, img, label, score, color):
     object_mask = np.zeros(img.shape[:2], dtype=np.uint8)
     bbox_denorm = detections.boxes[idx] * np.array(

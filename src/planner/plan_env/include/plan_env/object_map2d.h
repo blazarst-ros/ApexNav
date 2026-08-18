@@ -88,9 +88,9 @@ struct ObjectCluster {
 
   /**
    * @brief Constructor to initialize multi-class storage
-   * @param size Number of semantic classes to support (default: 5)
+   * @param size Initial number of semantic classes; storage grows dynamically
    */
-  ObjectCluster(int size = 5)
+  ObjectCluster(int size = 1)
     : clouds_(size)
     , confidence_scores_(size, 0.0)
     , observation_nums_(size, 0)
@@ -99,16 +99,33 @@ struct ObjectCluster {
   }
 };
 
+struct ObjectLabelSnapshot {
+  int label_index;
+  string label_name;
+  int cloud_points;
+  int evidence_points;
+  int detection_count;
+  double confidence;
+};
+
+struct ObjectClusterSnapshot {
+  int cluster_id;
+  Vector2d centroid;
+  vector<Vector2d> cells;
+  int best_label;
+  vector<ObjectLabelSnapshot> labels;
+};
+
 class ObjectMap2D {
 public:
   ObjectMap2D(SDFMap2D* sdf_map, ros::NodeHandle& nh);
   ~ObjectMap2D() = default;
 
+  void reset();  ///< Clear all object data for a new episode
   int searchSingleObjectCluster(const DetectedObject& detected_object);
-  void inputObservationObjectsCloud(
-      const vector<pcl::shared_ptr<pcl::PointCloud<pcl::PointXYZ>>> observation_clouds,
-      const double& itm_score);
   void setConfidenceThreshold(double val);
+  void setClassNames(const vector<string>& class_names);
+  void getObjectSnapshots(vector<ObjectClusterSnapshot>& snapshots) const;
 
   void getAllConfidenceObjectClouds(pcl::shared_ptr<pcl::PointCloud<pcl::PointXYZ>>& object_clouds);
   void getTopConfidenceObjectCloud(
@@ -133,6 +150,7 @@ private:
   double fusionConfidenceScore(
       int total_last, double c_last, int n_now, double c_now, int total_now, int sum);
   void updateObjectBestLabel(int obj_idx);
+  void ensureLabelCapacity(size_t label_count);
   Eigen::Vector4d getColor(const double& h, double alpha);
 
   bool haveOverlap(
@@ -169,9 +187,9 @@ private:
   vector<int> object_indexs_;      ///< Grid cell to object ID mapping
   vector<char> object_buffer_;     ///< Object occupancy grid buffer
   vector<ObjectCluster> objects_;  ///< Collection of all object clusters
+  vector<string> class_names_;     ///< Label dictionary; index 0 is the target
 
   // Algorithm parameters
-  bool use_observation_;     ///< Whether to use observation-based confidence reduction
   bool is_vis_cloud_;        ///< Whether to publish visualization clouds
   int fusion_type_;          ///< Confidence fusion algorithm type (0=replace, 1=weighted, 2=max)
   int min_observation_num_;  ///< Minimum observations required for confidence
@@ -428,9 +446,6 @@ inline void ObjectMap2D::publishObjectClouds()
       combined_colored_cloud->points.push_back(colored_point);
     }
   }
-
-  if (combined_colored_cloud->points.empty())
-    return;  // No objects to visualize
 
   // Configure point cloud metadata
   combined_colored_cloud->width = combined_colored_cloud->points.size();

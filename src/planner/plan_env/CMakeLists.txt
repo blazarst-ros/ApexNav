@@ -14,6 +14,7 @@ find_package(catkin REQUIRED COMPONENTS
   rospy
   std_msgs
   sensor_msgs
+  geometry_msgs
   visualization_msgs
   cv_bridge
   message_filters
@@ -24,20 +25,27 @@ find_package(Eigen3 REQUIRED)
 find_package(PCL 1.7 REQUIRED)
 
 add_message_files(
+  # Keep this explicit list: multi-agent planner messages must be generated
+  # before MapROS and the Python evaluator are compiled/imported.
   FILES
   MultipleMasksWithConfidence.msg
+  Stage1Detection.msg
+  ObjectLabelStatus.msg
+  ObjectClusterStatus.msg
+  ObjectClusterStatusArray.msg
 )
 
 generate_messages(
   DEPENDENCIES
   std_msgs
   sensor_msgs
+  geometry_msgs
 )
 
 catkin_package(
   INCLUDE_DIRS include
   LIBRARIES plan_env
-  CATKIN_DEPENDS roscpp std_msgs message_runtime sensor_msgs
+  CATKIN_DEPENDS roscpp std_msgs message_runtime sensor_msgs geometry_msgs visualization_msgs cv_bridge message_filters
   #  DEPENDS system_lib
 )
 
@@ -66,4 +74,5 @@ add_dependencies(plan_env ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_
 target_link_libraries(plan_env
   ${catkin_LIBRARIES}
   ${PCL_LIBRARIES}
+  ${OpenCV_LIBRARIES}
 )
