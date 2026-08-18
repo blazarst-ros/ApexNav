@@ -12,13 +12,10 @@
   <arg name="sensor_pose_topic" value="/habitat/agent_0/sensor_pose"/>
   <arg name="depth_topic" value="/habitat/agent_0/camera_depth"/>
 
-  <!--
-    The multi-agent planner reads the same evaluation settings as the Python
-    runner.  Override this absolute/relative file argument for HM3D-v1 or
-    MP3D; the default is the Lite YOLOE + offline-CLIP configuration.
-  -->
+  <!-- The default preserves the original Lite single-agent workflow.  Pass
+       evaluation_config:=..._multiagent_lite.yaml to run two agents. -->
   <arg name="evaluation_config"
-       default="$(find exploration_manager)/../../../config/habitat_eval_hm3dv2_multiagent_lite.yaml"/>
+       default="$(find exploration_manager)/../../../config/habitat_eval_hm3dv2.yaml"/>
   <group unless="$(arg is_real_world)">
     <rosparam file="$(arg evaluation_config)" command="load" />
   </group>

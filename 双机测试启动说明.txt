@@ -81,13 +81,16 @@ source devel/setup.bash
 roslaunch exploration_manager exploration.launch
 ```
 
-默认加载 HM3D-v2 多机 Lite 配置。若改跑 HM3D-v1 或 MP3D，在命令末尾传入：
+默认 launch 保持原 Lite 的单机配置；双机评测必须加载同一个数据集对应的双机配置：
 
 ```bash
-evaluation_config:=/home/uuufo/ApexNav-lite/config/habitat_eval_hm3dv1_multiagent_lite.yaml
+roslaunch exploration_manager exploration.launch \
+  evaluation_config:=/home/uuufo/ApexNav-lite/config/habitat_eval_hm3dv2_multiagent_lite.yaml
 ```
 
-或将文件名改为 `habitat_eval_mp3d_multiagent_lite.yaml`。
+若改跑 HM3D-v1 或 MP3D，将最后的文件名替换为
+`habitat_eval_hm3dv1_multiagent_lite.yaml` 或
+`habitat_eval_mp3d_multiagent_lite.yaml`。
 
 终端 6：双智能体 Habitat 评测
 -------------------------------

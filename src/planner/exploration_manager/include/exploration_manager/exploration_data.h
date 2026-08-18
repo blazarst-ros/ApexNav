@@ -94,9 +94,9 @@ struct AgentFSMData {
 };
 
 struct FSMData {
-  FSMData()
+  explicit FSMData(int num_agents = NUM_AGENTS)
   {
-    agent_.assign(NUM_AGENTS, AgentFSMData());
+    agent_.assign(num_agents, AgentFSMData());
     trigger_ = false;
     have_confidence_ = false;
     static_state_ = true;
@@ -156,7 +156,7 @@ struct ExplorationData {
     Eigen::Vector2d target_pos;
   };
 
-  ExplorationData()
+  explicit ExplorationData(int num_agents = NUM_AGENTS)
   {
     frontiers_.clear();
     frontier_averages_.clear();
@@ -168,7 +168,7 @@ struct ExplorationData {
     next_pos_ = Eigen::Vector2d(0, 0);
     next_best_path_.clear();
     tsp_tour_.clear();
-    strategy_infos_.assign(NUM_AGENTS, NavigationStrategyInfo());
+    strategy_infos_.assign(num_agents, NavigationStrategyInfo());
   }
   std::vector<std::vector<Eigen::Vector2d>> frontiers_, dormant_frontiers_;
   std::vector<Eigen::Vector2d> frontier_averages_, dormant_frontier_averages_;

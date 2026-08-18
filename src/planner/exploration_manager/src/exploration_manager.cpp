@@ -221,7 +221,8 @@ void ExplorationManager::chooseExplorationPolicy(Vector2d cur_pos, vector<Vector
   frontiers.erase(
       std::remove_if(frontiers.begin(), frontiers.end(),
           [&](const Vector2d& f) {
-              for (int other_agent = 0; other_agent < NUM_AGENTS; ++other_agent) {
+              for (int other_agent = 0;
+                   other_agent < static_cast<int>(ed_->strategy_infos_.size()); ++other_agent) {
                 if (other_agent == agent_idx)
                   continue;
                 if (frontier_map2d_->isFrontierClaimedByPosition(f, other_agent))

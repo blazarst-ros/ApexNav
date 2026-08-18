@@ -91,6 +91,9 @@ private:
 
   shared_ptr<FSMParam> fp_;
   shared_ptr<FSMData> fd_;
+  // Storage remains sized for the two-agent build, while this value selects
+  // whether the legacy Lite single-agent or the new dual-agent pipeline runs.
+  int num_agents_ = 2;
   ROS_STATE state_[NUM_AGENTS];
   std::mutex data_mutex_;  // Protect fd_ and state_ array
 

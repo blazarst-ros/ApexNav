@@ -1,10 +1,10 @@
 Lite ApexNav：单智能体 HM3D-v2 单次测试启动流程
 ====================================================
 
-迁移说明（2026-08-18）：当前 `lite-multiagent` 分支已将 ROS 规划器替换为
-双智能体实现，因此需要完整仿真时请使用同目录的 `双机测试启动说明.txt`，并在
-Habitat 命令中加入 `--multiagent`。本文件保留的是 `lite-apexnav` 分支的单机
-流程；若要继续运行原来的单机规划器，请切换回该分支。
+迁移说明（2026-08-18）：`lite-multiagent` 规划器支持一或两台 agent。此文件的
+默认 launch 和 Habitat 命令仍是单机；需要双机时请使用同目录的
+`双机测试启动说明.txt`，并在 ROS launch 中加载 `*_multiagent_lite.yaml`、在
+Habitat 命令中加入 `--multiagent`。
 
 说明
 ----

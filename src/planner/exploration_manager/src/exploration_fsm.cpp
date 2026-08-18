@@ -13,18 +13,20 @@ namespace apexnav_planner {
 void ExplorationFSM::init(ros::NodeHandle& nh)
 {
   nh_ = nh;
+  nh_.param("num_agents", num_agents_, 2);
+  num_agents_ = std::max(1, std::min(num_agents_, NUM_AGENTS));
   fp_.reset(new FSMParam);
-  fd_.reset(new FSMData);
+  fd_.reset(new FSMData(num_agents_));
 
   /* Initialize main modules */
   expl_manager_.reset(new ExplorationManager);
   expl_manager_->initialize(nh);
-  visualization_.resize(NUM_AGENTS);
-  for (int i = 0; i < NUM_AGENTS; ++i)
+  visualization_.resize(num_agents_);
+  for (int i = 0; i < num_agents_; ++i)
     visualization_[i].reset(new PlanningVisualization(nh, i));
   fp_->vis_scale_ = expl_manager_->sdf_map_->getResolution() * FSMConstants::VIS_SCALE_FACTOR;
 
-  for (int i = 0; i < NUM_AGENTS; ++i)
+  for (int i = 0; i < num_agents_; ++i)
     state_[i] = ROS_STATE::INIT;
 
   /* ROS Timer */
@@ -35,7 +37,7 @@ void ExplorationFSM::init(ros::NodeHandle& nh)
 
   /* ROS Subscriber */
   trigger_sub_ = nh.subscribe("/move_base_simple/goal", 10, &ExplorationFSM::triggerCallback, this);
-  for (int i = 0; i < NUM_AGENTS; ++i) {
+  for (int i = 0; i < num_agents_; ++i) {
     std::string odom_topic = "/habitat/agent_" + std::to_string(i) + "/odom";
     odom_sub_[i] = nh.subscribe<nav_msgs::Odometry>(
         odom_topic, 30,
@@ -55,7 +57,7 @@ void ExplorationFSM::init(ros::NodeHandle& nh)
   final_result_all_pub_ =
       nh.advertise<std_msgs::Int32MultiArray>("/ros/final_result_all", 10);
   reach_claim_pub_ = nh.advertise<std_msgs::Int32MultiArray>("/ros/reach_claim", 10);
-  for (int i = 0; i < NUM_AGENTS; ++i) {
+  for (int i = 0; i < num_agents_; ++i) {
     action_pub_[i] = nh.advertise<std_msgs::Int32>(
         "/habitat/plan_action_agent_" + std::to_string(i), 10);
     expl_result_agent_pub_[i] = nh.advertise<std_msgs::Int32>(
@@ -73,7 +75,7 @@ void ExplorationFSM::FSMCallback(const ros::TimerEvent& e)
   exec_timer_.stop();
   std::lock_guard<std::mutex> lock(data_mutex_);
 
-  for (int agent_idx = 0; agent_idx < NUM_AGENTS; ++agent_idx) {
+  for (int agent_idx = 0; agent_idx < num_agents_; ++agent_idx) {
     auto& ad = fd_->agent_[agent_idx];
 
     switch (state_[agent_idx]) {
@@ -157,7 +159,7 @@ void ExplorationFSM::FSMCallback(const ros::TimerEvent& e)
             reach_claim_pub_.publish(reach_claim_msg);
             ROS_WARN("Agent %d reached an object candidate; broadcasting STOP to all agents.",
                 agent_idx);
-            for (int stop_idx = 0; stop_idx < NUM_AGENTS; ++stop_idx) {
+            for (int stop_idx = 0; stop_idx < num_agents_; ++stop_idx) {
               std_msgs::Int32 action_msg;
               action_msg.data = ACTION::STOP;
               action_pub_[stop_idx].publish(action_msg);
@@ -196,9 +198,9 @@ void ExplorationFSM::publishPlannerState()
 {
   std_msgs::Int32MultiArray state_all_msg;
   std_msgs::Int32MultiArray final_result_all_msg;
-  state_all_msg.data.resize(NUM_AGENTS);
-  final_result_all_msg.data.resize(NUM_AGENTS);
-  for (int agent_idx = 0; agent_idx < NUM_AGENTS; ++agent_idx) {
+  state_all_msg.data.resize(num_agents_);
+  final_result_all_msg.data.resize(num_agents_);
+  for (int agent_idx = 0; agent_idx < num_agents_; ++agent_idx) {
     state_all_msg.data[agent_idx] = state_[agent_idx];
     final_result_all_msg.data[agent_idx] = fd_->agent_[agent_idx].final_result_;
   }
@@ -213,8 +215,8 @@ void ExplorationFSM::publishPlannerState()
 void ExplorationFSM::publishExplorationResults()
 {
   std_msgs::Int32MultiArray expl_result_all_msg;
-  expl_result_all_msg.data.resize(NUM_AGENTS);
-  for (int agent_idx = 0; agent_idx < NUM_AGENTS; ++agent_idx) {
+  expl_result_all_msg.data.resize(num_agents_);
+  for (int agent_idx = 0; agent_idx < num_agents_; ++agent_idx) {
     expl_result_all_msg.data[agent_idx] = fd_->agent_[agent_idx].expl_result_;
     std_msgs::Int32 expl_result_agent_msg;
     expl_result_agent_msg.data = fd_->agent_[agent_idx].expl_result_;
@@ -227,7 +229,7 @@ void ExplorationFSM::publishExplorationResults()
 
 void ExplorationFSM::publishExplorationStrategy(int agent_idx)
 {
-  if (agent_idx < 0 || agent_idx >= NUM_AGENTS)
+  if (agent_idx < 0 || agent_idx >= num_agents_)
     return;
   const auto& infos = expl_manager_->ed_->strategy_infos_;
   if (agent_idx >= static_cast<int>(infos.size()))
@@ -631,7 +633,7 @@ void ExplorationFSM::visualize()
 
   // Publish shared map markers (frontiers, objects, TSP tour) to EVERY agent's topic
   // so each agent's RViz panel receives them under its own topic namespace
-  for (int agent_idx = 0; agent_idx < NUM_AGENTS; ++agent_idx) {
+  for (int agent_idx = 0; agent_idx < num_agents_; ++agent_idx) {
     auto& agent_vis = visualization_[agent_idx];
 
     // Draw frontier
@@ -672,7 +674,7 @@ void ExplorationFSM::visualize()
   last_obj_num = object_count;
 
   // Draw per-agent trajectories and paths
-  for (int agent_idx = 0; agent_idx < NUM_AGENTS; ++agent_idx) {
+  for (int agent_idx = 0; agent_idx < num_agents_; ++agent_idx) {
     auto& agent_vis = visualization_[agent_idx];
     auto& ad = fd_->agent_[agent_idx];
 
@@ -694,7 +696,7 @@ void ExplorationFSM::visualize()
 
 void ExplorationFSM::clearVisMarker()
 {
-  for (int agent_idx = 0; agent_idx < NUM_AGENTS; ++agent_idx) {
+  for (int agent_idx = 0; agent_idx < num_agents_; ++agent_idx) {
     auto& agent_vis = visualization_[agent_idx];
     for (int i = 0; i < 500; ++i) {
       agent_vis->drawCubes({}, fp_->vis_scale_, Vector4d(0, 0, 0, 1), "frontier", i, 4);
@@ -714,7 +716,7 @@ bool ExplorationFSM::updateFrontierAndObject()
 
   change_flag = frt_map->isAnyFrontierChanged();
   frt_map->searchFrontiers();
-  for (int i = 0; i < NUM_AGENTS; ++i) {
+  for (int i = 0; i < num_agents_; ++i) {
     if (!fd_->agent_[i].have_odom_)
       continue;
     const Eigen::Vector2d sensor_pos(
@@ -735,11 +737,11 @@ bool ExplorationFSM::updateFrontierAndObject()
 void ExplorationFSM::resetEpisode()
 {
   // Reset FSM state for all agents
-  for (int i = 0; i < NUM_AGENTS; ++i)
+  for (int i = 0; i < num_agents_; ++i)
     state_[i] = ROS_STATE::INIT;
 
   // Reset per-agent FSM data
-  fd_.reset(new FSMData);
+  fd_.reset(new FSMData(num_agents_));
 
   // Reset exploration manager maps (SDF, frontier, object, value) without
   // destroying the ROS interface (MapROS subscribers/publishers stay alive).
@@ -772,7 +774,7 @@ void ExplorationFSM::habitatStateCallback(const std_msgs::Int32ConstPtr& msg)
   std::lock_guard<std::mutex> lock(data_mutex_);
   if (msg->data == HABITAT_STATE::ACTION_FINISH) {
     // Trigger all agents that are waiting for action finish
-    for (int agent_idx = 0; agent_idx < NUM_AGENTS; ++agent_idx) {
+    for (int agent_idx = 0; agent_idx < num_agents_; ++agent_idx) {
       if (state_[agent_idx] == ROS_STATE::WAIT_ACTION_FINISH) {
         transitState(agent_idx, ROS_STATE::PLAN_ACTION, "Habitat Finish Action");
       }
@@ -789,7 +791,7 @@ void ExplorationFSM::frontierCallback(const ros::TimerEvent& e)
   bool all_wait = true;
   {
     std::lock_guard<std::mutex> lock(data_mutex_);
-    for (int i = 0; i < NUM_AGENTS; ++i) {
+    for (int i = 0; i < num_agents_; ++i) {
       if (state_[i] != ROS_STATE::WAIT_TRIGGER && state_[i] != ROS_STATE::FINISH &&
           state_[i] != ROS_STATE::FINISH_FAILURE) {
         all_wait = false;
@@ -813,7 +815,7 @@ void ExplorationFSM::triggerCallback(const geometry_msgs::PoseStampedConstPtr& m
   std::lock_guard<std::mutex> lock(data_mutex_);
   // Trigger all agents that are in WAIT_TRIGGER state
   bool any_triggered = false;
-  for (int i = 0; i < NUM_AGENTS; ++i) {
+  for (int i = 0; i < num_agents_; ++i) {
     if (state_[i] == ROS_STATE::WAIT_TRIGGER) {
       fd_->agent_[i].trigger_ = true;
       transitState(i, ROS_STATE::PLAN_ACTION, "triggerCallback");

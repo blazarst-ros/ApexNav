@@ -39,6 +39,8 @@ habitat:
             max_depth: 5.0
             normalize_depth: true
 
+num_agents: 1
+
 detector:
   yoloe:
     weights: data/yoloe-11l-seg.pt

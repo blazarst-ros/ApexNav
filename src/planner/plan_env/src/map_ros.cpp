@@ -11,6 +11,7 @@
 
 #include <plan_env/map_ros.h>
 
+#include <algorithm>
 #include <iomanip>
 #include <sstream>
 
@@ -23,6 +24,8 @@ void MapROS::setMap(SDFMap2D* map)
 
 void MapROS::init()
 {
+  node_.param("num_agents", num_agents_, 2);
+  num_agents_ = std::max(1, std::min(num_agents_, MAX_AGENTS_));
   // Load camera intrinsic parameters from ROS parameter server
   node_.param("map_ros/fx", fx_, -1.0);
   node_.param("map_ros/fy", fy_, -1.0);
@@ -60,8 +63,8 @@ void MapROS::init()
   }
 
   // Initialize per-agent state
-  agents_.resize(NUM_AGENTS_);
-  for (int id = 0; id < NUM_AGENTS_; ++id) {
+  agents_.resize(num_agents_);
+  for (int id = 0; id < num_agents_; ++id) {
     agents_[id].camera_pos_.setZero();
     agents_[id].camera_q_.setIdentity();
     agents_[id].depth_cloud_.reset(new PointCloud3D());
@@ -119,7 +122,7 @@ void MapROS::init()
   node_.param("sensor_pose_topic", sensor_pose_topic, sensor_pose_topic);
   node_.param("depth_topic", depth_topic, depth_topic);
 
-  for (int id = 0; id < NUM_AGENTS_; ++id) {
+  for (int id = 0; id < num_agents_; ++id) {
     camera_pitch_pub_[id] = node_.advertise<std_msgs::Float64>(
         "/map_ros/agent_" + std::to_string(id) + "/camera_pitch", 10);
 
@@ -211,7 +214,7 @@ void MapROS::visCallback(const ros::TimerEvent& /*event*/)
 
 void MapROS::itmScoreCallback(int agent_id, const std_msgs::Float64ConstPtr& msg)
 {
-  if (agent_id < 0 || agent_id >= NUM_AGENTS_) return;
+  if (agent_id < 0 || agent_id >= num_agents_) return;
   std::lock_guard<std::mutex> lock(map_mutex_);
   agents_[agent_id].itm_score_ = msg->data;
 }
@@ -260,7 +263,7 @@ void MapROS::resetEpisodeState()
 
 void MapROS::detectedObjectCloudCallback(int agent_id, const plan_env::MultipleMasksWithConfidenceConstPtr& msg)
 {
-  if (agent_id < 0 || agent_id >= NUM_AGENTS_) return;
+  if (agent_id < 0 || agent_id >= num_agents_) return;
   // Agent state and all shared maps must remain stable for the entire
   // callback; episode reset uses this same mutex as an exclusive barrier.
   std::lock_guard<std::mutex> lock(map_mutex_);
@@ -373,7 +376,7 @@ void MapROS::detectedObjectCloudCallback(int agent_id, const plan_env::MultipleM
 
   // Merge all agents' over-depth clouds into the shared visualization cloud.
   map_->object_map2d_->over_depth_object_cloud_.reset(new PointCloud3D());
-  for (int i = 0; i < NUM_AGENTS_; ++i)
+  for (int i = 0; i < num_agents_; ++i)
     *map_->object_map2d_->over_depth_object_cloud_ += *agents_[i].over_depth_object_cloud_;
 
   publishPointCloud(filtered_object_cloud_pub_, filtered_all_object_cloud);
@@ -414,7 +417,7 @@ void MapROS::updateESDFCallback(const ros::TimerEvent& /*event*/)
 void MapROS::depthPoseCallback(
     int agent_id, const sensor_msgs::ImageConstPtr& img, const nav_msgs::OdometryConstPtr& pose)
 {
-  if (agent_id < 0 || agent_id >= NUM_AGENTS_) return;
+  if (agent_id < 0 || agent_id >= num_agents_) return;
   std::lock_guard<std::mutex> lock(map_mutex_);
   AgentState& agent = agents_[agent_id];
 
