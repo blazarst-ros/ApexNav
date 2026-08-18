@@ -1,0 +1,154 @@
+Lite ApexNav：单智能体 HM3D-v2 单次测试启动流程
+====================================================
+
+说明
+----
+- 项目目录：/home/uuufo/ApexNav-lite
+- Conda 环境：apexnav-lite
+- 数据集路径：/home/uuufo/ApexNav-lite/data（软链接复用原 ApexNav 的数据集）。
+- Habitat 脚本已配置为从本项目的 data 目录读取数据；不使用 /home/uuufo/data。
+- 本项目默认配置只有 main_agent，即单智能体。
+- 仅使用 CLIPITM 与 YOLOE；不需要启动 GroundingDINO、MobileSAM、BLIP 或 Ollama。
+- 按终端 1 到终端 6 的顺序启动。长期运行的终端请保持开启。
+- 下方评测命令将成功阈值设为 1.2 m；Lite 配置文件原始默认值为 0.2 m。
+
+
+终端 1：ROS Master
+-------------------
+
+source /opt/ros/noetic/setup.bash
+roscore
+
+保持本终端运行。
+
+
+终端 2：CLIPITM 图文匹配模型服务
+----------------------------------
+
+cd /home/uuufo/ApexNav-lite
+source /opt/ros/noetic/setup.bash
+conda activate apexnav-lite
+
+export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+export CLIP_DOWNLOAD_ROOT=/home/uuufo/ApexNav-lite/RuntimeData/model-cache/clip
+
+python -m vlm.itm.clipitm --port 12182
+
+继续前确认输出中包含：
+Hosting on port 12182...
+
+
+终端 3：YOLOE 检测模型服务
+---------------------------
+
+cd /home/uuufo/ApexNav-lite
+source /opt/ros/noetic/setup.bash
+conda activate apexnav-lite
+
+export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+export YOLOE_WEIGHTS=/home/uuufo/ApexNav-lite/RuntimeData/model-cache/yoloe-11l-seg.pt
+
+python -m vlm.detector.yoloe \
+  --port 12184 \
+  --weights "$YOLOE_WEIGHTS"
+
+首次启动时，YOLOE 可能自动下载 mobileclip_blt.ts。这是开放词汇类别
+编码所需的 MobileCLIP 文本编码器，请等待下载完成。
+
+继续前确认输出中包含：
+YOLOE warmup complete!
+Hosting on port 12184...
+
+
+终端 4：RViz 可视化
+--------------------
+
+cd /home/uuufo/ApexNav-lite
+source /opt/ros/noetic/setup.bash
+source devel/setup.bash
+
+roslaunch exploration_manager rviz.launch
+
+开始 Habitat 后，RViz 将显示机器人位姿/轨迹、点云、地图、前沿点和规划路径。
+
+
+终端 5：ApexNav 规划器与 TSP 求解器
+-------------------------------------
+
+cd /home/uuufo/ApexNav-lite
+source /opt/ros/noetic/setup.bash
+source devel/setup.bash
+
+roslaunch exploration_manager exploration.launch
+
+继续前确认输出中包含：
+TSP server is ready.
+Starting in SIMULATION mode
+
+
+终端 6：Habitat HM3D-v2 单次评测
+---------------------------------
+
+cd /home/uuufo/ApexNav-lite
+source /opt/ros/noetic/setup.bash
+conda activate apexnav-lite
+source devel/setup.bash
+
+export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+export LD_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu:/opt/ros/noetic/lib:$LD_LIBRARY_PATH
+export LD_PRELOAD=/usr/lib/x86_64-linux-gnu/libffi.so.7
+export PYTHONUNBUFFERED=1
+
+python habitat_evaluation.py \
+  --dataset hm3dv2 \
+  test_epi_num=0 \
+  habitat.task.measurements.success.success_distance=1.2
+
+test_epi_num=0 表示测试第一条 episode。将 0 改为其他数字可测试对应序号。
+
+连续测试前 100 条 episode
+--------------------------
+
+在终端 1 到终端 5 已运行的情况下，在一个新终端完整执行下面命令。它在
+同一个 Habitat 进程内连续运行第 0 到第 99 条 episode，并汇总 100 条指标：
+
+cd /home/uuufo/ApexNav-lite
+source /opt/ros/noetic/setup.bash
+conda activate apexnav-lite
+source devel/setup.bash
+
+export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+export LD_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu:/opt/ros/noetic/lib:$LD_LIBRARY_PATH
+export LD_PRELOAD=/usr/lib/x86_64-linux-gnu/libffi.so.7
+export PYTHONUNBUFFERED=1
+
+python habitat_evaluation.py \
+  --dataset hm3dv2 \
+  test_episode_count=100 \
+  video_output_path=videos/test_hm3dv2_first100_val \
+  habitat.task.measurements.success.success_distance=1.2
+
+test_episode_count 不能与 test_epi_num 同时使用。独立输出目录会避免混入
+此前单次测试的记录。
+
+
+结果与常用检查
+--------------
+
+- 终端 6 结束后会输出 Success、SPL、Soft SPL、Distance to Goal 等指标。
+- 记录和视频输出位置：
+  /home/uuufo/ApexNav-lite/videos/test_hm3dv2_val/
+- 若需确认 ROS 节点是否都正常运行，请在新终端执行：
+
+  source /opt/ros/noetic/setup.bash
+  source /home/uuufo/ApexNav-lite/devel/setup.bash
+  rosnode list
+
+  正常情况下应包括 /exploration_node、/tsp_solver 和 /habitat_eval_node_...。
+- 不要执行 $LD_LIBRARY_PATH；它是环境变量而不是命令。
+
+
+停止顺序
+--------
+
+测试完成后，在终端 6、5、4、3、2 中依次按 Ctrl-C，最后在终端 1 按 Ctrl-C 停止 roscore。

@@ -57,3 +57,4 @@ continue_file_name: "continue.txt"
 need_video: false
 video_output_path: "videos/test_hm3dv2_{split}"
 test_epi_num: -1
+test_episode_count: -1 # positive value: run this many consecutive episodes from episode 0

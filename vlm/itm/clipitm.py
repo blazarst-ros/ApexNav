@@ -59,8 +59,22 @@ class CLIPITM:
 
         inference_start = time.perf_counter()
         with torch.inference_mode():
-            image_features = self.model.encode_image(image_input)
-            text_features = self.model.encode_text(text_input)
+            # PyTorch 2.5 may select cuDNN SDPA for CLIP's multi-head attention.
+            # On some CUDA 12.1/cuDNN combinations that backend has no valid
+            # execution plan for this graph.  Restrict CUDA inference to the
+            # stable math implementation for this small, single-image workload.
+            if self.device.type == "cuda":
+                with torch.backends.cuda.sdp_kernel(
+                    enable_flash=False,
+                    enable_math=True,
+                    enable_mem_efficient=False,
+                    enable_cudnn=False,
+                ):
+                    image_features = self.model.encode_image(image_input)
+                    text_features = self.model.encode_text(text_input)
+            else:
+                image_features = self.model.encode_image(image_input)
+                text_features = self.model.encode_text(text_input)
             if self.device.type == "cuda":
                 torch.cuda.synchronize(self.device)
         model_inference_ms = (time.perf_counter() - inference_start) * 1000.0

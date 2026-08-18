@@ -62,6 +62,7 @@ add_library(plan_env
   src/object_map2d.cpp
   src/value_map2d.cpp
 )
+add_dependencies(plan_env ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS})
 target_link_libraries(plan_env
   ${catkin_LIBRARIES}
   ${PCL_LIBRARIES}

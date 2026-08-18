@@ -72,7 +72,7 @@ from habitat2ros import habitat_publisher
 from llm.answer_reader.answer_reader import read_answer
 from params import HABITAT_STATE, ROS_STATE, ACTION, RESULT_TYPES
 from vlm.label_utils import normalize_objectnav_label
-from basic_utils.path_utils import WORKSPACE_ROOT
+from basic_utils.path_utils import PROJECT_ROOT
 from vlm.utils.get_itm_message import get_itm_message_cosine
 from vlm.utils.get_object_utils import get_object
 
@@ -175,28 +175,28 @@ def _parse_dataset_arg():
 
 
 def _absolutize_habitat_paths(cfg: DictConfig) -> None:
-    def _to_workspace_path(path_value):
+    def _to_project_path(path_value):
         if not isinstance(path_value, str) or path_value == "":
             return path_value
         path = Path(path_value).expanduser()
         if path.is_absolute():
             return str(path)
-        return str((WORKSPACE_ROOT / path).resolve(strict=False))
+        return str((PROJECT_ROOT / path).resolve(strict=False))
 
     with habitat.config.read_write(cfg):
         if "data_path" in cfg.habitat.dataset:
-            cfg.habitat.dataset.data_path = _to_workspace_path(
+            cfg.habitat.dataset.data_path = _to_project_path(
                 cfg.habitat.dataset.data_path
             )
         for key in ("scenes_dir", "scene_dataset"):
             if key in cfg.habitat.dataset:
-                cfg.habitat.dataset[key] = _to_workspace_path(cfg.habitat.dataset[key])
+                cfg.habitat.dataset[key] = _to_project_path(cfg.habitat.dataset[key])
             if key in cfg.habitat.simulator:
-                cfg.habitat.simulator[key] = _to_workspace_path(
+                cfg.habitat.simulator[key] = _to_project_path(
                     cfg.habitat.simulator[key]
                 )
         if "scene" in cfg.habitat.simulator:
-            cfg.habitat.simulator.scene = _to_workspace_path(
+            cfg.habitat.simulator.scene = _to_project_path(
                 cfg.habitat.simulator.scene
             )
 
@@ -229,9 +229,19 @@ def main(cfg: DictConfig) -> None:
     llm_answer_path = llm_cfg.llm_answer_path
     llm_response_path = llm_cfg.llm_response_path
 
-    # Single test parameters
-    env_num_once = cfg.test_epi_num  # Which episode to test for single run
-    flag_once = env_num_once != -1  # Whether to run single test
+    # Test parameters.  ``test_epi_num`` runs one selected episode, whereas
+    # ``test_episode_count`` runs a contiguous batch beginning at episode 0.
+    env_num_once = cfg.test_epi_num
+    test_episode_count = int(cfg.get("test_episode_count", -1))
+    flag_once = env_num_once != -1
+    flag_batch = test_episode_count != -1
+    if flag_once and flag_batch:
+        raise ValueError(
+            "Use either test_epi_num (one episode) or test_episode_count "
+            "(a batch starting at episode 0), not both."
+        )
+    if test_episode_count == 0 or test_episode_count < -1:
+        raise ValueError("test_episode_count must be -1 or a positive integer.")
 
     # Create directories if they don't exist
     os.makedirs(os.path.dirname(llm_answer_path), exist_ok=True)
@@ -277,14 +287,21 @@ def main(cfg: DictConfig) -> None:
         clip_server_total_ms,
         clip_model_total_ms,
         yoloe_total_ms,
-    ) = read_record(continue_path, flag_once)
+    ) = read_record(continue_path, flag_once or flag_batch)
 
-    if num_total >= number_of_episodes:
+    if not flag_once and not flag_batch and num_total >= number_of_episodes:
         raise ValueError("Already finished all episodes.")
 
-    pbar = tqdm.tqdm(total=env.number_of_episodes)
+    episode_run_count = (
+        1
+        if flag_once
+        else min(test_episode_count, number_of_episodes)
+        if flag_batch
+        else number_of_episodes - num_total
+    )
+    pbar = tqdm.tqdm(total=episode_run_count)
 
-    env_count = num_total if not flag_once else env_num_once
+    env_count = env_num_once if flag_once else (0 if flag_batch else num_total)
     while env_count:
         pbar.update()
         env.current_episode = next(env.episode_iterator)
@@ -311,7 +328,7 @@ def main(cfg: DictConfig) -> None:
     progress_pub = rospy.Publisher("/habitat/progress", Int32MultiArray, queue_size=10)
     record_pub = rospy.Publisher("/habitat/record", Float32MultiArray, queue_size=10)
 
-    for epi in range(number_of_episodes - num_total):
+    for epi in range(episode_run_count):
         # Publish progress information
         publish_int32_array(progress_pub, [num_total, number_of_episodes])
 

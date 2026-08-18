@@ -60,7 +60,7 @@ from basic_utils.object_point_cloud_utils.object_point_cloud import (
     get_object_point_cloud,
 )
 from vlm.label_utils import normalize_objectnav_label
-from basic_utils.path_utils import WORKSPACE_ROOT
+from basic_utils.path_utils import PROJECT_ROOT
 
 
 FORWARD_KEY = "w"
@@ -124,28 +124,28 @@ def _parse_dataset_arg():
 
 
 def _absolutize_habitat_paths(cfg: DictConfig) -> None:
-    def _to_workspace_path(path_value):
+    def _to_project_path(path_value):
         if not isinstance(path_value, str) or path_value == "":
             return path_value
         path = Path(path_value).expanduser()
         if path.is_absolute():
             return str(path)
-        return str((WORKSPACE_ROOT / path).resolve(strict=False))
+        return str((PROJECT_ROOT / path).resolve(strict=False))
 
     with habitat.config.read_write(cfg):
         if "data_path" in cfg.habitat.dataset:
-            cfg.habitat.dataset.data_path = _to_workspace_path(
+            cfg.habitat.dataset.data_path = _to_project_path(
                 cfg.habitat.dataset.data_path
             )
         for key in ("scenes_dir", "scene_dataset"):
             if key in cfg.habitat.dataset:
-                cfg.habitat.dataset[key] = _to_workspace_path(cfg.habitat.dataset[key])
+                cfg.habitat.dataset[key] = _to_project_path(cfg.habitat.dataset[key])
             if key in cfg.habitat.simulator:
-                cfg.habitat.simulator[key] = _to_workspace_path(
+                cfg.habitat.simulator[key] = _to_project_path(
                     cfg.habitat.simulator[key]
                 )
         if "scene" in cfg.habitat.simulator:
-            cfg.habitat.simulator.scene = _to_workspace_path(
+            cfg.habitat.simulator.scene = _to_project_path(
                 cfg.habitat.simulator.scene
             )
 
