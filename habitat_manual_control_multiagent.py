@@ -120,12 +120,18 @@ def main(cfg: DictConfig) -> None:
     num_agents = cfg.get("num_agents", 2)
     agent_names = [f"agent_{i}" for i in range(num_agents)]
 
+    configured_data_path = str(cfg.habitat.dataset.data_path)
+    is_mp3d_dataset = "/objectnav/mp3d/" in f"/{configured_data_path.lstrip('/')}"
     cfg = patch_config(cfg)
     _absolutize_habitat_paths(cfg)
     category_to_coco = {}
     id_to_name = {}
-    if "mp3d" in str(cfg.habitat.dataset.data_path):
-        with gzip.open(cfg.habitat.dataset.data_path.replace("{split}", "val"), "rt", encoding="utf-8") as f:
+    if is_mp3d_dataset:
+        with gzip.open(
+            str(cfg.habitat.dataset.data_path).replace("{split}", cfg.habitat.dataset.split),
+            "rt",
+            encoding="utf-8",
+        ) as f:
             val_data = json.load(f)
         category_to_coco = val_data.get("category_to_mp3d_category_id", {})
         id_to_name = {

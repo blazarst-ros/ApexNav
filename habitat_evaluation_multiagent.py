@@ -556,13 +556,22 @@ def main(cfg: DictConfig) -> None:
     reach_claim_agent_idx = None
     result_list = [0] * len(RESULT_TYPES)
 
+    # Decide the dataset family before resolving paths: Lite's shared data
+    # directory may use symlinks, whose resolved target name is not a reliable
+    # indication of the selected ObjectNav dataset.
+    configured_data_path = str(cfg.habitat.dataset.data_path)
+    is_mp3d_dataset = "/objectnav/mp3d/" in f"/{configured_data_path.lstrip('/')}"
+
     cfg = patch_config(cfg)
     _absolutize_habitat_paths(cfg)
 
     # MP3D stores category ids in its validation dataset. HM3D already stores
     # usable text labels, so avoid requiring MP3D assets for HM3D runs.
-    if "mp3d" in str(cfg.habitat.dataset.data_path):
-        with gzip.open(cfg.habitat.dataset.data_path, "rt", encoding="utf-8") as f:
+    if is_mp3d_dataset:
+        mp3d_data_path = str(cfg.habitat.dataset.data_path).replace(
+            "{split}", cfg.habitat.dataset.split
+        )
+        with gzip.open(mp3d_data_path, "rt", encoding="utf-8") as f:
             val_data = json.load(f)
         category_to_coco = val_data.get("category_to_mp3d_category_id", {})
         id_to_name = {
