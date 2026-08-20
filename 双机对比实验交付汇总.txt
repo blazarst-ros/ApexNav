@@ -1,0 +1,80 @@
+双机禁用 agent vs 单智能体基座 对比实验 —— 交付汇总
+========================================================
+（最后更新：2026-08-20）
+
+一、任务背景与目标
+------------------
+lite-apexnav 双机版本（lite-multiagent 分支）与单机版本正确率差距极大
+（历史数据：单机 70.0% vs 双机 22.9%）。目标：拉取 lite-apexnav 单智能体
+基座，在双机版中禁用一个 agent 跑相同 episode，与基座对比，定位双机改造
+中导航/判断逻辑引入的问题。
+
+二、已完成的准备与修复（全部验证）
+----------------------------------
+1. 新建 /home/uuufo/ApexNav-lite-single：克隆 lite-apexnav 基座（原样代码，
+   仅加一行 add_dependencies 构建修复）；catkin_make 构建完成。
+2. /home/uuufo/data -> /home/uuufo/ApexNav/data 软链接（基座按原始设计把
+   数据解析到 WORKSPACE_ROOT/data）。
+3. 【修复】双机版话题不匹配（habitat_evaluation_multiagent.py 单 agent 分支
+   及 habitat_evaluation.py）：ITM/检测云话题改为带 agent_0 后缀，plan_action
+   订阅改为 /habitat/plan_action_agent_0。修复前 C++ 收不到语义数据。
+4. 【修复】C++ num_agents 读取（exploration_fsm.cpp）：private 命名空间改
+   全局命名空间，单 agent 配置（num_agents=1）才能生效；已重新 catkin_make。
+5. 【修复】基座脚本移植 test_episode_count 批量功能（+33/-8 行 + yaml 字段），
+   否则组A 命令会报 hydra override 错误。
+6. 三组评测命令全部预演验证通过（hydra compose）。
+
+三、实验设计（三组，各 20 条 hm3dv2 val episode 0-19，success_distance=1.2）
+---------------------------------------------------------------------------
+  组A 基座单机     /home/uuufo/ApexNav-lite-single/habitat_evaluation.py
+                  test_episode_count=20 video_output_path=videos/test_base_hm3dv2_first20
+  组B 双机版单agent /home/uuufo/ApexNav-lite/habitat_evaluation_multiagent.py
+                  （默认 yaml num_agents=1，不加载 *_multiagent_lite.yaml）
+                  test_episode_count=20 video_output_path=videos/test_single_hm3dv2_first20
+  组C 双机版双agent /home/uuufo/ApexNav-lite/habitat_evaluation.py --multiagent
+                  （加载 *_multiagent_lite.yaml，num_agents=2；max_episode_steps=250，
+                   与 A/B 的 1000 不同，对比时注意）
+                  test_episode_count=20 video_output_path=videos/test_multiagent_hm3dv2_first20
+  完整终端命令见：双机禁用agent对比实验说明.txt（三组串行执行）。
+
+四、静态逻辑差异分析结论（已定位的可疑问题）
+------------------------------------------
+详见：双机改造静态逻辑差异分析.txt。核心：
+
+  1) false positive 判定路径差异（最重要）：
+     组B/组C 的 C++（双机版 fsm）在"到达物体点云目标点 <0.20m"即发布
+     /ros/reach_claim；Python 据此把"声称到达但 geodesic 距离不足"判为
+     false positive 并覆盖 Habitat 原生 success。基座单机 C++ 无此机制。
+     C++ REACH 判定不看真实 goal 距离 → 误检物体直接触发 false positive。
+  2) 标签归一化缺失：habitat_evaluation_multiagent.py 不调用
+     normalize_objectnav_label（两个单机脚本都调用）→ sofa/tv_monitor/plant
+     类别的 YOLOE 提示词不同（组B/组C 用原始标签）。
+  3) 感知节奏：组B 单 agent 分支 STOP 后不再感知；组A 每步感知。
+  4) 历史数据量化：false positive 单机就有 23%（23/100），双机放大到
+     74%（26/35）——双 agent 放大机制：跨 agent 置信度累积、cooperative
+     终止、感知轮换。
+
+五、历史数据基线（对比参考）
+----------------------------
+  test_hm3dv2_first100_val（单机 100 条）: success 70.0%
+      失败: false positive 23, no frontier 3, infeasible 4
+  test_hm3dv2_multiagent_val（双机 35 条）: success 22.9%
+      失败: false positive 26, stepout feasible 1
+
+六、结果分析工具
+----------------
+  python compare_single_vs_multi.py \
+      --base   <组A continue.txt> \
+      --single <组B continue.txt> \
+      --multi  <组C continue.txt>   # 可选
+  输出：逐条对齐表 + 汇总指标 + 失败类型分布（已用历史数据验证）。
+
+七、待执行/待验证（依赖真实 GPU 环境）
+--------------------------------------
+  1. 在 GPU 终端按手册串行执行组 A、B、C（各 20 条）。
+  2. 用 compare_single_vs_multi.py 分析三组结果。
+  3. 验证静态判断：
+     - 组B vs 组A：双机代码是否破坏单机逻辑（预期接近；若 false positive
+       显著多于组A，说明 reach_claim 判定路径在单 agent 下也过松）
+     - 组B vs 组C：双 agent 机制本身的退化幅度（组C 应复现历史 ~20-30%）
+     - 可选补充段（含 sofa/plant 类别）验证标签归一化差异。

@@ -665,6 +665,7 @@ def main(cfg: DictConfig) -> None:
 
     # ── ROS Setup ──
     agent_actions = {}  # Per-agent action storage (keyed by agent_idx)
+    action_subs = []  # Keep Subscriber refs to wait for transport connections
     if multi_agent:
         ros_pubs = {}
         for agent_name in agent_names:
@@ -673,7 +674,11 @@ def main(cfg: DictConfig) -> None:
             )
         for agent_idx in range(num_agents):
             topic = _get_agent_action_index(agent_idx)
-            rospy.Subscriber(topic, Int32, _make_agent_action_callback(agent_idx, agent_actions), queue_size=10)
+            action_subs.append(rospy.Subscriber(
+                topic, Int32,
+                _make_agent_action_callback(agent_idx, agent_actions),
+                queue_size=10,
+            ))
         ros_pub = ros_pubs[agent_names[0]]
     else:
         obj_point_cloud_pub = rospy.Publisher(
@@ -683,9 +688,9 @@ def main(cfg: DictConfig) -> None:
             agent_names[0], _get_agent_camera_height(cfg, agent_names[0])
         )
         # Single-agent: subscribe to the default action topic
-        rospy.Subscriber(
+        action_subs.append(rospy.Subscriber(
             _get_agent_action_index(0), Int32, ros_action_callback, queue_size=10
-        )
+        ))
     # ROS state callbacks for multi-agent tracking
     ros_all_states = [ROS_STATE.INIT] * num_agents
     ros_final_results = [FINAL_RESULT.EXPLORE] * num_agents
@@ -722,12 +727,19 @@ def main(cfg: DictConfig) -> None:
     trigger_pub = rospy.Publisher("/move_base_simple/goal", PoseStamped, queue_size=10)
     # Lite uses the local CLIP ITM server.  Per-agent scores are published
     # below on /clip/agent_{i}/cosine_score for the multi-agent MapROS bridge.
-    itm_score_pub = rospy.Publisher("/clip/cosine_score", Float64, queue_size=10)
+    # Single-agent mode must use the same namespaced topics: MapROS always
+    # subscribes to /clip/agent_{i}/cosine_score and
+    # /detector/agent_{i}/clouds_with_scores (see map_ros.cpp makeAgentTopic).
+    itm_score_pub = rospy.Publisher(
+        f"/clip/{agent_names[0]}/cosine_score", Float64, queue_size=10
+    )
     confidence_threshold_pub = rospy.Publisher(
         "/detector/confidence_threshold", Float64, queue_size=10
     )
     cld_with_score_pub = rospy.Publisher(
-        "/detector/clouds_with_scores", MultipleMasksWithConfidence, queue_size=10
+        f"/detector/{agent_names[0]}/clouds_with_scores",
+        MultipleMasksWithConfidence,
+        queue_size=10,
     )
     stage1_detection_pub = rospy.Publisher(
         "/stage1/detector/detection", Stage1Detection, queue_size=10
@@ -918,6 +930,24 @@ def main(cfg: DictConfig) -> None:
             rate.sleep()
 
         print("Agents are ready to go!!!!")
+
+        # Wait for the action subscriber's TCP transport to be established
+        # before triggering the planner. rospy publishing is fire-and-forget:
+        # if the C++ FSM sends its first action while no transport to this
+        # node exists yet, that message is silently dropped and both sides
+        # deadlock (C++ waits for ACTION_FINISH, Python waits for the action).
+        for _action_sub in action_subs:
+            conn_deadline = time.monotonic() + 5.0
+            while (
+                _action_sub.get_num_connections() == 0
+                and time.monotonic() < conn_deadline
+            ):
+                rospy.sleep(0.05)
+            if _action_sub.get_num_connections() == 0:
+                print(
+                    "WARNING: no transport connection established for action "
+                    f"topic {_action_sub.name}; planner may lose its first action"
+                )
 
         # Kick the C++ planner out of WAIT_TRIGGER → PLAN_ACTION
         trigger_pub.publish(PoseStamped())

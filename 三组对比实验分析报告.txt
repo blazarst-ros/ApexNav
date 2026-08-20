@@ -1,0 +1,90 @@
+三组对比实验最终分析报告（2026-08-20）
+============================================
+
+实验设置：hm3dv2 val episode 0-19（20 条，全部 cabinet），success_distance=1.2
+  组A = lite-apexnav 基座单机（habitat_evaluation.py，对照组）
+  组B = lite-multiagent 禁用 agent（habitat_evaluation_multiagent.py，num_agents=1）
+  组C = lite-multiagent 双 agent（habitat_evaluation.py --multiagent，num_agents=2，
+        max_episode_steps=250 vs A/B 的 1000）
+
+════════════════════════════════════════════════════════════
+一、汇总指标
+════════════════════════════════════════════════════════════
+  指标            组A 基座   组B 双机单agent   组C 双agent
+  Success 率      40.0%      40.0%            20.0%
+  Success 数      8/20       8/20             4/20
+  false positive  11         11               15
+  no frontier      1          1                0
+  stepout feasible 0          0                1
+
+════════════════════════════════════════════════════════════
+二、核心结论
+════════════════════════════════════════════════════════════
+
+【结论1】双机改造没有破坏单机导航/判断逻辑（组A ≈ 组B）
+  - 组A 与 组B 的成功率、失败类型分布完全相同（40% vs 40%，FP 11 vs 11）
+  - 逐条 episode 结果 18/20 一致（仅 epi 17、18 不同，属微小差异）
+  - 前提：已修复话题不匹配（/clip、/detector、plan_action 的 agent_0 后缀）
+    与 C++ num_agents 读取（私有命名空间 → 全局）。修复前"禁用 agent"
+    模式 C++ 收不到任何语义数据，对比无意义。
+  → 双机代码以单 agent 运行 = 基座行为，移植是干净的。
+
+【结论2】正确率差距的真正来源 = 双 agent 机制本身（组C 腰斩）
+  - 组C（双agent）success 20% vs 组A/B（单agent）40% —— 腰斩
+  - 组C 的 false positive 从 11 增至 15
+  - 组C 的 20% 与历史 multiagent_val 的 22.9% 高度一致 → 复现历史现象
+
+【结论3】false positive 是所有组的主要失败类型，根源 = reach_claim 判定过松
+  - 组C：19/20 条终止于 reach_claim；agent_1 声称 12 次、agent_0 声称 7 次
+  - false positive 的 claim 距离 1.94 ~ 11.18 m（多数 3-11m，离目标很远）
+  - success 的 claim 距离 0.19 ~ 1.00 m（都在 1.2m 内）
+  - 机制：C++ 在"当前位置距物体点云目标点 < 0.20m"即发布 /ros/reach_claim，
+    完全不看与真实 goal 的 geodesic 距离 → 误检物体（相似物被 YOLOE 判为
+    cabinet 并形成点云聚类）→ 到达点云位置 → 声称到达 → false positive
+  - 双 agent 放大机制：
+    a) 两 agent 不同视角观测同一误检物体，共享地图跨 agent 置信度累积，
+       误检更容易达到 SEARCH/REACH 阈值
+    b) cooperative 终止：任一 agent 的误报立即终结全队 episode
+    c) agent_1（1.5m 高）视角更广，更易"看到"远处相似物 → 12/20 次声称
+    d) 感知轮换（perception_agents_per_step=3）降低单 agent 感知频率
+
+════════════════════════════════════════════════════════════
+三、失败类型分布（逐条）
+════════════════════════════════════════════════════════════
+  epi  组A        组B        组C
+   0   FP         FP         FP
+   1   success    success    FP
+   2   FP         FP         FP
+   3   FP         FP         FP
+   4   success    success    success
+   5   success    success    FP
+   6   FP         FP         FP
+   7   success    success    FP
+   8   FP         FP         FP
+   9   FP         FP         FP
+  10   success    success    FP
+  11   success    success    success
+  12   FP         FP         FP
+  13   FP         FP         FP
+  14   success    success    FP
+  15   no frontier no frontier stepout feasible
+  16   FP         FP         FP
+  17   FP         success    success
+  18   success    FP         success
+  19   FP         FP         FP
+
+════════════════════════════════════════════════════════════
+四、修复建议（按优先级）
+════════════════════════════════════════════════════════════
+  1. 【根治】C++ REACH 判定加真实距离核实：声称 REACH 前检查与目标类别
+     最近的 goal 的 geodesic 距离（或物体点云与已知 goal 的匹配度），
+     距离超过 success_distance 时不发布 reach_claim，继续探索/纠正。
+  2. 【双agent 专用】cooperative 终止前核实：Python 收到 reach_claim 时
+     先检查 claim 距离，不足则取消该 claim（通知 C++ 该点云为误检），
+     而不是立即广播 STOP 终结全队。
+  3. 【降低误检】agent_1（1.5m 高）检测阈值提高，或感知轮换参数调优
+     （perception_agents_per_step 降低、perception_interval_steps 提高）。
+  4. 历史数据基线对照：
+     - 单机 first100（100条，多类别）：success 70%（前 20 条 cabinet 段
+       恰好 ~40%，与本次组A/B 一致）
+     - 双机 multiagent_val（35条）：22.9%（与本次组C 20% 一致）

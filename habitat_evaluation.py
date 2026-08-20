@@ -320,18 +320,21 @@ def main(cfg: DictConfig) -> None:
         "habitat/object_point_cloud", PointCloud2, queue_size=10
     )
     ros_pub = habitat_publisher.ROSPublisher()
-    rospy.Subscriber("/habitat/plan_action", Int32, ros_action_callback, queue_size=10)
+    # The multi-agent MapROS/FSM only publishes per-agent action topics
+    # (/habitat/plan_action_agent_0).  The legacy no-suffix topic is gone.
+    rospy.Subscriber("/habitat/plan_action_agent_0", Int32, ros_action_callback, queue_size=10)
     rospy.Subscriber("/ros/state", Int32, ros_state_callback, queue_size=10)
     rospy.Subscriber("/ros/expl_state", Int32, ros_final_state_callback, queue_size=10)
     rospy.Subscriber("/ros/expl_result", Int32, ros_expl_result_callback, queue_size=10)
     state_pub = rospy.Publisher("/habitat/state", Int32, queue_size=10)
     trigger_pub = rospy.Publisher("/move_base_simple/goal", PoseStamped, queue_size=10)
-    itm_score_pub = rospy.Publisher("/clip/cosine_score", Float64, queue_size=10)
+    # MapROS subscribes to the namespaced per-agent topics in both modes.
+    itm_score_pub = rospy.Publisher("/clip/agent_0/cosine_score", Float64, queue_size=10)
     confidence_threshold_pub = rospy.Publisher(
         "/detector/confidence_threshold", Float64, queue_size=10
     )
     cld_with_score_pub = rospy.Publisher(
-        "/detector/clouds_with_scores", MultipleMasksWithConfidence, queue_size=10
+        "/detector/agent_0/clouds_with_scores", MultipleMasksWithConfidence, queue_size=10
     )
     progress_pub = rospy.Publisher("/habitat/progress", Int32MultiArray, queue_size=10)
     record_pub = rospy.Publisher("/habitat/record", Float32MultiArray, queue_size=10)

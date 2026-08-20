@@ -70,6 +70,7 @@ struct AgentFSMData {
   Eigen::Vector3d last_start_pos_;
   Eigen::Vector2d last_next_pos_;
   int newest_action_;
+  double last_action_sent_time_ = 0.0;  ///< Wall time (ros::Time::now().toSec()) of the last action publish; used for WAIT_ACTION_FINISH resend timeout
   int init_action_count_;
   int stucking_action_count_;
   int stucking_next_pos_count_;

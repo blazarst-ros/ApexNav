@@ -84,6 +84,9 @@ roslaunch exploration_manager exploration.launch
 默认 launch 保持原 Lite 的单机配置；双机评测必须加载同一个数据集对应的双机配置：
 
 ```bash
+cd /home/uuufo/ApexNav-lite
+source /opt/ros/noetic/setup.bash
+source devel/setup.bash
 roslaunch exploration_manager exploration.launch \
   evaluation_config:=/home/uuufo/ApexNav-lite/config/habitat_eval_hm3dv2_multiagent_lite.yaml
 ```

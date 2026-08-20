@@ -1,0 +1,122 @@
+双机改造静态逻辑差异分析（组A 基座 vs 组B 双机版单agent分支）
+================================================================
+分析对象：
+  组A: /home/uuufo/ApexNav-lite-single/habitat_evaluation.py        （lite-apexnav 单机脚本）
+  组B: /home/uuufo/ApexNav-lite/habitat_evaluation_multiagent.py    （单 agent 分支，num_agents=1）
+两组话题契约均已核验匹配（含本轮已修复的话题不匹配与 num_agents 读取问题）。
+
+────────────────────────────────────────────────────────────────
+1. 标签归一化（重要差异）
+────────────────────────────────────────────────────────────────
+  组A: label = normalize_objectnav_label(label, data_path)
+       HM3D 映射: sofa→couch, tv_monitor→tv, plant→potted plant
+  组B: 直接使用 env.current_episode.object_category（无归一化）
+  已核实：lite-multiagent 分支的 habitat_evaluation.py（单机脚本）与
+  基座脚本都调用 normalize_objectnav_label（第371/343行）；唯独
+  habitat_evaluation_multiagent.py（双机主脚本，组B路径）没有调用。
+  → 对含 sofa/tv_monitor/plant 的 episode，组A 的 YOLOE 提示词是
+    "couch"/"tv"/"potted plant"，组B 是 "sofa"/"tv_monitor"/"plant"。
+    YOLOE 开放词汇检测对不同措辞的匹配分不同，可能影响检测率。
+  注意：本次实验的前 20 条 episode 全部是 cabinet（已核实数据集的
+    content 文件），此差异在 20 条中不体现；若要验证需跑含 sofa 等
+    类别的 episode 段（见运行手册补充实验）。
+
+────────────────────────────────────────────────────────────────
+2. 感知节奏（ITM + YOLOE 触发时机）
+────────────────────────────────────────────────────────────────
+  组A: 每一步（含 STOP）都执行 ITM + YOLOE。
+  组B: 仅视角变化动作（move/turn/look）后，且
+       viewpoint_steps_since_perception >= perception_interval_steps(默认1)
+       才感知；STOP 动作不触发感知。
+  → 组B 的 STOP 后不会向 C++ 再发一次语义数据；组A 会。正常导航中
+    两者感知频率接近（每视角变化步一次），差异主要在终止动作后。
+
+────────────────────────────────────────────────────────────────
+3. 成功判定
+────────────────────────────────────────────────────────────────
+  组A: success = info["success"]（Habitat 原生，基于 STOP 动作与
+       success_distance）。
+  组B: 单 agent 分支同样 success = info["success"]（一致），但随后有
+       reach_claim 覆盖逻辑：
+       - 组B 的 C++（双机版 fsm）单 agent 时会发布 /ros/reach_claim
+         {0, REACH_OBJECT}（REACH 判定：距 planned_next_pos < 0.20m）。
+       - Python 收到后 _queue_reach_claim_stops 排队 STOP，执行 STOP，
+         再用 get_reach_claim_outcome() 判定：
+         claim 距离 < success_distance → success；否则 → false positive
+         （覆盖 info["success"]）。
+       - 组A 的 C++（基座单机 fsm）没有 reach_claim 发布机制，无此路径。
+  → 组B 存在"planner 判 REACH 但实际距离不够 → false positive"的额外
+    失败类别；组A 没有。这可能是两组失败类型分布差异的最大来源。
+
+────────────────────────────────────────────────────────────────
+4. 终止与步数
+────────────────────────────────────────────────────────────────
+  组A: 主循环 while ... and not env.episode_over；步数上限由 Habitat
+       max_episode_steps 触发 episode_over。
+  组B: 主循环同样有 env.episode_over break；另有
+       count_steps >= max_episode_steps - 1 时把 MOVE_FORWARD 改判 STOP。
+  组A: count_steps == max_episode_steps - 1 时改判 STOP（== 与 >= 等价）。
+  → 基本一致。
+  注意（组C 对比时）：三组 yaml 的 max_episode_steps 不同——
+    组A/B（habitat_eval_hm3dv2.yaml）: 1000 步
+    组C（habitat_eval_hm3dv2_multiagent_lite.yaml）: 250 步
+  组C 的失败可能部分归因于更短的步数预算，对比 success 率时需说明。
+
+────────────────────────────────────────────────────────────────
+5. 无动作时的行为
+────────────────────────────────────────────────────────────────
+  组A: global_action 为 None 时 continue（忙等，无 sleep）。
+  组B: no-action 分支 rate.sleep() 后 continue（10Hz 节流）。
+  → 仅 CPU 占用差异，不影响结果。
+
+────────────────────────────────────────────────────────────────
+6. pass_object / near_object 边界
+────────────────────────────────────────────────────────────────
+  组A: pass_object 用 <= success_distance；near_object 结束时
+       <= success_distance 判定。
+  组B: 单 agent 分支用 < success_distance（第1391行）。
+  → 边界差一个点，对 check_failure 分类有微小影响。
+
+────────────────────────────────────────────────────────────────
+7. EPISODE_FINISH 握手
+────────────────────────────────────────────────────────────────
+  组A: 无条件发布一次 /habitat/state = EPISODE_FINISH。
+  组B: _finish_episode_handshake()：先发 termination_event JSON，再
+       发布 EPISODE_FINISH 并等待 C++ 复位确认（最多 3 次重试）。
+  → 组B 更稳健，功能等价。
+
+────────────────────────────────────────────────────────────────
+8. camera_pitch / 动作符号
+────────────────────────────────────────────────────────────────
+  组A/B 一致：look_down 减 pi/6，look_up 加 pi/6；初始 0.0。
+
+────────────────────────────────────────────────────────────────
+结论（静态层面）
+────────────────────────────────────────────────────────────────
+  核心可疑差异：
+  (1) 组B 独有的 reach_claim → false positive 判定路径（差异3），
+      与历史 multiagent_val 记录中大量 "false positive" 结果吻合；
+  (2) 组B 缺少标签归一化（差异1），对非 cabinet 类别有影响；
+  (3) 组B STOP 后不再感知（差异2），影响终止动作后的语义更新。
+  话题不匹配与 num_agents 读取问题（已修复）是更早一层的问题，
+  修复前任何"禁用 agent"运行都会丢失语义数据。
+
+────────────────────────────────────────────────────────────────
+历史数据基线（新实验前的参考，非本次实验）
+────────────────────────────────────────────────────────────────
+  test_hm3dv2_first100_val（lite-multiagent 分支单机脚本，100条）:
+    success 70.0%，失败 30 条 = false positive 23 + no frontier 3
+    + infeasible 4。
+  test_hm3dv2_multiagent_val（双 agent 模式，35 条）:
+    success 22.9%，失败 27 条 = false positive 26 + stepout feasible 1。
+  → false positive 是单机就存在的主要失败类型（23%），双 agent 模式
+    将其放大到 74%。双 agent 放大机制推测：
+    a) 两 agent 不同视角观测同一误检物体，共享地图跨 agent 置信度
+       累积（object_map2d 融合）→ 误检更容易达到 SEARCH/REACH 阈值；
+    b) cooperative 终止：任一 agent 的误检 reach_claim 直接终结全队；
+    c) 感知轮换（perception_agents_per_step=3）使单 agent 感知频率
+       降低。
+  新实验（组A/B/C 各 20 条，同 episode）将验证：
+    组B（双机版单agent）≈ 组A（基座单机）？→ 双机代码是否破坏单机逻辑
+    组B（单agent）vs 组C（双agent）→ 双 agent 机制本身的退化幅度
+

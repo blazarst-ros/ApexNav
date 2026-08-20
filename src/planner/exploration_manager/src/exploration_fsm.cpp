@@ -13,7 +13,12 @@ namespace apexnav_planner {
 void ExplorationFSM::init(ros::NodeHandle& nh)
 {
   nh_ = nh;
-  nh_.param("num_agents", num_agents_, 2);
+  // Read num_agents from the global namespace: exploration.launch loads the
+  // evaluation YAML with <rosparam command="load"/> at the root, so the value
+  // lands on /num_agents, not on ~/num_agents.  MapROS already reads the
+  // global value; keep the FSM consistent with it.  Default stays 2 so the
+  // dual-agent launch keeps working without an explicit parameter.
+  node_.param("num_agents", num_agents_, 2);
   num_agents_ = std::max(1, std::min(num_agents_, NUM_AGENTS));
   fp_.reset(new FSMParam);
   fd_.reset(new FSMData(num_agents_));
@@ -181,11 +186,27 @@ void ExplorationFSM::FSMCallback(const ros::TimerEvent& e)
         std_msgs::Int32 action_msg;
         action_msg.data = ad.newest_action_;
         action_pub_[agent_idx].publish(action_msg);
+        ad.last_action_sent_time_ = ros::Time::now().toSec();
         transitState(agent_idx, ROS_STATE::WAIT_ACTION_FINISH, "FSM");
         break;
       }
 
       case ROS_STATE::WAIT_ACTION_FINISH: {
+        // Timeout guard against a dropped first action: rospy publishing is
+        // fire-and-forget, so if the Python evaluator's transport was not
+        // ready when the action was published (e.g. just after subscribing),
+        // the message is lost and the FSM would wait forever.  Resend the
+        // action every 3s until the evaluator acknowledges with ACTION_FINISH.
+        double now_sec = ros::Time::now().toSec();
+        if (now_sec - ad.last_action_sent_time_ > 3.0) {
+          ad.last_action_sent_time_ = now_sec;
+          std_msgs::Int32 action_msg;
+          action_msg.data = ad.newest_action_;
+          action_pub_[agent_idx].publish(action_msg);
+          ROS_WARN_THROTTLE(1.0,
+              "[Agent %d] Resending action %d (no ACTION_FINISH within 3s)",
+              agent_idx, ad.newest_action_);
+        }
         break;
       }
     }
