@@ -27,6 +27,7 @@ class GazeboSensorAdapter:
         self.remap_key = None
         self.maps = None
         self.last_stamp = rospy.Time(0)
+        self.last_clock = rospy.Time(0)
         self.drop_counts = {}
 
         self.world_frame = rospy.get_param("~world_frame", "map")
@@ -68,16 +69,36 @@ class GazeboSensorAdapter:
         self.sync.registerCallback(self._rgb_depth_cb)
         rospy.Timer(rospy.Duration(1.0), self._diagnostics)
 
+    def _observe_clock(self, now):
+        """Start a fresh transport epoch when Gazebo resets `/clock`."""
+        with self.lock:
+            if not self.last_clock.is_zero() and now < self.last_clock:
+                self.odom.clear()
+                self.last_stamp = rospy.Time(0)
+                self.remap_key = None
+                self.maps = None
+                rospy.logwarn("Gazebo sensor adapter clock reset; cleared pose/image history")
+            self.last_clock = now
+
+    @staticmethod
+    def _camera_info_valid(msg):
+        values = list(msg.K) + list(msg.D) + list(msg.R) + list(msg.P)
+        return (bool(msg.header.frame_id) and msg.width > 0 and msg.height > 0 and
+                len(msg.K) == 9 and len(msg.R) == 9 and len(msg.P) == 12 and
+                all(math.isfinite(value) for value in values) and
+                msg.K[0] > 0.0 and msg.K[4] > 0.0 and msg.K[8] != 0.0)
+
     def _drop(self, reason):
         self.drop_counts[reason] = self.drop_counts.get(reason, 0) + 1
         rospy.logwarn_throttle(2.0, "Gazebo sensor frame dropped: %s", reason)
 
     def _info_cb(self, msg):
-        if msg.width <= 0 or msg.height <= 0 or msg.K[0] <= 0.0 or msg.K[4] <= 0.0:
+        if not self._camera_info_valid(msg):
             self._drop("invalid_camera_info")
             return
         with self.lock:
-            key = (msg.width, msg.height, tuple(msg.K), tuple(msg.D))
+            key = (msg.header.frame_id, msg.width, msg.height,
+                   tuple(msg.K), tuple(msg.D))
             if self.source_info_key is not None and key != self.source_info_key:
                 self._drop("camera_calibration_changed_restart_required")
                 return
@@ -89,12 +110,38 @@ class GazeboSensorAdapter:
         if stamp.is_zero():
             self._drop("zero_odom_stamp")
             return
+        if (msg.header.frame_id != self.world_frame or
+                msg.child_frame_id != self.base_frame):
+            self._drop("odom_frame_mismatch")
+            return
+        now = rospy.Time.now()
+        if now.is_zero():
+            self._drop("sim_clock_not_ready")
+            return
+        self._observe_clock(now)
+        age = (now - stamp).to_sec()
+        if age < -self.max_future or age > self.max_frame_age:
+            self._drop("odom_source_age")
+            return
+        p = msg.pose.pose.position
+        q = msg.pose.pose.orientation
+        values = [p.x, p.y, p.z, q.x, q.y, q.z, q.w]
+        values.extend(msg.pose.covariance)
+        if not all(math.isfinite(value) for value in values):
+            self._drop("nonfinite_odom_pose")
+            return
+        norm = math.sqrt(q.x * q.x + q.y * q.y + q.z * q.z + q.w * q.w)
+        if norm < 0.95 or norm > 1.05:
+            self._drop("invalid_odom_quaternion")
+            return
         with self.lock:
             if self.odom and stamp <= self.odom[-1].header.stamp:
                 self._drop("odom_time_regression")
                 return
             self.odom.append(msg)
-            cutoff = stamp - rospy.Duration(self.history_sec)
+            # ROS Time cannot represent a negative value. Gazebo commonly
+            # starts publishing before one full history window has elapsed.
+            cutoff = rospy.Time.from_sec(max(0.0, stamp.to_sec() - self.history_sec))
             while len(self.odom) > 2 and self.odom[1].header.stamp < cutoff:
                 self.odom.popleft()
 
@@ -188,7 +235,9 @@ class GazeboSensorAdapter:
         if rospy.Time.now().is_zero():
             self._drop("sim_clock_not_ready")
             return
-        age = (rospy.Time.now() - stamp).to_sec()
+        now = rospy.Time.now()
+        self._observe_clock(now)
+        age = (now - stamp).to_sec()
         if age < -self.max_future or age > self.max_frame_age:
             self._drop("sensor_frame_age")
             return
@@ -196,6 +245,15 @@ class GazeboSensorAdapter:
             info = self.source_info
         if info is None:
             self._drop("missing_camera_info")
+            return
+        if (not rgb_msg.header.frame_id or
+                rgb_msg.header.frame_id != depth_msg.header.frame_id or
+                rgb_msg.header.frame_id != info.header.frame_id):
+            self._drop("source_camera_frame_mismatch")
+            return
+        if rgb_msg.encoding not in ("rgb8", "bgr8") or depth_msg.encoding not in (
+                "32FC1", "16UC1"):
+            self._drop("unsupported_source_encoding")
             return
         if (rgb_msg.width != info.width or rgb_msg.height != info.height or
                 depth_msg.width != info.width or depth_msg.height != info.height):
@@ -238,7 +296,12 @@ class GazeboSensorAdapter:
         status = DiagnosticStatus()
         status.name = "apexnav/gazebo_sensor_adapter"
         status.hardware_id = "px4_iris_depth_camera"
-        healthy = self.source_info is not None and bool(self.odom) and not self.last_stamp.is_zero()
+        now = rospy.Time.now()
+        with self.lock:
+            latest_odom = self.odom[-1].header.stamp if self.odom else rospy.Time(0)
+        healthy = (self.source_info is not None and
+                   self._fresh_source(now, latest_odom) and
+                   self._fresh_source(now, self.last_stamp))
         status.level = DiagnosticStatus.OK if healthy else DiagnosticStatus.WARN
         status.message = "HM3D-v2 virtual camera ready" if healthy else "waiting for coherent inputs"
         status.values = [KeyValue("profile", "hm3dv2"), KeyValue("resolution", "640x480")]
@@ -247,6 +310,12 @@ class GazeboSensorAdapter:
         array.header.stamp = rospy.Time.now()
         array.status = [status]
         self.diag_pub.publish(array)
+
+    def _fresh_source(self, now, stamp):
+        if stamp.is_zero():
+            return False
+        age = (now - stamp).to_sec()
+        return -self.max_future <= age <= self.max_frame_age
 
 
 if __name__ == "__main__":

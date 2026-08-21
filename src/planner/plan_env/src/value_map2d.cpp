@@ -22,16 +22,31 @@ ValueMap::ValueMap(SDFMap2D* sdf_map, ros::NodeHandle& nh)
   confidence_buffer_ = vector<double>(voxel_num, 0.0);
 }
 
+void ValueMap::reset()
+{
+  std::fill(value_buffer_.begin(), value_buffer_.end(), 0.0);
+  std::fill(confidence_buffer_.begin(), confidence_buffer_.end(), 0.0);
+}
+
 void ValueMap::updateValueMap(const Vector2d& sensor_pos, const double& sensor_yaw,
     const vector<Vector2i>& free_grids, const double& itm_score)
 {
+  if (!sensor_pos.allFinite() || !std::isfinite(sensor_yaw) || !std::isfinite(itm_score))
+    return;
   for (const auto& grid : free_grids) {
+    if (!sdf_map_->isInMap(grid))
+      continue;
     Vector2d pos;
     sdf_map_->indexToPos(grid, pos);
     int adr = sdf_map_->toAddress(grid);
+    if (adr < 0 || static_cast<size_t>(adr) >= value_buffer_.size() ||
+        static_cast<size_t>(adr) >= confidence_buffer_.size())
+      continue;
 
     // Calculate FOV-based confidence for current observation
     double now_confidence = getFovConfidence(sensor_pos, sensor_yaw, pos);
+    if (!(now_confidence > 0.0) || !std::isfinite(now_confidence))
+      continue;
     double now_value = itm_score;
 
     // Retrieve existing confidence and value
@@ -39,11 +54,13 @@ void ValueMap::updateValueMap(const Vector2d& sensor_pos, const double& sensor_y
     double last_value = value_buffer_[adr];
 
     // Apply confidence-weighted fusion with quadratic confidence combination
-    confidence_buffer_[adr] =
-        (now_confidence * now_confidence + last_confidence * last_confidence) /
-        (now_confidence + last_confidence);
-    value_buffer_[adr] = (now_confidence * now_value + last_confidence * last_value) /
-                         (now_confidence + last_confidence);
+    double fused_confidence = last_confidence;
+    double fused_value = last_value;
+    if (!tryFuseSemanticValue(now_confidence, now_value, last_confidence,
+            last_value, &fused_confidence, &fused_value))
+      continue;
+    confidence_buffer_[adr] = fused_confidence;
+    value_buffer_[adr] = fused_value;
   }
 }
 
@@ -62,8 +79,7 @@ double ValueMap::getFovConfidence(
   // Apply cosine-squared FOV confidence model
   // FOV angle: 79° total field of view (typical RGB camera)
   double fov_angle = 79.0 * M_PI / 180.0;
-  double value = std::cos(relative_angle / (fov_angle / 2) * (M_PI / 2));
-  return value * value;  // Square for stronger center weighting
+  return semanticFovConfidence(relative_angle, fov_angle);
 }
 
 }  // namespace apexnav_planner

@@ -14,7 +14,11 @@ void KinoAstar::init()
   nh_.param<double>(ros::this_node::getName() + "/oneshot_range", oneshot_range_, 5);
   nh_.param<double>(ros::this_node::getName() + "/sampletime", sampletime_, 0.1);
 
-  inv_yaw_resolution_ = 3.15;
+  nh_.param<double>(ros::this_node::getName() + "/yaw_resolution", yaw_resolution_, 0.15);
+  if (!std::isfinite(yaw_resolution_) || yaw_resolution_ <= 1e-3) {
+    ROS_ERROR("KinoAstar: invalid yaw_resolution %.6f; using 0.15 rad", yaw_resolution_);
+    yaw_resolution_ = 0.15;
+  }
   inv_yaw_resolution_ = 1.0 / yaw_resolution_;
   grid_interval_ = map_->getResolution();
   allocate_num_ = 1000000;
@@ -81,6 +85,9 @@ int KinoAstar::search(
     const Eigen::VectorXd& end_state, Eigen::VectorXd& start_state, Eigen::Vector3d& init_ctrl)
 {
   bool isocc = false;
+  int collision_rejections = 0;
+  int out_of_map_rejections = 0;
+  int accepted_successors = 0;
   bool initsearch = false;  // 'initsearch' indicates whether to consider initial state's velocity;
                             // false means start can only search forward
   double start_time = ros::Time::now().toSec();
@@ -91,11 +98,12 @@ int KinoAstar::search(
   map_->posToIndex(start_pos2d, start_idx);
 
   // Check whether start/end states are in collision
-  // isocc = isCollisionPosYaw(start_state.head(2), start_state[2]);
-  // if (isocc) {
-  //   ROS_ERROR("KinoAstar: start is not free!");
-  //   return NO_PATH;
-  // }
+  isocc = isCollisionPosYaw(start_state.head(2), start_state[2]);
+  if (isocc) {
+    ROS_WARN("KinoAstar: start footprint is not free at (%.3f, %.3f), yaw %.3f",
+        start_state[0], start_state[1], start_state[2]);
+    return NO_PATH;
+  }
   isocc = isCollisionPosYaw(end_state.head(2), end_state[2]);
   if (isocc) {
     ROS_WARN("KinoAstar: end is not free!");
@@ -151,16 +159,19 @@ int KinoAstar::search(
     if (runTime > max_search_time_) {
       terminate_node = cur_node;
       retrievePath(terminate_node);
-      has_path_ = true;
       start_state.head(4) = terminate_node->state;
       start_state[4] = terminate_node->singul;
       init_ctrl = terminate_node->input;
       if (terminate_node->parent == NULL) {
-        std::cout << "[34mKino Astar]: terminate_node->parent == NULL" << std::endl;
-        printf("\033[Kino Astar]: NO_PATH \n\033[0m");
+        path_nodes_.clear();
+        has_path_ = false;
+        ROS_WARN("KinoAstar: search timed out before finding one safe successor "
+                 "(collision=%d, out_of_map=%d)",
+            collision_rejections, out_of_map_rejections);
         return NO_PATH;
       }
       else {
+        has_path_ = true;
         ROS_WARN("KinoSearch: Reach the max seach time");
         return REACH_END;
       }
@@ -214,7 +225,7 @@ int KinoAstar::search(
       /* inside map range */
       Eigen::Vector2d pro_pos2d = pro_state.head(2);
       if (!map_->isInMap(pro_pos2d)) {
-        std::cout << "[Kino Astar]: out of map range" << pro_state.transpose() << std::endl;
+        ++out_of_map_rejections;
         continue;
       }
       // Check whether pro_state is in the closed set; if so, skip
@@ -248,8 +259,11 @@ int KinoAstar::search(
         if (isocc)
           break;
       }
-      if (isocc)
+      if (isocc) {
+        ++collision_rejections;
         continue;
+      }
+      ++accepted_successors;
       nodeVis(pro_state.head(3));
 
       /* ---------- compute cost ---------- */
@@ -298,7 +312,12 @@ int KinoAstar::search(
       }
     }
   }
-  std::cout << "open set empty, no path." << std::endl;
+  ROS_WARN("KinoAstar: open set exhausted after %d iterations "
+           "(accepted=%d, collision=%d, out_of_map=%d), start=(%.3f, %.3f, %.3f), "
+           "goal=(%.3f, %.3f, %.3f)",
+      iter_num_, accepted_successors, collision_rejections, out_of_map_rejections,
+      start_state_[0], start_state_[1], start_state_[2], end_state_[0], end_state_[1],
+      end_state_[2]);
   return NO_PATH;
 }
 
@@ -599,6 +618,20 @@ bool KinoAstar::isCollisionPosYaw(const Eigen::Vector2d& pos, const double& yaw)
   egoR << cos_yaw, -sin_yaw, sin_yaw, cos_yaw;
   // Assume the odometry pose is at the vehicle center
   Eigen::Vector2d center(pos + egoR * Eigen::Vector2d(0.0, 0));
+
+  // Check the complete oriented footprint, including its interior. The old
+  // perimeter-only test could miss a small occupied cell directly beneath the
+  // vehicle centre while all four edges remained free.
+  const double sample_step = std::max(0.02, collision_interval_);
+  for (double local_x = -length_ / 2.0; local_x <= length_ / 2.0 + 1e-6;
+       local_x += sample_step) {
+    for (double local_y = -width_ / 2.0; local_y <= width_ / 2.0 + 1e-6;
+         local_y += sample_step) {
+      point = center + egoR * Eigen::Vector2d(local_x, local_y);
+      if (checkCollision(point.x(), point.y(), 0.0) == 1)
+        return true;
+    }
+  }
 
   // vehicle body
   Eigen::Vector2d corner1 = center + egoR * Eigen::Vector2d(length_ / 2, width_ / 2);

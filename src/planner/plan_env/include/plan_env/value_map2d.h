@@ -24,6 +24,7 @@ public:
 
   void updateValueMap(const Vector2d& sensor_pos, const double& sensor_yaw,
       const vector<Vector2i>& free_grids, const double& itm_score);
+  void reset();
   double getValue(const Vector2d& pos);
   double getValue(const Vector2i& idx);
   double getConfidence(const Vector2d& pos);
@@ -43,9 +44,7 @@ private:
 
 inline double ValueMap::normalizeAngle(double angle)
 {
-  while (angle > M_PI) angle -= 2.0 * M_PI;
-  while (angle < -M_PI) angle += 2.0 * M_PI;
-  return angle;
+  return std::isfinite(angle) ? std::remainder(angle, 2.0 * M_PI) : 0.0;
 }
 
 inline double ValueMap::getConfidence(const Vector2d& pos)
@@ -58,6 +57,8 @@ inline double ValueMap::getConfidence(const Vector2d& pos)
 inline double ValueMap::getConfidence(const Vector2i& idx)
 {
   int adr = sdf_map_->toAddress(idx);
+  if (adr < 0 || static_cast<size_t>(adr) >= confidence_buffer_.size())
+    return 0.0;
   return confidence_buffer_[adr];
 }
 
@@ -71,6 +72,8 @@ inline double ValueMap::getValue(const Vector2d& pos)
 inline double ValueMap::getValue(const Vector2i& idx)
 {
   int adr = sdf_map_->toAddress(idx);
+  if (adr < 0 || static_cast<size_t>(adr) >= value_buffer_.size())
+    return 0.0;
   return value_buffer_[adr];
 }
 

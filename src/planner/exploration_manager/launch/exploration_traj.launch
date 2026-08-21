@@ -17,10 +17,19 @@
   <arg name="cmd_vel_topic" default="/cmd_vel"/>
   <arg name="depth_unit_scale" default="0.001"/>
   <arg name="world_frame" default="odom"/>
+  <arg name="body_frame" default="base_link"/>
   <arg name="planning_param_file" default="$(find trajectory_manager)/config/planning_param.yaml"/>
   <arg name="obstacles_inflation" default="0.18"/>
   <arg name="filter_min_height" default="0.28"/>
   <arg name="filter_max_height" default="1.18"/>
+  <arg name="height_filter_reference" default="world"/>
+  <arg name="depth_filter_maxdist" default="4.99"/>
+  <arg name="depth_filter_mindist" default="0.20"/>
+  <arg name="self_filter_radius" default="0.0"/>
+  <arg name="camera_forward_offset" default="0.10"/>
+  <arg name="max_correction_vel" default="0.25"/>
+  <arg name="max_correction_omega" default="0.40"/>
+  <arg name="tracking_mode" default="legacy_mpc"/>
 
   <!-- TODO: Load real-world specific configuration -->
   <!-- <rosparam file="$(find exploration_manager)/config/real_world_params.yaml" command="load" /> -->
@@ -45,10 +54,16 @@
     <arg name="fy_" default="422.0475153598262"/>
     <arg name="depth_unit_scale_" value="$(arg depth_unit_scale)"/>
     <arg name="world_frame_" value="$(arg world_frame)"/>
+    <arg name="body_frame_" value="$(arg body_frame)"/>
     <arg name="planning_param_file_" value="$(arg planning_param_file)"/>
     <arg name="obstacles_inflation_" value="$(arg obstacles_inflation)"/>
     <arg name="filter_min_height_" value="$(arg filter_min_height)"/>
     <arg name="filter_max_height_" value="$(arg filter_max_height)"/>
+    <arg name="height_filter_reference_" value="$(arg height_filter_reference)"/>
+    <arg name="depth_filter_maxdist_" value="$(arg depth_filter_maxdist)"/>
+    <arg name="depth_filter_mindist_" value="$(arg depth_filter_mindist)"/>
+    <arg name="self_filter_radius_" value="$(arg self_filter_radius)"/>
+    <arg name="camera_forward_offset_" value="$(arg camera_forward_offset)"/>
   </include>
 
   <!-- Trajectory server for real robot control -->
@@ -57,12 +72,21 @@
     <remap from="~odometry" to="$(arg odom_topic)"/>
     <remap from="~trajectory" to="/planning/trajectory"/>
     <remap from="~cmd_vel" to="$(arg cmd_vel_topic)"/>
+    <remap from="~trajectory_reference" to="/apexnav/planner/trajectory_reference"/>
+    <remap from="~trajectory_progress" to="/apexnav/planner/trajectory_progress"/>
 
     <!-- Real-world specific parameters -->
-    <param name="need_init" value="false" type="bool"/>
-    <param name="max_correction_vel" value="1.0" type="double"/>
-    <param name="max_correction_omega" value="1.57" type="double"/>
+    <param name="max_correction_vel" value="$(arg max_correction_vel)" type="double"/>
+    <param name="max_correction_omega" value="$(arg max_correction_omega)" type="double"/>
+    <param name="tracking_mode" value="$(arg tracking_mode)" type="string"/>
+    <param name="progress_full_rate_error" value="0.12" type="double"/>
+    <param name="progress_freeze_error" value="0.25" type="double"/>
+    <param name="progress_minimum_rate" value="0.25" type="double"/>
     <param name="world_frame" value="$(arg world_frame)" type="string"/>
+    <param name="body_frame" value="$(arg body_frame)" type="string"/>
+    <param name="odometry_max_stale_age_sec" value="0.20" type="double"/>
+    <param name="odometry_max_future_age_sec" value="0.02" type="double"/>
+    <param name="odometry_quaternion_norm_tolerance" value="0.05" type="double"/>
   </node>
 
   <!-- TODO: Add additional real-world nodes if needed -->

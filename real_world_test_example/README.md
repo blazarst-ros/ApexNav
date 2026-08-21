@@ -226,6 +226,28 @@ export ROS_MASTER_URI=http://127.0.0.1:11311
 roslaunch apexnav_gazebo px4_supervisor.launch
 ```
 
+该启动文件默认同时启动状态日志节点，并在每次启动时创建：
+
+```text
+/home/blazarst/ApexNav/RuntimeData/logs/apexnav_state_<时间>_<PID>.csv
+```
+
+CSV按事件记录 `/mavros/state`、`/mavros/extended_state`、
+`/mavros/statustext/recv`、`/apexnav/mission/state`、导航使能、探索FSM状态及
+最终探索结果。相同探索状态每5秒最多记录一次，任务状态未变化时每1秒记录一次高度；
+高度是相对任务起飞点的非负值。当前文件路径可直接查询：
+
+```bash
+rostopic echo -n 1 /apexnav/logging/state_log_file
+```
+
+如需临时禁用或更换目录：
+
+```bash
+roslaunch apexnav_gazebo px4_supervisor.launch state_logging:=false
+roslaunch apexnav_gazebo px4_supervisor.launch state_log_directory:=/tmp/apexnav_logs
+```
+
 监督器初始应处于 `WAIT_FCU=0`，不会自行Arm：
 
 ```bash
@@ -253,62 +275,36 @@ source /opt/ros/noetic/setup.bash
 source /home/blazarst/ApexNav/devel/setup.bash
 export ROS_MASTER_URI=http://127.0.0.1:11311
 
-rostopic echo -n 1 /mavros/state
-rostopic echo -n 1 /apexnav/sensors/diagnostics
-rostopic echo -n 1 /apexnav/vlm/diagnostics
-rostopic echo -n 1 /apexnav/camera/camera_info
+
 ```
+
+`/ros/state.data` 必须为 `WAIT_TRIGGER=1`。起飞前只检查FCU、里程计、RGB、Depth
+和规划器，不执行建图或YOLOE/CLIPITM推理。此时 `/apexnav/vlm/diagnostics`
+显示 `disabled until cruise altitude` 是预期行为。
 
 然后提交任务：
 
 ```bash
-rosservice call /apexnav/mission/start "target_label: 'chair'"
+rosservice call /apexnav/mission/start "target_label: 'sofa'"
 ```
 
-监督器随后自动执行：
-
-```text
-PRESTREAM -> ARM -> OFFBOARD_TAKEOFF -> HOLD_READY
-          -> AUTO -> HOLD/FAULT -> AUTO.LAND -> DISARMED
-```
 
 持续监控：
 
 ```bash
 rostopic echo /apexnav/mission/state
+rostopic echo /apexnav/mission/navigation_enabled
+rostopic echo /apexnav/mission/mapping_enabled
+rostopic echo /ros/state
 rostopic hz /mavros/setpoint_raw/local
 rostopic hz /apexnav/planner/cmd_vel_raw
 rqt_image_view /apexnav/vlm/annotated_image
 ```
 
-### 安全停止和关闭顺序
 
-任何时候优先调用：
 
-```bash
-rosservice call /apexnav/mission/stop
-```
+  cd /home/blazarst/ApexNav/RuntimeData
+  ./capture_ros_data.sh planning 120
 
-等待 `/apexnav/mission/state.state` 变为 `DISARMED=8`，再依次Ctrl-C关闭：
+  
 
-1. PX4监督器。
-2. 规划器。
-3. 感知节点和RViz。
-4. 传感器桥。
-5. MAVROS。
-6. PX4/Gazebo。
-7. YOLOE、CLIPITM和roscore。
-
-不要直接先杀PX4、MAVROS或监督器，否则无法保证受控降落。
-
-### 常见阻塞定位
-
-- 没有原始相机话题：检查PX4 target是否为 `gazebo-classic_iris_depth_camera`，并确认roscore先于Gazebo启动。
-- MAVROS未连接：检查UDP端口、PX4 SITL是否仍运行，以及 `/mavros/state`。
-- 统一相机无输出：检查原始CameraInfo、MAVROS odom和 `/apexnav/sensors/diagnostics` 的丢帧原因。
-- 感知无输出：先检查两个 `/healthz`，再检查目标标签和 `/apexnav/vlm/diagnostics`。
-- 地图无输出：核对depth、camera pose、CameraInfo频率和时间戳；MapROS拒绝超过10ms的depth/pose组合。
-- 任务不Arm：监督器只有在FCU、odom、RGB、Depth均新鲜，并收到当前目标的、新鲜且
-  YOLOE/CLIPITM均有效的 `SemanticObservation` 后才进入PRESTREAM；这是一项刻意的安全门禁。
-
-`gazebo_full_stack.launch` 仍保留用于最终集成回归；学习和调试时优先使用上述分终端流程。

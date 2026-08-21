@@ -74,6 +74,7 @@ public:
   void initialize(ros::NodeHandle& nh);
 
   int planNextBestPoint(const Vector3d& pos, const double& yaw);
+  bool planPathToLockedTarget(const Vector3d& pos, const Vector2d& target);
   bool planTrajectory(const Eigen::VectorXd& start, const Eigen::VectorXd& end, const Vector3d& ctrl);
   void getSortedSemanticFrontiers(const Vector2d& cur_pos, const vector<Vector2d>& frontiers,
       vector<SemanticFrontier>& sem_frontiers);
@@ -120,7 +121,8 @@ private:
       const Vector3d& start, const pcl::shared_ptr<pcl::PointCloud<pcl::PointXYZ>>& object_cloud);
   bool trySearchObjectPathWithDistance(const Vector2d& start2d, const Vector2d& object_pose,
       double distance, double max_search_time, Eigen::Vector2d& refined_pos,
-      std::vector<Eigen::Vector2d>& refined_path, const std::string& debug_msg);
+      std::vector<Eigen::Vector2d>& refined_path, const std::string& debug_msg,
+      int safety_mode = Astar2D::SAFETY_MODE::NORMAL);
 
   // TSP Optimization Methods
   void computeATSPTour(
@@ -154,15 +156,12 @@ inline bool ExplorationManager::searchObjectPathExtreme(const Vector3d& start,
   if (object_pose.x() < -999.0)
     return false;  // Error finding nearest point
 
-  Vector2d start2d = Vector2d(start(0), start(1));
-  path_finder_->reset();
-  if (path_finder_->astarSearch(start2d, object_pose, 0.25, 0.2, Astar2D::SAFETY_MODE::EXTREME) ==
-      Astar2D::REACH_END) {
-    refined_pos = object_pose;
-    refined_path = path_finder_->getPath();
-    return true;
-  }
-  return false;
+  // Extreme mode may relax unknown-space search, but it must not relax the
+  // physical object standoff or select the semantic object's centre.
+  return trySearchObjectPathWithDistance(Vector2d(start(0), start(1)), object_pose,
+      0.50, 0.20, refined_pos, refined_path,
+      "[Navigation Mode (Extreme)] Approaching object with 0.50m standoff.",
+      Astar2D::SAFETY_MODE::EXTREME);
 }
 
 inline void ExplorationManager::shortenPath(vector<Vector2d>& path)

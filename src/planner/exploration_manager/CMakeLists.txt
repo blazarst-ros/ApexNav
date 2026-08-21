@@ -45,3 +45,16 @@ add_executable(exploration_node
 target_link_libraries(exploration_node
   ${catkin_LIBRARIES}
 )
+
+if(CATKIN_ENABLE_TESTING)
+  catkin_add_gtest(test_local_target_selector test/test_local_target_selector.cpp)
+  if(TARGET test_local_target_selector)
+    target_link_libraries(test_local_target_selector ${catkin_LIBRARIES} gtest_main)
+  endif()
+  catkin_add_gtest(test_robust_navigation_policy test/test_robust_navigation_policy.cpp)
+  if(TARGET test_robust_navigation_policy)
+    target_link_libraries(test_robust_navigation_policy ${catkin_LIBRARIES} gtest_main)
+    set_property(TARGET test_robust_navigation_policy APPEND PROPERTY COMPILE_DEFINITIONS
+      EXPLORATION_FSM_TRAJ_SOURCE=\"${PROJECT_SOURCE_DIR}/src/exploration_fsm_traj.cpp\")
+  endif()
+endif()

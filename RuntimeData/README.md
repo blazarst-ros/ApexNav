@@ -1,61 +1,86 @@
 # ApexNav 多机地图数据流核验
 
+## PX4与目标导航状态日志
+
+`apexnav_gazebo/px4_supervisor.launch` 和 `gazebo_full_stack.launch` 默认启动
+`apexnav_state_logger`。每次启动都会在 `RuntimeData/logs/` 新建一个
+`apexnav_state_<时间>_<PID>.csv`，退出时自动刷新并关闭。
+
+日志以状态事件为行，保存飞控连接、解锁、模式、落地状态、PX4状态文本、电池状态、任务状态、
+目标标签、高度、导航使能、探索FSM及最终结果。日志不是高频里程计录制，因此适合长时间
+运行和表格分析。相同FSM状态只在变化时及每5秒心跳时记录；任务状态变化立即记录，
+未变化时每1秒采样一次高度。查询当前文件：
+
+```bash
+rostopic echo -n 1 /apexnav/logging/state_log_file
+ls -lt /home/blazarst/ApexNav/RuntimeData/logs/apexnav_state_*.csv | head
+```
+
+实时查看最新记录：
+
+```bash
+tail -f "$(ls -t /home/blazarst/ApexNav/RuntimeData/logs/apexnav_state_*.csv | head -1)"
+```
+
+记录的话题为：
+
+| 话题 | 记录内容 |
+|---|---|
+| `/mavros/state` | FCU连接、armed、guided、PX4模式及系统状态。 |
+| `/mavros/extended_state` | 在地面、起飞中、空中或降落中。 |
+| `/mavros/statustext/recv` | PX4预检、拒绝解锁和故障文本。 |
+| `/mavros/battery` | 电压、电流、剩余比例、电源状态与电池存在标志。 |
+| `/apexnav/mission/state` | 任务阶段、目标、起飞点相对高度、详细原因和规划器是否活动。 |
+| `/apexnav/mission/mapping_enabled` | 深度占据建图门控；巡航高度稳定并进入 `HOLD_READY` 时开启。 |
+| `/apexnav/mission/navigation_enabled` | VLM识别、语义地图和目标导航门控；与新任务地图一起在 `HOLD_READY` 开启，起始旋转已删除。 |
+| `/ros/state` | 探索FSM状态。 |
+| `/ros/expl_result` | 探索或目标到达结果。 |
+
 本目录保存运行时数据流证据。系统仅应启动一个 `exploration_node`：两个
 `agent_X` 的数据通过该节点写入同一张 SDF/Object/ValueMap。不要分别启动多个
 planner，否则会形成三张独立地图并产生重复发布者。
 
-## 使用顺序
+## 当前 Gazebo/PX4 数据采集
 
-在已启动 ROS master、planner 与仿真后，按顺序执行：
+脚本默认采集规划器内部链路。第二个参数是自动停止秒数，传 `0` 或省略表示按 `Ctrl-C` 停止：
 
 ```bash
 cd /home/blazarst/ApexNav/RuntimeData
-./capture_ros_data.sh recognition
-./capture_ros_data.sh object_filter
-./capture_ros_data.sh depth_mapping
-./capture_ros_data.sh shared_map
-./capture_ros_data.sh planning
-./capture_ros_data.sh pitch
+./capture_ros_data.sh planning 90
+./capture_ros_data.sh planning-full 90   # 额外包含RGB、Depth和VLM输出，文件很大
+./capture_ros_data.sh mission 60
+./capture_ros_data.sh mapping 60
+./capture_ros_data.sh perception 60
 ```
 
-每次命令都会创建 `capture_<阶段>_<时间戳>/`；保持运行一段包含机器人运动与检测的
-时间后按 `Ctrl-C` 停止。每个目录含有 `*.bag`、`topic_manifest.txt`、各话题的
-`rostopic info` 和 10 秒 `rostopic hz` 统计。可用下列命令复查：
+脚本先启动rosbag，再并行收集拓扑与参数，不会因逐个执行 `rostopic hz` 而错过规划瞬间。
+bag使用LZ4压缩并按2048MB分片。每次输出目录包含：
+
+- `*.bag`：实际运行数据；
+- `recorded_topics.txt`：本次真正录制的话题；
+- `missing_topics_at_start.txt`：启动时不存在的话题，用于发现节点或命名空间问题；
+- `topic_list_verbose.txt`、`node_list.txt` 和三个关键节点的连接信息；
+- exploration、traj_server和mission supervisor的完整参数快照；
+- `rosbag_info.txt`：每个话题的消息数、类型和频率证据。
+
+规划分析优先查看：
+
+| 层次 | 话题 |
+|---|---|
+| 任务与门控 | `/apexnav/mission/state`、`mapping_enabled`、`navigation_enabled` |
+| 规划FSM | `/ros/state`、`/ros/expl_state`、`/ros/expl_result` |
+| 规划输入 | `/mavros/local_position/odom`、`/grid_map/commit`、`/grid_map/occupied_inflate`、`/grid_map/esdf`、`/grid_map/value_map` |
+| KinoAstar | `/exploration_node/kinoastar/expanded_nodes`、`/kinoastar/FlatPath`、`/kinoastar/FlatTraj` |
+| MINCO | `/trajectory/minco_init_path`、`/trajectory/mincoPath`、`/trajectory/innerpoint` |
+| 最终轨迹 | `/planning/trajectory`、`/travel_traj`、`/current_desire` |
+| 轨迹跟踪、飞控与电池 | `/apexnav/planner/trajectory_reference`、`/apexnav/planner/trajectory_progress`、兼容模式 `/traj_server_node/mpc_car/*` 与 `/apexnav/planner/cmd_vel_raw`、最终 `/mavros/setpoint_raw/local`、`/mavros/battery` |
+| 内部日志 | `/rosout_agg`，包含 `Plan trajectory failed`、状态切换及碰撞/搜索警告 |
+
+复查命令：
 
 ```bash
-rosbag info RuntimeData/capture_<阶段>_<时间戳>/<阶段>.bag
-rosbag play --clock RuntimeData/capture_<阶段>_<时间戳>/<阶段>.bag
-```
-
-对单一机器人先将下面的 `{i}` 替换成 `0` 或 `1`，例如：
-
-```bash
-rostopic hz /detector/agent_0/clouds_with_scores
-rostopic echo -n 1 /object/cluster_status
-rostopic echo -n 1 /ros/agent_0/exploration_strategy
-```
-
-## Pitch 门槛复现
-
-`pitch` 阶段只保存验证对象写入所需的位姿、两个 MapROS 门槛角、检测云、对象过滤云和对象簇状态：
-
-```bash
-./capture_ros_data.sh pitch
-```
-
-MapROS 发布的两个角度话题分别是：
-
-```text
-/map_ros/agent_0/camera_pitch
-/map_ros/agent_1/camera_pitch
-```
-
-它们是 C++ 对 `sensor_pose` 做 `eulerAngles(2, 1, 0)` 后计算的同一角度。对象云回调仅在该值
-不小于 `1.5 rad` 时继续写入；小于该值时，检测云会被提前丢弃。运行时可直接观察：
-
-```bash
-rostopic echo /map_ros/agent_0/camera_pitch
-rostopic echo /map_ros/agent_1/camera_pitch
+rosbag info capture_planning_*/planning*.bag
+rosbag play --clock capture_planning_*/planning*.bag
 ```
 
 ## 0. 拓扑前置检查
@@ -119,13 +144,21 @@ ITM 分数和里程计。`/detector/agent_X/clouds_with_scores` 必须各有一�
 | `/habitat/agent_X/camera_depth` | `sensor_msgs/Image` | 连续有效深度；超范围深度会被截到 `4.99 m`。 |
 | `/grid_map/depth_cloud` | `sensor_msgs/PointCloud2` | 深度投影后的世界系云。 |
 | `/grid_map/filtered_depth_cloud` | `sensor_msgs/PointCloud2` | 高度和离群滤波后的障碍物点。 |
+| `/grid_map/commit` | `std_msgs/Header` | occupancy、自机清理和 inflation 全部完成后发布的地图提交心跳；监督器只用该源时间判断地图健康。 |
 | `/grid_map/occupied` | `sensor_msgs/PointCloud2` | 共享地图中的障碍格。 |
 | `/grid_map/free`、`/grid_map/unknown` | `sensor_msgs/PointCloud2` | 共享地图中的自由和未知格。 |
 | `/grid_map/occupied_inflate`、`/grid_map/esdf` | `sensor_msgs/PointCloud2` | 规划实际避障使用的膨胀障碍和距离场。 |
 
-阶段通过条件：每个 agent 的输入都在更新，且 `filtered_depth_cloud` 与环境障碍相符，
+阶段通过条件：每个 agent 的输入都在更新，`/grid_map/commit` 持续使用非零、单调的传感器源时间，且 `filtered_depth_cloud` 与环境障碍相符，
 `occupied/free/unknown` 随机器人移动变化。若原始深度云有点而过滤云为空，检查高度范围、
 传感器位姿、深度缩放和离群阈值；若过滤云有点而占据图不变，检查地图边界及 SDF 写入日志。
+
+Gazebo/PX4 Iris 使用不同的高度约定：MAVROS 局部坐标不保证地面为 `z=0`，因此
+`gazebo_planner.launch` 和 `gazebo_full_stack.launch` 设置
+`map_ros/height_filter_reference=sensor`，仅将相机下方 `0.18 m` 至上方 `0.25 m`
+这个与机体扫掠高度相交的切片写入二维占据图。日志
+`Depth obstacle height band sensor [...]` 应随相机高度移动；若仍显示 `world`，说明加载了
+旧参数或启动了错误的 planner launch。
 
 ## 4. 双机共享对象/语义地图
 

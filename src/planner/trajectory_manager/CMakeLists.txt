@@ -7,6 +7,8 @@ set(CMAKE_CXX_FLAGS_RELEASE "-O3 -Wall -fPIC")
 
 find_package(catkin REQUIRED COMPONENTS
   geometry_msgs
+  mavros_msgs
+  nav_msgs
   plan_env
   roscpp
   sensor_msgs
@@ -36,8 +38,7 @@ find_package(ompl REQUIRED)
 catkin_package(
   INCLUDE_DIRS include
   LIBRARIES trajectory_manager
-  CATKIN_DEPENDS path_searching geometry_msgs plan_env roscpp sensor_msgs std_msgs visualization_msgs message_runtime
-  DEPENDS system_lib
+  CATKIN_DEPENDS path_searching geometry_msgs mavros_msgs nav_msgs plan_env roscpp sensor_msgs std_msgs visualization_msgs message_runtime
 )
 
 
@@ -61,3 +62,15 @@ target_link_libraries(traj_server
 add_library(trajectory_manager
   src/optimizer.cpp
 )
+
+if(CATKIN_ENABLE_TESTING)
+  catkin_add_gtest(test_trajectory_message_validation test/test_trajectory_message_validation.cpp)
+  if(TARGET test_trajectory_message_validation)
+    target_link_libraries(test_trajectory_message_validation ${catkin_LIBRARIES} gtest_main)
+  endif()
+
+  catkin_add_gtest(test_tracking_policy test/test_tracking_policy.cpp)
+  if(TARGET test_tracking_policy)
+    target_link_libraries(test_tracking_policy ${catkin_LIBRARIES} gtest_main)
+  endif()
+endif()

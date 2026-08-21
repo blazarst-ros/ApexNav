@@ -14,13 +14,14 @@
 
 // ROS message types
 #include <geometry_msgs/PoseStamped.h>
-#include <geometry_msgs/PoseWithCovarianceStamped.h>
 #include <nav_msgs/Odometry.h>
 #include <std_msgs/Float64.h>
+#include <std_msgs/Bool.h>
 #include <std_msgs/Int32.h>
 #include <std_msgs/Empty.h>
 #include <visualization_msgs/Marker.h>
 #include <trajectory_manager/PolyTraj.h>
+#include <exploration_manager/robust_navigation_policy.h>
 
 namespace apexnav_planner {
 
@@ -98,9 +99,10 @@ namespace RealFSM {
 
 // Trajectory planner return codes
 enum class TrajPlannerResult {
-  FAILED = 0,        // Trajectory planning failed
-  SUCCESS = 1,       // Trajectory planned successfully
-  MISSION_COMPLETE = 2  // Mission completed (no frontier or reached object)
+  RETRYABLE_FAILED = 0,
+  SUCCESS = 1,
+  MISSION_SUCCEEDED = 2,
+  MISSION_FAILED = 3,
 };
 
 // Real-world exploration FSM for continuous trajectory execution
@@ -116,11 +118,38 @@ private:
   std::shared_ptr<FSMData> fd_;
   RealFSM::State state_;
   std::string world_frame_;
+  std::string base_frame_;
+  double trigger_max_age_;
+  double odometry_max_age_;
+  double input_max_future_;
+  double odometry_quaternion_norm_tolerance_;
+  double first_trajectory_progress_limit_;
+  ros::Time last_trigger_source_stamp_;
+  ros::Time last_odometry_source_stamp_;
+  ros::Time next_plan_attempt_time_;
+  ros::Time tracking_error_since_;
+  ros::Time trajectory_execution_start_;
+  Eigen::Vector2d trajectory_start_odom_;
+  double trajectory_progress_;
+  ros::Time last_trajectory_progress_;
+  bool trajectory_progress_started_;
+  bool require_replan_settle_;
+  ReplanSettleGate replan_settle_gate_;
+  bool have_locked_target_;
+  Eigen::Vector2d locked_target_;
+  int locked_target_result_;
+  int locked_target_failures_;
+  ros::Time locked_target_since_;
+  ros::Time locked_target_first_failure_since_;
+  double target_failure_min_hysteresis_;
+  bool navigation_enabled_ = false;
 
   /* ROS Utils */
   ros::NodeHandle node_;
   ros::Timer exec_timer_, frontier_timer_, safety_timer_;
-  ros::Subscriber trigger_sub_, goal_sub_, odom_sub_, confidence_threshold_sub_;
+  ros::Subscriber trigger_sub_, odom_sub_, confidence_threshold_sub_, cancel_sub_;
+  ros::Subscriber trajectory_progress_sub_;
+  ros::Subscriber navigation_enabled_sub_;
   ros::Subscriber traj_finish_sub_;  // TODO: Subscribe to trajectory execution status
   
   ros::Publisher ros_state_pub_, expl_state_pub_, expl_result_pub_;
@@ -135,8 +164,12 @@ private:
 
   /* Exploration Planner */
   TrajPlannerResult callTrajectoryPlanner();
+  bool enforceTrajectoryLimits(LocalTrajectory& local_traj);
+  bool validateTrajectoryStructure(
+      const LocalTrajectory& local_traj, const char* stage, double* total_duration) const;
+  bool validateFinalTrajectory(const LocalTrajectory& local_traj) const;
   void polyTraj2ROSMsg(const LocalTrajectory& local_traj, trajectory_manager::PolyTraj& poly_msg);
-  void selectLocalTarget(const Eigen::Vector2d& current_pos, const std::vector<Eigen::Vector2d>& path,
+  bool selectLocalTarget(const Eigen::Vector2d& current_pos, const std::vector<Eigen::Vector2d>& path,
       const double& local_distance, Eigen::Vector2d& target_pos, double& target_yaw);
   
   // Safety and stuck detection
@@ -147,6 +180,8 @@ private:
 
   /* Helper functions */
   bool updateFrontierAndObject();
+  void recordLockedTargetFailure();
+  void resetLockedTargetFailures();
   void transitState(RealFSM::State new_state, std::string pos_call);
   void wrapAngle(double& angle);
   void publishRobotMarker();
@@ -158,10 +193,12 @@ private:
   void safetyCallback(const ros::TimerEvent& e);
   void frontierCallback(const ros::TimerEvent& e);
   void triggerCallback(const geometry_msgs::PoseStampedConstPtr& msg);
-  void goalCallback(const geometry_msgs::PoseWithCovarianceStamped::ConstPtr& msg);
   void odometryCallback(const nav_msgs::OdometryConstPtr& msg);
   void confidenceThresholdCallback(const std_msgs::Float64ConstPtr& msg);
+  void cancelCallback(const std_msgs::EmptyConstPtr& msg);
   void trajectoryFinishCallback(const std_msgs::EmptyConstPtr& msg);  // TODO: Define proper msg type
+  void trajectoryProgressCallback(const std_msgs::Float64ConstPtr& msg);
+  void navigationEnabledCallback(const std_msgs::BoolConstPtr& msg);
 
 public:
   ExplorationFSMReal() = default;

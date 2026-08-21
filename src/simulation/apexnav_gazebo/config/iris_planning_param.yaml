@@ -1,8 +1,11 @@
 ################ PX4 Iris fixed-altitude 2-D model ################
-max_vel: 0.25
+max_vel: 0.30
 max_acc: 0.30
 max_domega: 0.40
 zoom_omega: 0.20
+# Curvature controls geometric reachability, not execution speed. Keep the
+# original tight-turn capability; the FSM time-scales every accepted
+# trajectory to the separate 0.30 m/s and 0.55 rad/s hard limits.
 max_cur: 3.0
 wheel_base: 0.35
 length: 0.70
@@ -11,6 +14,7 @@ height: 0.30
 
 astar_cur: 3.0
 step_arc: 0.15
+yaw_resolution: 0.15
 lambda_heu: 1.0
 max_seach_time: 2.0
 checkl: 0.05

@@ -12,8 +12,18 @@
     <arg name="depth_unit_scale" value="1.0"/>
     <arg name="world_frame" value="$(arg world_frame)"/>
     <arg name="planning_param_file" value="$(find apexnav_gazebo)/config/iris_planning_param.yaml"/>
-    <arg name="obstacles_inflation" value="0.08"/>
-    <arg name="filter_min_height" value="0.35"/>
-    <arg name="filter_max_height" value="1.65"/>
+    <!-- A modest global halo is paired with the exact runtime footprint check. -->
+    <arg name="obstacles_inflation" value="0.38"/>
+    <!-- A PX4 local map does not guarantee that the floor is world z=0.
+         Map only the vertical slice intersecting the Iris body/rotor plane. -->
+    <arg name="height_filter_reference" value="sensor"/>
+    <arg name="filter_min_height" value="-0.18"/>
+    <arg name="filter_max_height" value="0.25"/>
+    <arg name="depth_filter_maxdist" value="4.0"/>
+    <arg name="depth_filter_mindist" value="0.20"/>
+    <arg name="camera_forward_offset" value="0.10"/>
+    <arg name="max_correction_vel" value="0.40"/>
+    <arg name="max_correction_omega" value="0.65"/>
+    <arg name="tracking_mode" value="px4_native"/>
   </include>
 </launch>

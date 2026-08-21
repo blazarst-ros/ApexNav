@@ -74,3 +74,10 @@ target_link_libraries(plan_env
   ${catkin_LIBRARIES}
   ${PCL_LIBRARIES}
 )
+
+if(CATKIN_ENABLE_TESTING)
+  catkin_add_gtest(test_map_filter_policy test/test_map_filter_policy.cpp)
+  if(TARGET test_map_filter_policy)
+    target_link_libraries(test_map_filter_policy ${catkin_LIBRARIES} gtest_main)
+  endif()
+endif()

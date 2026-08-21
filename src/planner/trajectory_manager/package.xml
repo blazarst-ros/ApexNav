@@ -18,6 +18,8 @@
   <buildtool_depend>catkin</buildtool_depend>
   <build_depend>path_searching</build_depend>
   <build_depend>geometry_msgs</build_depend>
+  <build_depend>mavros_msgs</build_depend>
+  <build_depend>nav_msgs</build_depend>
   <build_depend>plan_env</build_depend>
   <build_depend>roscpp</build_depend>
   <build_depend>sensor_msgs</build_depend>
@@ -27,6 +29,8 @@
   <build_depend>message_runtime</build_depend>
   <build_export_depend>path_searching</build_export_depend>
   <build_export_depend>geometry_msgs</build_export_depend>
+  <build_export_depend>mavros_msgs</build_export_depend>
+  <build_export_depend>nav_msgs</build_export_depend>
   <build_export_depend>plan_env</build_export_depend>
   <build_export_depend>roscpp</build_export_depend>
   <build_export_depend>sensor_msgs</build_export_depend>
@@ -34,6 +38,8 @@
   <build_export_depend>visualization_msgs</build_export_depend>
   <exec_depend>path_searching</exec_depend>
   <exec_depend>geometry_msgs</exec_depend>
+  <exec_depend>mavros_msgs</exec_depend>
+  <exec_depend>nav_msgs</exec_depend>
   <exec_depend>plan_env</exec_depend>
   <exec_depend>roscpp</exec_depend>
   <exec_depend>sensor_msgs</exec_depend>

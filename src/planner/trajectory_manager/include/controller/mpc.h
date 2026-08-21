@@ -37,6 +37,7 @@ class MPC {
 public:
   Eigen::Vector2d calCmd(const std::vector<Eigen::Vector3d>& _xref);
   void setOdom(const Eigen::Vector4d& car_state);
+  void reset();
 
 private:
   // parameters

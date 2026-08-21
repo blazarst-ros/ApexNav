@@ -12,6 +12,8 @@
 
 #include <plan_env/object_map2d.h>
 
+#include <cmath>
+
 namespace apexnav_planner {
 ObjectMap2D::ObjectMap2D(SDFMap2D* sdf_map, ros::NodeHandle& nh)
 {
@@ -47,6 +49,17 @@ ObjectMap2D::ObjectMap2D(SDFMap2D* sdf_map, ros::NodeHandle& nh)
   leaf_size_ = 0.1f;  // Voxel grid leaf size for downsampling
 }
 
+void ObjectMap2D::reset()
+{
+  std::fill(object_indexs_.begin(), object_indexs_.end(), -1);
+  std::fill(object_buffer_.begin(), object_buffer_.end(), 0);
+  objects_.clear();
+  if (all_object_clouds_)
+    all_object_clouds_->clear();
+  if (over_depth_object_cloud_)
+    over_depth_object_cloud_->clear();
+}
+
 void ObjectMap2D::setConfidenceThreshold(double val)
 {
   min_confidence_ = val;
@@ -69,7 +82,8 @@ void ObjectMap2D::inputObservationObjectsCloud(
     const double& itm_score)
 {
   // Only process observations in fusion mode with observation enabled
-  if (fusion_type_ != 1 || !use_observation_)
+  if (fusion_type_ != 1 || !use_observation_ || !std::isfinite(itm_score) ||
+      observation_clouds.size() != objects_.size())
     return;
 
   // Process each observation cloud against corresponding objects
@@ -77,12 +91,12 @@ void ObjectMap2D::inputObservationObjectsCloud(
     auto observation_cloud = observation_clouds[i];
     auto object = objects_[i];
 
-    if (observation_cloud->points.empty())
+    if (!observation_cloud || observation_cloud->points.empty())
       continue;
 
     // Check overlap with each possible object classification
     for (int label = 0; label < 5; ++label) {
-      if (object.confidence_scores_[label] < 1e-3)
+      if (object.confidence_scores_[label] < 1e-3 || !object.clouds_[label])
         continue;  // Skip labels with negligible confidence
 
       // Setup spatial search for overlap computation
@@ -130,6 +144,9 @@ void ObjectMap2D::inputObservationObjectsCloud(
 
 int ObjectMap2D::searchSingleObjectCluster(const DetectedObject& detected_object)
 {
+  if (!detected_object.cloud || detected_object.source_stamp.isZero() ||
+      !isValidSemanticDetectionMetadata(detected_object.label, detected_object.score))
+    return -1;
   auto object_cloud = detected_object.cloud;
 
   // Initialize clustering analysis variables
@@ -143,8 +160,12 @@ int ObjectMap2D::searchSingleObjectCluster(const DetectedObject& detected_object
     Eigen::Vector2i idx;
     Eigen::Vector2d pt_w;
     pt_w << object_cloud->points[i].x, object_cloud->points[i].y;
+    if (!pt_w.allFinite() || !std::isfinite(object_cloud->points[i].z) || !sdf_map_->isInMap(pt_w))
+      continue;
     sdf_map_->posToIndex(pt_w, idx);
     int adr = sdf_map_->toAddress(idx);
+    if (adr < 0)
+      continue;
 
     // Skip duplicate grid cells
     if (flag_2d[adr] == 1)
@@ -175,6 +196,8 @@ int ObjectMap2D::searchSingleObjectCluster(const DetectedObject& detected_object
 
     // Check neighbors for existing object associations
     for (auto nbr : nbrs) {
+      if (!sdf_map_->isInMap(nbr))
+        continue;
       int nbr_adr = sdf_map_->toAddress(nbr);
       if (object_indexs_[nbr_adr] != -1) {
         // Found existing object cluster - use first match
@@ -203,7 +226,7 @@ int ObjectMap2D::searchSingleObjectCluster(const DetectedObject& detected_object
   // Update classification and visualization
   updateObjectBestLabel(obj_idx);
   if (is_vis_cloud_)
-    publishObjectClouds();
+    publishObjectClouds(detected_object.source_stamp);
 
   // Validate successful clustering
   if (obj_idx == -1) {

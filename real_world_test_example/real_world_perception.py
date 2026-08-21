@@ -19,7 +19,7 @@ from diagnostic_msgs.msg import DiagnosticArray, DiagnosticStatus, KeyValue
 from nav_msgs.msg import Odometry
 from sensor_msgs.msg import CameraInfo, Image, PointCloud2
 from sensor_msgs import point_cloud2
-from std_msgs.msg import Float64, Header, String
+from std_msgs.msg import Bool, Float64, Header, String
 from visualization_msgs.msg import Marker
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -47,10 +47,12 @@ class RealWorldNode:
         self.label_generation = 0
         self.llm_answer, self.room = [], "everywhere"
         self.world_frame = str(cfg.ros.world_frame)
+        self.camera_frame = str(cfg.ros.camera_frame)
+        self.last_sync_source_stamp = rospy.Time(0)
         self.last_result_stamp = rospy.Time(0)
         self.last_yolo_ms = float("nan")
         self.last_clip_ms = float("nan")
-        self.last_error = "waiting for synchronized input"
+        self.last_error = "disabled until cruise altitude"
         self.dropped_busy = 0
         self.dropped_stale = 0
         self.accepted = 0
@@ -58,6 +60,7 @@ class RealWorldNode:
         self.input_count = {"rgb": 0, "depth": 0, "pose": 0}
         self.last_input = {"rgb": rospy.Time(0), "depth": rospy.Time(0), "pose": rospy.Time(0)}
         self.server_health = {"YOLOE": False, "CLIPITM": False}
+        self.navigation_enabled = False
 
         self.semantic_pub = rospy.Publisher(
             "/apexnav/vlm/semantic_observation", SemanticObservation, queue_size=3)
@@ -74,6 +77,8 @@ class RealWorldNode:
 
         rospy.Subscriber(str(cfg.ros.camera_info_topic), CameraInfo, self._camera_info_cb, queue_size=2)
         rospy.Subscriber("/detector/label", String, self._label_cb, queue_size=1)
+        rospy.Subscriber("/apexnav/mission/navigation_enabled", Bool,
+                         self._navigation_enabled_cb, queue_size=1)
         rgb_sub = message_filters.Subscriber(str(cfg.ros.rgb_topic), Image)
         depth_sub = message_filters.Subscriber(str(cfg.ros.depth_topic), Image)
         pose_sub = message_filters.Subscriber(str(cfg.ros.camera_pose_topic), Odometry)
@@ -91,7 +96,15 @@ class RealWorldNode:
         rospy.loginfo("Lite perception uses atomic YOLOE+CLIPITM observations in %s", self.world_frame)
 
     def _camera_info_cb(self, msg):
-        if msg.width <= 0 or msg.height <= 0 or msg.K[0] <= 0 or msg.K[4] <= 0:
+        if msg.header.frame_id != self.camera_frame:
+            self.last_error = "CameraInfo frame mismatch"
+            return
+        calibration_values = np.asarray(
+            list(msg.K) + list(msg.D) + list(msg.R) + list(msg.P), dtype=np.float64)
+        if (msg.width <= 0 or msg.height <= 0 or len(msg.K) != 9 or
+                len(msg.R) != 9 or len(msg.P) != 12 or
+                not np.all(np.isfinite(calibration_values)) or
+                msg.K[0] <= 0 or msg.K[4] <= 0 or msg.K[8] == 0):
             self.last_error = "invalid CameraInfo"
             return
         with self.data_lock:
@@ -131,17 +144,64 @@ class RealWorldNode:
                 rospy.logwarn("LLM expansion unavailable; target only: %s", exc)
         rospy.loginfo("ApexNav target generation %d: %s", generation, label)
 
+    def _navigation_enabled_cb(self, msg):
+        enabled = bool(msg.data)
+        with self.data_lock:
+            if enabled == self.navigation_enabled:
+                return
+            self.navigation_enabled = enabled
+            self.label_generation += 1
+            self.last_result_stamp = rospy.Time(0)
+            self.last_sync_source_stamp = rospy.Time(0)
+            self.accepted = 0
+            self.last_error = ("waiting for post-takeoff synchronized input" if enabled else
+                               "disabled until cruise altitude")
+        with self.condition:
+            self.pending = None
+            self.condition.notify_all()
+        rospy.logwarn("VLM navigation %s", "enabled" if enabled else "disabled")
+
     def _input_cb(self, msg, stream):
         self.input_count[stream] += 1
         self.last_input[stream] = rospy.Time.now()
 
     def _sync_cb(self, rgb_msg, depth_msg, pose_msg):
         self.sync_received += 1
+        with self.data_lock:
+            enabled = self.navigation_enabled
+        if not enabled:
+            self.last_error = "disabled until cruise altitude"
+            return
         stamp = depth_msg.header.stamp
         if self.calibration_changed:
             return
         if stamp.is_zero():
             self.last_error = "zero source timestamp"
+            return
+        if (rgb_msg.header.frame_id != self.camera_frame or
+                depth_msg.header.frame_id != self.camera_frame or
+                pose_msg.header.frame_id != self.world_frame or
+                pose_msg.child_frame_id != self.camera_frame):
+            self.last_error = "RGB-D pose frame contract mismatch"
+            return
+        if (rgb_msg.encoding != "rgb8" or
+                depth_msg.encoding not in ("32FC1", "16UC1")):
+            self.last_error = "RGB-D encoding contract mismatch"
+            return
+        if (not self.last_sync_source_stamp.is_zero() and
+                stamp <= self.last_sync_source_stamp):
+            self.last_error = "source timestamp regression"
+            return
+        position = pose_msg.pose.pose.position
+        orientation = pose_msg.pose.pose.orientation
+        pose_values = np.asarray([
+            position.x, position.y, position.z,
+            orientation.x, orientation.y, orientation.z, orientation.w,
+        ] + list(pose_msg.pose.covariance), dtype=np.float64)
+        quaternion_norm = np.linalg.norm(pose_values[3:7])
+        if (not np.all(np.isfinite(pose_values)) or
+                quaternion_norm < 0.95 or quaternion_norm > 1.05):
+            self.last_error = "invalid camera pose"
             return
         deltas = [abs((rgb_msg.header.stamp - stamp).to_sec()),
                   abs((pose_msg.header.stamp - stamp).to_sec())]
@@ -162,6 +222,9 @@ class RealWorldNode:
         if info is None or label is None:
             self.last_error = "waiting for CameraInfo and target label"
             return
+        if info.header.frame_id != self.camera_frame:
+            self.last_error = "CameraInfo frame mismatch"
+            return
         if (info.width != rgb_msg.width or info.height != rgb_msg.height or
                 depth_msg.width != rgb_msg.width or depth_msg.height != rgb_msg.height):
             self.last_error = "RGB/depth/CameraInfo dimensions differ"
@@ -178,6 +241,7 @@ class RealWorldNode:
             if self.pending is not None:
                 self.dropped_busy += 1
             self.pending = item
+            self.last_sync_source_stamp = stamp
             self.condition.notify()
 
     def _worker(self):
@@ -217,7 +281,8 @@ class RealWorldNode:
         except Exception as exc:
             self.last_error = "CLIPITM failed: %s" % exc
         with self.data_lock:
-            current = generation == self.label_generation and label == self.label
+            current = (self.navigation_enabled and generation == self.label_generation and
+                       label == self.label)
         if not current or (rospy.Time.now() - stamp).to_sec() > float(self.cfg.vlm.stale_result_sec):
             self.dropped_stale += 1
             self.last_error = "discarded stale VLM generation"
@@ -291,12 +356,15 @@ class RealWorldNode:
         age = -1.0 if self.last_result_stamp.is_zero() else (rospy.Time.now() - self.last_result_stamp).to_sec()
         servers_ok = all(self.server_health.values())
         result_fresh = self.accepted > 0 and 0.0 <= age <= float(self.cfg.vlm.stale_result_sec)
-        ok = servers_ok and result_fresh
+        ok = self.navigation_enabled and servers_ok and result_fresh
+        if not self.navigation_enabled:
+            self.last_error = "disabled until cruise altitude"
         status.level = DiagnosticStatus.OK if ok else (DiagnosticStatus.WARN if servers_ok else DiagnosticStatus.ERROR)
         status.message = "YOLOE + CLIPITM inference ready" if ok else self.last_error
         status.values = [
             KeyValue("models", "YOLOE+CLIPITM"),
             KeyValue("target", self.label or ""),
+            KeyValue("navigation_enabled", str(self.navigation_enabled)),
             KeyValue("yoloe_ready", str(self.server_health["YOLOE"])),
             KeyValue("clipitm_ready", str(self.server_health["CLIPITM"])),
             KeyValue("result_age_sec", "%.3f" % age),

@@ -10,12 +10,86 @@
  */
 
 #include <plan_env/map_ros.h>
+#include <plan_env/semantic_cloud_contract.h>
+
+#include <stdexcept>
 
 namespace apexnav_planner {
+
+namespace {
+
+bool isFiniteCameraCalibration(const sensor_msgs::CameraInfo& info)
+{
+  for (const double value : info.K)
+    if (!std::isfinite(value))
+      return false;
+  for (const double value : info.D)
+    if (!std::isfinite(value))
+      return false;
+  for (const double value : info.R)
+    if (!std::isfinite(value))
+      return false;
+  for (const double value : info.P)
+    if (!std::isfinite(value))
+      return false;
+  return true;
+}
+
+}  // namespace
 
 void MapROS::setMap(SDFMap2D* map)
 {
   this->map_ = map;
+}
+
+ros::Time MapROS::mapOutputStamp() const
+{
+  // Before the first complete source frame, periodic empty snapshots are
+  // explicitly zero-stamped rather than claiming receipt-time freshness.
+  return last_map_source_stamp_;
+}
+
+ros::Time MapROS::esdfOutputStamp() const
+{
+  // ESDF is computed asynchronously. Its timestamp must describe the buffer
+  // actually finished by updateESDFMap, never a newer occupancy mutation.
+  return last_esdf_source_stamp_;
+}
+
+void MapROS::resetSourceEpoch(bool clear_map_contents)
+{
+  mapping_history_.clear();
+  last_map_source_stamp_ = ros::Time(0);
+  pending_esdf_source_stamp_ = ros::Time(0);
+  last_esdf_source_stamp_ = ros::Time(0);
+  current_depth_source_stamp_ = ros::Time(0);
+  last_semantic_stamp_ = ros::Time(0);
+  last_camera_info_source_stamp_ = ros::Time(0);
+  last_clock_now_ = ros::Time(0);
+  local_updated_ = false;
+  esdf_need_update_ = false;
+  continue_over_depth_count_ = -1;
+  itm_score_ = -1.0;
+  semantic_target_.clear();
+  if (depth_cloud_)
+    depth_cloud_->clear();
+  if (max_range_cloud_)
+    max_range_cloud_->clear();
+  if (filtered_depth_cloud2d_)
+    filtered_depth_cloud2d_->clear();
+  if (free_ray_cloud2d_)
+    free_ray_cloud2d_->clear();
+  if (clear_map_contents && map_)
+    map_->resetForSourceEpoch();
+}
+
+void MapROS::observeClock(const ros::Time& now)
+{
+  if (!last_clock_now_.isZero() && now < last_clock_now_) {
+    ROS_WARN("ROS clock reset detected; clearing all map, ESDF and semantic epoch state");
+    resetSourceEpoch(true);
+  }
+  last_clock_now_ = now;
 }
 
 void MapROS::init()
@@ -29,12 +103,27 @@ void MapROS::init()
   node_.param("map_ros/require_downward_camera", require_downward_camera_, false);
   node_.param("map_ros/mapping_history_sec", mapping_history_sec_, 5.0);
   node_.param("map_ros/semantic_match_tolerance", semantic_match_tolerance_, 0.05);
-  camera_info_ready_ = !use_camera_info_;
+  node_.param("map_ros/camera_info_match_tolerance", camera_info_match_tolerance_, 0.01);
+  // A frame contract cannot be checked without a CameraInfo frame. Even
+  // legacy intrinsic settings therefore wait for one coherent CameraInfo.
+  camera_info_ready_ = false;
   camera_width_ = camera_height_ = 0;
+  camera_frame_id_.clear();
+  last_camera_info_source_stamp_ = ros::Time(0);
+  if (!std::isfinite(camera_info_match_tolerance_) || camera_info_match_tolerance_ < 0.0) {
+    ROS_FATAL("map_ros/camera_info_match_tolerance must be finite and non-negative");
+    throw std::invalid_argument("invalid CameraInfo/depth timestamp tolerance");
+  }
 
   // Load depth filtering parameters
   node_.param("map_ros/depth_filter_maxdist", depth_filter_maxdist_, -1.0);
   node_.param("map_ros/depth_filter_mindist", depth_filter_mindist_, -1.0);
+  node_.param("map_ros/self_filter_length", self_filter_length_, 0.70);
+  node_.param("map_ros/self_filter_width", self_filter_width_, 0.70);
+  node_.param("map_ros/self_filter_tolerance", self_filter_tolerance_, 1e-6);
+  node_.param("map_ros/camera_forward_offset", camera_forward_offset_, 0.10);
+  node_.param<std::string>(
+      "map_ros/height_filter_reference", height_filter_reference_, "world");
   node_.param("map_ros/depth_filter_margin", depth_filter_margin_, -1);
   node_.param("map_ros/filter_min_height", filter_min_height_, 0.5);
   node_.param("map_ros/filter_max_height", filter_max_height_, 0.88);
@@ -43,6 +132,43 @@ void MapROS::init()
   node_.param("map_ros/skip_pixel", skip_pixel_, -1);
   node_.param("map_ros/frame_id", frame_id_, string("world"));
   node_.param("map_ros/virtual_ground_height", virtual_ground_height_, -0.28);
+  node_.param("map_ros/max_source_age_sec", max_map_source_age_sec_, 1.0);
+  node_.param("map_ros/max_future_sec", max_map_future_sec_, 0.05);
+
+  if (!std::isfinite(mapping_history_sec_) || mapping_history_sec_ <= 0.0 ||
+      !std::isfinite(semantic_match_tolerance_) || semantic_match_tolerance_ < 0.0 ||
+      !std::isfinite(max_map_source_age_sec_) || max_map_source_age_sec_ <= 0.0 ||
+      !std::isfinite(max_map_future_sec_) || max_map_future_sec_ < 0.0) {
+    ROS_FATAL("Invalid map source/history timestamp policy");
+    throw std::invalid_argument("invalid map source/history timestamp policy");
+  }
+
+  if (height_filter_reference_ != "world" && height_filter_reference_ != "sensor") {
+    ROS_WARN("Unknown map_ros/height_filter_reference '%s'; using 'world'",
+        height_filter_reference_.c_str());
+    height_filter_reference_ = "world";
+  }
+  if (!(filter_min_height_ < filter_max_height_)) {
+    ROS_FATAL("Invalid obstacle height band [%.3f, %.3f]",
+        filter_min_height_, filter_max_height_);
+    throw std::invalid_argument("map_ros obstacle height band is empty");
+  }
+  if (height_filter_reference_ == "sensor" &&
+      !(filter_min_height_ < 0.0 && filter_max_height_ > 0.0)) {
+    ROS_FATAL("Sensor-relative obstacle height offsets must straddle zero; got [%.3f, %.3f]",
+        filter_min_height_, filter_max_height_);
+    throw std::invalid_argument("sensor-relative obstacle height band must straddle zero");
+  }
+  ROS_INFO("Obstacle height filter uses %s reference with band [%.3f, %.3f] m",
+      height_filter_reference_.c_str(), filter_min_height_, filter_max_height_);
+  if (!(self_filter_length_ > 0.0) || !(self_filter_width_ > 0.0) ||
+      self_filter_tolerance_ < 0.0) {
+    ROS_FATAL("Invalid self footprint %.3f x %.3f m (tolerance %.6f)",
+        self_filter_length_, self_filter_width_, self_filter_tolerance_);
+    throw std::invalid_argument("map_ros self footprint is invalid");
+  }
+  ROS_INFO("Depth self-filter uses yaw-aligned %.2f x %.2f m footprint (tolerance %.1e)",
+      self_filter_length_, self_filter_width_, self_filter_tolerance_);
 
   // Handle Habitat simulator vs real-world configuration
   bool is_real_world;
@@ -65,7 +191,9 @@ void MapROS::init()
 
   // Initialize point cloud data structures
   depth_cloud_.reset(new PointCloud3D());
+  max_range_cloud_.reset(new PointCloud3D());
   filtered_depth_cloud2d_.reset(new PointCloud2D());
+  free_ray_cloud2d_.reset(new PointCloud2D());
 
   // Image-dependent buffers are allocated from the received dimensions.
   proj_points_cnt_ = 0;
@@ -74,6 +202,13 @@ void MapROS::init()
   // Initialize state flags
   local_updated_ = false;
   esdf_need_update_ = false;
+  mapping_enabled_ = false;
+  navigation_enabled_ = false;
+  last_map_source_stamp_ = ros::Time(0);
+  pending_esdf_source_stamp_ = ros::Time(0);
+  last_esdf_source_stamp_ = ros::Time(0);
+  current_depth_source_stamp_ = ros::Time(0);
+  last_clock_now_ = ros::Time(0);
 
   // Setup periodic timers for map updates and visualization
   esdf_timer_ = node_.createTimer(ros::Duration(0.1), &MapROS::updateESDFCallback, this);
@@ -100,6 +235,7 @@ void MapROS::init()
       node_.advertise<sensor_msgs::PointCloud2>("/grid_map/over_depth_object_cloud", 10);
   value_map_pub_ = node_.advertise<sensor_msgs::PointCloud2>("/grid_map/value_map", 10);
   confidence_map_pub_ = node_.advertise<sensor_msgs::PointCloud2>("/grid_map/confidence_map", 10);
+  map_commit_pub_ = node_.advertise<std_msgs::Header>("/grid_map/commit", 10);
 
   // Atomic semantic observations are the real/Gazebo interface. Legacy
   // subscribers remain optional for Habitat compatibility only.
@@ -107,6 +243,10 @@ void MapROS::init()
       "/apexnav/vlm/semantic_observation", 10, &MapROS::semanticObservationCallback, this);
   camera_info_sub_ = node_.subscribe(
       "/map_ros/camera_info", 2, &MapROS::cameraInfoCallback, this);
+  mapping_enabled_sub_ = node_.subscribe(
+      "/apexnav/mission/mapping_enabled", 2, &MapROS::mappingEnabledCallback, this);
+  navigation_enabled_sub_ = node_.subscribe(
+      "/apexnav/mission/navigation_enabled", 2, &MapROS::navigationEnabledCallback, this);
   bool enable_legacy_semantics;
   node_.param("map_ros/enable_legacy_semantics", enable_legacy_semantics, false);
   if (enable_legacy_semantics) {
@@ -134,12 +274,42 @@ void MapROS::init()
 
 void MapROS::itmScoreCallback(const std_msgs::Float64ConstPtr& msg)
 {
+  if (!navigation_enabled_)
+    return;
   itm_score_ = msg->data;
+}
+
+void MapROS::mappingEnabledCallback(const std_msgs::BoolConstPtr& msg)
+{
+  const bool enabled = msg->data;
+  if (enabled == mapping_enabled_)
+    return;
+
+  mapping_enabled_ = enabled;
+  resetSourceEpoch(mappingTransitionRequiresFullReset(enabled));
+  if (enabled) {
+    map_start_time_ = ros::Time::now();
+    last_clock_now_ = map_start_time_;
+  }
+  ROS_WARN("Depth mapping %s", enabled ? "enabled" : "disabled");
+}
+
+void MapROS::navigationEnabledCallback(const std_msgs::BoolConstPtr& msg)
+{
+  const bool enabled = msg->data;
+  if (enabled == navigation_enabled_)
+    return;
+
+  navigation_enabled_ = enabled;
+  last_semantic_stamp_ = ros::Time(0);
+  semantic_target_.clear();
+  ROS_WARN("Semantic map updates %s", enabled ? "enabled" : "disabled");
 }
 
 void MapROS::visCallback(const ros::TimerEvent& e)
 {
   vis_timer_.stop();
+  observeClock(ros::Time::now());
 
   // Publish all visualization topics
   publishOccupied();
@@ -157,9 +327,22 @@ void MapROS::visCallback(const ros::TimerEvent& e)
 
 void MapROS::cameraInfoCallback(const sensor_msgs::CameraInfoConstPtr& msg)
 {
-  if (msg->width == 0 || msg->height == 0 || !std::isfinite(msg->K[0]) ||
-      !std::isfinite(msg->K[4]) || msg->K[0] <= 0.0 || msg->K[4] <= 0.0) {
-    ROS_ERROR_THROTTLE(2.0, "Rejecting invalid CameraInfo");
+  const ros::Time now = ros::Time::now();
+  observeClock(now);
+  if (!isAcceptableMapSourceStamp(msg->header.stamp.toSec(), now.toSec(),
+          last_camera_info_source_stamp_.toSec(), max_map_source_age_sec_,
+          max_map_future_sec_)) {
+    ROS_WARN_THROTTLE(2.0,
+        "Rejecting CameraInfo source stamp %.9f (zero, stale, future, or non-monotonic)",
+        msg->header.stamp.toSec());
+    return;
+  }
+  if (msg->header.frame_id.empty() || msg->width == 0 || msg->height == 0 ||
+      !isFiniteCameraCalibration(*msg) || msg->K[0] <= 0.0 || msg->K[4] <= 0.0 ||
+      msg->K[8] == 0.0 || msg->K[2] < 0.0 || msg->K[5] < 0.0 ||
+      msg->K[2] >= static_cast<double>(msg->width) ||
+      msg->K[5] >= static_cast<double>(msg->height)) {
+    ROS_ERROR_THROTTLE(2.0, "Rejecting invalid CameraInfo or empty optical frame");
     return;
   }
   if (camera_info_ready_ &&
@@ -175,17 +358,28 @@ void MapROS::cameraInfoCallback(const sensor_msgs::CameraInfoConstPtr& msg)
     ROS_ERROR_THROTTLE(2.0, "CameraInfo intrinsics changed during mapping; restart required");
     return;
   }
+  if (camera_info_ready_ && camera_frame_id_ != msg->header.frame_id) {
+    ROS_ERROR_THROTTLE(2.0, "CameraInfo frame changed from '%s' to '%s'; rejecting update",
+        camera_frame_id_.c_str(), msg->header.frame_id.c_str());
+    return;
+  }
   fx_ = msg->K[0];
   fy_ = msg->K[4];
   cx_ = msg->K[2];
   cy_ = msg->K[5];
   camera_width_ = msg->width;
   camera_height_ = msg->height;
+  camera_frame_id_ = msg->header.frame_id;
+  last_camera_info_source_stamp_ = msg->header.stamp;
   camera_info_ready_ = true;
 }
 
 void MapROS::semanticObservationCallback(const plan_env::SemanticObservationConstPtr& msg)
 {
+  const ros::Time now = ros::Time::now();
+  observeClock(now);
+  if (!navigation_enabled_)
+    return;
   if (msg->header.stamp.isZero() || msg->target_label.empty()) {
     ROS_WARN_THROTTLE(2.0, "Rejecting semantic observation without source stamp/target");
     return;
@@ -200,13 +394,33 @@ void MapROS::semanticObservationCallback(const plan_env::SemanticObservationCons
     ROS_ERROR("Rejecting inconsistent SemanticObservation arrays");
     return;
   }
-  if (!semantic_target_.empty() && msg->target_label != semantic_target_) {
-    last_semantic_stamp_ = ros::Time(0);
-  }
-  semantic_target_ = msg->target_label;
-  if (!last_semantic_stamp_.isZero() && msg->header.stamp <= last_semantic_stamp_) {
-    ROS_WARN_THROTTLE(2.0, "Rejecting duplicate/out-of-order semantic observation");
+  if (!msg->yolo_valid && !msg->point_clouds.empty()) {
+    ROS_ERROR("Rejecting SemanticObservation with detections while yolo_valid is false");
     return;
+  }
+  if (msg->clip_valid && !std::isfinite(msg->clip_score)) {
+    ROS_ERROR("Rejecting SemanticObservation with non-finite valid CLIP score");
+    return;
+  }
+  const double semantic_max_age = std::max(max_map_source_age_sec_, mapping_history_sec_);
+  if (!isAcceptableMapSourceStamp(msg->header.stamp.toSec(), now.toSec(),
+          last_semantic_stamp_.toSec(), semantic_max_age, max_map_future_sec_)) {
+    ROS_WARN_THROTTLE(2.0,
+        "Rejecting semantic source stamp %.9f (zero, stale, future, or non-monotonic)",
+        msg->header.stamp.toSec());
+    return;
+  }
+  for (size_t index = 0; index < msg->point_clouds.size(); ++index) {
+    const auto& cloud = msg->point_clouds[index];
+    if (!isValidSemanticDetectionMetadata(
+            msg->label_indices[index], msg->confidence_scores[index]) ||
+        !isValidNestedCloudContract(msg->header.stamp.toSec(), msg->header.frame_id,
+            cloud.header.stamp.toSec(), cloud.header.frame_id) ||
+        !isFiniteXYZ32PointCloud(cloud)) {
+      ROS_ERROR("Rejecting entire SemanticObservation: detection %zu violates metadata/cloud contract",
+          index);
+      return;
+    }
   }
 
   auto best = mapping_history_.end();
@@ -224,6 +438,10 @@ void MapROS::semanticObservationCallback(const plan_env::SemanticObservationCons
     return;
   }
 
+  // Only after the complete observation and historical match pass validation
+  // may any semantic state be committed.
+  semantic_target_ = msg->target_label;
+
   // Run the existing object-map logic against the historical source frame,
   // never against whichever depth callback happened to run most recently.
   const Eigen::Vector3d current_camera_pos = camera_pos_;
@@ -238,7 +456,7 @@ void MapROS::semanticObservationCallback(const plan_env::SemanticObservationCons
   legacy->confidence_scores = msg->confidence_scores;
   legacy->label_indices = msg->label_indices;
   if (msg->yolo_valid)
-    detectedObjectCloudCallback(legacy);
+    processDetectedObjectCloud(legacy, best->stamp);
   if (msg->clip_valid && std::isfinite(msg->clip_score))
     map_->value_map_->updateValueMap(Eigen::Vector2d(best->camera_pos.x(), best->camera_pos.y()),
         best->camera_yaw, best->free_grids, msg->clip_score);
@@ -250,11 +468,42 @@ void MapROS::semanticObservationCallback(const plan_env::SemanticObservationCons
 
 void MapROS::detectedObjectCloudCallback(const plan_env::MultipleMasksWithConfidenceConstPtr& msg)
 {
+  (void)msg;
+  // This legacy message has no header. Receipt time must never be converted
+  // into a map source time, so only the atomic SemanticObservation path can
+  // feed semantic object mapping.
+  ROS_WARN_THROTTLE(2.0,
+      "Dropping headerless legacy object cloud; use SemanticObservation with a source stamp");
+}
+
+void MapROS::processDetectedObjectCloud(
+    const plan_env::MultipleMasksWithConfidenceConstPtr& msg, const ros::Time& source_stamp)
+{
+  if (!navigation_enabled_)
+    return;
+  if (source_stamp.isZero()) {
+    ROS_WARN_THROTTLE(2.0, "Dropping semantic object cloud without matched depth source stamp");
+    return;
+  }
   // Validate message structure consistency
   if (!(msg->confidence_scores.size() == msg->point_clouds.size() &&
           msg->confidence_scores.size() == msg->label_indices.size())) {
     ROS_ERROR("[Bug] The MultipleMasksWithConfidence msg is wrong!!!");
     return;
+  }
+  // Defense in depth: do not mutate over-depth/object state until every
+  // detection has passed the fixed-size class, finite and PointCloud2 layout
+  // contracts. The atomic callback performs the same preflight validation.
+  for (size_t index = 0; index < msg->confidence_scores.size(); ++index) {
+    const auto& cloud = msg->point_clouds[index];
+    if (!isValidSemanticDetectionMetadata(
+            msg->label_indices[index], msg->confidence_scores[index]) ||
+        !isValidNestedCloudContract(source_stamp.toSec(), frame_id_,
+            cloud.header.stamp.toSec(), cloud.header.frame_id) ||
+        !isFiniteXYZ32PointCloud(cloud)) {
+      ROS_ERROR("Rejecting entire semantic object frame at detection %zu", index);
+      return;
+    }
   }
 
   auto t1 = ros::Time::now();
@@ -310,7 +559,9 @@ void MapROS::detectedObjectCloudCallback(const plan_env::MultipleMasksWithConfid
     // Skip objects that are entirely beyond valid depth range
     if (single_object_cloud->points.empty()) {
       if (!over_depth_object_cloud->points.empty()) {
-        ROS_ERROR("Have all over depth object cloud!!!!");
+        ROS_WARN_THROTTLE(2.0,
+            "Semantic object cloud is entirely beyond the valid %.2fm depth range; "
+            "retaining it only for over-depth consistency tracking.", depth_filter_maxdist_);
         *map_->object_map2d_->over_depth_object_cloud_ += *over_depth_object_cloud;
       }
       continue;
@@ -334,6 +585,7 @@ void MapROS::detectedObjectCloudCallback(const plan_env::MultipleMasksWithConfid
     detected_object.cloud = single_object_cloud;
     detected_object.score = confidence_score;
     detected_object.label = label;
+    detected_object.source_stamp = source_stamp;
     detected_objects.push_back(detected_object);
   }
 
@@ -350,9 +602,10 @@ void MapROS::detectedObjectCloudCallback(const plan_env::MultipleMasksWithConfid
   }
 
   // Publish visualization point clouds for debugging and monitoring
-  publishPointCloud(filtered_object_cloud_pub_, filtered_all_object_cloud);
-  publishPointCloud(all_object_cloud_pub_, all_object_cloud);
-  publishPointCloud(over_depth_object_cloud_pub_, map_->object_map2d_->over_depth_object_cloud_);
+  publishPointCloud(filtered_object_cloud_pub_, filtered_all_object_cloud, source_stamp);
+  publishPointCloud(all_object_cloud_pub_, all_object_cloud, source_stamp);
+  publishPointCloud(
+      over_depth_object_cloud_pub_, map_->object_map2d_->over_depth_object_cloud_, source_stamp);
 
   // Update object map with processed detection results
   *map_->object_map2d_->all_object_clouds_ = *filtered_all_object_cloud;
@@ -373,13 +626,18 @@ void MapROS::detectedObjectCloudCallback(const plan_env::MultipleMasksWithConfid
 
 void MapROS::updateESDFCallback(const ros::TimerEvent& /*event*/)
 {
-  if (!esdf_need_update_)
+  observeClock(ros::Time::now());
+  if (!mapping_enabled_ || !esdf_need_update_)
     return;
 
   esdf_timer_.stop();
 
   auto t1 = ros::Time::now();
+  const ros::Time source_stamp = pending_esdf_source_stamp_;
   map_->updateESDFMap();
+  if (!source_stamp.isZero())
+    last_esdf_source_stamp_ = source_stamp;
+  pending_esdf_source_stamp_ = ros::Time(0);
   esdf_need_update_ = false;
   double esdf_time = (ros::Time::now() - t1).toSec();
   ROS_INFO_THROTTLE(50.0, "[Calculating Time] ESDF Map process time = %.3f s", esdf_time);
@@ -390,6 +648,10 @@ void MapROS::updateESDFCallback(const ros::TimerEvent& /*event*/)
 void MapROS::depthPoseCallback(
     const sensor_msgs::ImageConstPtr& img, const nav_msgs::OdometryConstPtr& pose)
 {
+  if (!mapping_enabled_)
+    return;
+  const ros::Time now = ros::Time::now();
+  observeClock(now);
   if (!camera_info_ready_) {
     ROS_WARN_THROTTLE(2.0, "Waiting for valid CameraInfo before mapping");
     return;
@@ -399,17 +661,49 @@ void MapROS::depthPoseCallback(
     ROS_WARN_THROTTLE(2.0, "Rejecting depth/pose without coherent source timestamps");
     return;
   }
+  if (!isValidMapFrameContract(frame_id_, pose->header.frame_id, pose->child_frame_id,
+          img->header.frame_id, camera_frame_id_)) {
+    ROS_ERROR_THROTTLE(2.0,
+        "Rejecting frame contract: map='%s' pose='%s' child='%s' depth='%s' camera_info='%s'",
+        frame_id_.c_str(), pose->header.frame_id.c_str(), pose->child_frame_id.c_str(),
+        img->header.frame_id.c_str(), camera_frame_id_.c_str());
+    return;
+  }
+  const auto& pose_position = pose->pose.pose.position;
+  const auto& pose_orientation = pose->pose.pose.orientation;
+  if (!isFinitePoseAndReasonableQuaternion(pose_position.x, pose_position.y, pose_position.z,
+          pose_orientation.x, pose_orientation.y, pose_orientation.z, pose_orientation.w)) {
+    ROS_ERROR_THROTTLE(2.0, "Rejecting non-finite pose or unreasonable pose quaternion");
+    return;
+  }
+  const ros::Time source_stamp = img->header.stamp;
+  if (!isAcceptableMapSourceStamp(source_stamp.toSec(), now.toSec(),
+          last_map_source_stamp_.toSec(), max_map_source_age_sec_, max_map_future_sec_)) {
+    ROS_WARN_THROTTLE(2.0,
+        "Rejecting depth source stamp %.9f (zero, stale, future, or non-monotonic)",
+        source_stamp.toSec());
+    return;
+  }
+  if (!isSourceStampCoherent(source_stamp.toSec(),
+          last_camera_info_source_stamp_.toSec(), camera_info_match_tolerance_)) {
+    ROS_WARN_THROTTLE(2.0,
+        "Rejecting depth source %.9f without coherent CameraInfo source (last %.9f, tolerance %.3fs)",
+        source_stamp.toSec(), last_camera_info_source_stamp_.toSec(),
+        camera_info_match_tolerance_);
+    return;
+  }
   if (camera_width_ > 0 && (camera_width_ != static_cast<int>(img->width) ||
                               camera_height_ != static_cast<int>(img->height))) {
     ROS_ERROR_THROTTLE(2.0, "Depth dimensions differ from CameraInfo");
     return;
   }
   // Extract camera pose from odometry message
-  camera_pos_(0) = pose->pose.pose.position.x;
-  camera_pos_(1) = pose->pose.pose.position.y;
-  camera_pos_(2) = pose->pose.pose.position.z;
-  camera_q_ = Eigen::Quaterniond(pose->pose.pose.orientation.w, pose->pose.pose.orientation.x,
-      pose->pose.pose.orientation.y, pose->pose.pose.orientation.z);
+  camera_pos_(0) = pose_position.x;
+  camera_pos_(1) = pose_position.y;
+  camera_pos_(2) = pose_position.z;
+  camera_q_ = Eigen::Quaterniond(pose_orientation.w, pose_orientation.x, pose_orientation.y,
+      pose_orientation.z);
+  camera_q_.normalize();
 
   // ROS optical +Z is the viewing direction. Project that axis into the map
   // plane; Euler-Z of an optical quaternion is offset by roughly 90 degrees.
@@ -452,6 +746,7 @@ void MapROS::depthPoseCallback(
     ROS_ERROR_THROTTLE(2.0, "Unsupported depth encoding '%s'", img->encoding.c_str());
     return;
   }
+  current_depth_source_stamp_ = source_stamp;
 
   auto t1 = ros::Time::now();
 
@@ -459,11 +754,24 @@ void MapROS::depthPoseCallback(
   processDepthImage();
   filterPointCloudToXY();
 
-  // Update occupancy grid with filtered depth data
+  // Update occupancy grid with filtered depth data.
   vector<Eigen::Vector2i> free_grids;
-  // Dilate free_grids to ensure more complete coverage
+  const bool has_map_observation = !filtered_depth_cloud2d_->empty() || !free_ray_cloud2d_->empty();
+  if (!has_map_observation) {
+    ROS_WARN_THROTTLE(2.0, "Depth frame had no valid mapping endpoints; source stamp not committed");
+    return;
+  }
+  map_->inputDepthCloud2D(
+      filtered_depth_cloud2d_, free_ray_cloud2d_, camera_pos_, free_grids);
+  // inputDepthCloud2D creates free_grids; dilating before it is a no-op.
   dilateGrids(free_grids, 1);
-  map_->inputDepthCloud2D(filtered_depth_cloud2d_, camera_pos_, free_grids);
+  // A body-mounted depth camera can see the airframe/propeller plane. Those
+  // body-fixed returns must not accumulate into a world-fixed obstacle ring.
+  // Exclude current vehicle volume and clear any historic self returns before
+  // inflation/ESDF updates.
+  const SelfFilterFootprint self_footprint{
+      self_filter_length_, self_filter_width_, self_filter_tolerance_};
+  map_->clearOccupancyFootprint(currentVehicleCenter2D(), currentVehicleYaw(), self_footprint);
   double process_time = (ros::Time::now() - t1).toSec();
   ROS_INFO_THROTTLE(50.0, "[Calculating Time] Grid Map process time = %.3f s", process_time);
 
@@ -477,16 +785,25 @@ void MapROS::depthPoseCallback(
   frame.free_grids = free_grids;
   frame.depth_cloud.reset(new PointCloud3D(*depth_cloud_));
   mapping_history_.push_back(frame);
-  const ros::Time cutoff = frame.stamp - ros::Duration(mapping_history_sec_);
+  ros::Time cutoff;
+  cutoff.fromSec(clampedHistoryCutoffSec(frame.stamp.toSec(), mapping_history_sec_));
   while (!mapping_history_.empty() && mapping_history_.front().stamp < cutoff)
     mapping_history_.pop_front();
 
   // Trigger ESDF update if local map has been updated
   if (local_updated_) {
     map_->clearAndInflateLocalMap();
+    pending_esdf_source_stamp_ = source_stamp;
     esdf_need_update_ = true;
     local_updated_ = false;
   }
+  // Do not let receipt/timer time make an old frame appear fresh. Commit only
+  // after all occupancy, self-history cleanup and inflation work has succeeded.
+  last_map_source_stamp_ = source_stamp;
+  std_msgs::Header commit;
+  commit.stamp = source_stamp;
+  commit.frame_id = frame_id_;
+  map_commit_pub_.publish(commit);
 }
 
 void MapROS::processDepthImage()
@@ -498,9 +815,11 @@ void MapROS::processDepthImage()
   Eigen::Matrix3d camera_r = camera_q_.toRotationMatrix();
   Eigen::Vector3d pt_cur, pt_world;
   depth_cloud_->clear();
+  max_range_cloud_->clear();
   const int estimated_points =
       std::max(1, (rows / std::max(1, skip_pixel_)) * (cols / std::max(1, skip_pixel_)));
   depth_cloud_->points.reserve(estimated_points);
+  max_range_cloud_->points.reserve(estimated_points);
 
   // Iterate through depth image pixels with margin and skipping for efficiency
   for (int v = depth_filter_margin_; v < rows - depth_filter_margin_; v += skip_pixel_) {
@@ -508,9 +827,14 @@ void MapROS::processDepthImage()
       depth = depth_image_->at<float>(v, u);
 
       // Apply depth range filtering
-      if (!std::isfinite(depth) || depth <= 0.0 || depth < depth_filter_mindist_)
+      if (std::isnan(depth) || depth <= 0.0 || depth < depth_filter_mindist_)
         continue;
-      if (depth > depth_filter_maxdist_)
+      // A return at or beyond the mapping limit means that this ray did not
+      // hit an obstacle inside the local map. Keep it as a separate free ray.
+      // Clamping it into the obstacle cloud creates a false circular wall at
+      // depth_filter_maxdist_ during a yaw scan.
+      const bool max_range_ray = !std::isfinite(depth) || depth >= depth_filter_maxdist_;
+      if (max_range_ray)
         depth = depth_filter_maxdist_;
 
       // Project pixel to 3D camera coordinates
@@ -520,18 +844,26 @@ void MapROS::processDepthImage()
 
       // Transform to world coordinates
       pt_world = camera_r * pt_cur + camera_pos_;
+      if (!pt_world.allFinite())
+        continue;
       Point3D pt;
       pt.x = pt_world[0];
       pt.y = pt_world[1];
       pt.z = pt_world[2];
-      depth_cloud_->points.push_back(pt);
+      if (max_range_ray)
+        max_range_cloud_->points.push_back(pt);
+      else
+        depth_cloud_->points.push_back(pt);
       ++proj_points_cnt_;
     }
   }
   depth_cloud_->width = depth_cloud_->points.size();
   depth_cloud_->height = 1;
   depth_cloud_->is_dense = false;
-  publishPointCloud(depth_cloud_pub_, depth_cloud_);
+  max_range_cloud_->width = max_range_cloud_->points.size();
+  max_range_cloud_->height = 1;
+  max_range_cloud_->is_dense = false;
+  publishPointCloud(depth_cloud_pub_, depth_cloud_, current_depth_source_stamp_);
 }
 
 /**
@@ -556,7 +888,9 @@ void MapROS::getObservationObjectsCloud(const std::vector<int>& filter_object_id
   vector<Vector3d> bmins, bmaxs;
   map_->object_map2d_->getObjectBoxes(bmins, bmaxs);
   vector<char> filter_object_flag(bmins.size(), 0);
-  for (auto filter_object_id : filter_object_ids) filter_object_flag[filter_object_id] = 1;
+  for (auto filter_object_id : filter_object_ids)
+    if (filter_object_id >= 0 && filter_object_id < static_cast<int>(filter_object_flag.size()))
+      filter_object_flag[filter_object_id] = 1;
 
   // Use CropBox filter to extract points within object bounding boxes
   pcl::CropBox<Point3D> crop_box_filter;
@@ -595,16 +929,27 @@ void MapROS::filterPointCloudToXY()
   auto t1 = ros::Time::now();
   PointCloud3D::Ptr filtered_cloud_3d(new PointCloud3D());
   PointCloud3D::Ptr down_depth_cloud_3d(new PointCloud3D());
+  PointCloud3D::Ptr down_max_range_cloud_3d(new PointCloud3D());
   PointCloud3D::Ptr under_ground_cloud_3d(new PointCloud3D());
   PointCloud2D::Ptr under_ground_cloud_2d(new PointCloud2D());
+  const Eigen::Vector2d vehicle_center = currentVehicleCenter2D();
+  const auto obstacle_height_bounds = obstacleHeightBounds();
+  const double obstacle_min_z = obstacle_height_bounds.first;
+  const double obstacle_max_z = obstacle_height_bounds.second;
+  int self_filtered_points = 0;
+  int below_obstacle_band_points = 0;
+  int above_obstacle_band_points = 0;
 
   // Downsample point cloud for efficient processing
   pcl::VoxelGrid<Point3D> voxel_filter;
   voxel_filter.setInputCloud(depth_cloud_);
   voxel_filter.setLeafSize(0.04f, 0.04f, 0.1f);  // Different resolution for XY vs Z
   voxel_filter.filter(*down_depth_cloud_3d);
+  voxel_filter.setInputCloud(max_range_cloud_);
+  voxel_filter.filter(*down_max_range_cloud_3d);
 
   filtered_depth_cloud2d_->clear();
+  free_ray_cloud2d_->clear();
 
   // Separate points by height categories
   for (int i = 0; i < (int)down_depth_cloud_3d->points.size(); i++) {
@@ -613,13 +958,28 @@ void MapROS::filterPointCloudToXY()
     pt.y = down_depth_cloud_3d->points[i].y;
     pt.z = down_depth_cloud_3d->points[i].z;
 
+    // Reject returns inside the vehicle volume before either obstacle or
+    // virtual-ground processing. These are physically incapable of being a
+    // static external obstacle and are normally airframe/self reflections.
+    const SelfFilterFootprint self_footprint{
+        self_filter_length_, self_filter_width_, self_filter_tolerance_};
+    if (isInsideSelfFootprint(pt.x, pt.y, vehicle_center.x(), vehicle_center.y(),
+            currentVehicleYaw(), self_footprint)) {
+      ++self_filtered_points;
+      continue;
+    }
+
     // Points below virtual ground (for virtual ground generation)
     if (down_depth_cloud_3d->points[i].z < cur_floor_height + virtual_ground)
       under_ground_cloud_3d->points.push_back(pt);
     // Points in obstacle height range
-    else if (down_depth_cloud_3d->points[i].z > cur_floor_height + filter_min_height_ &&
-             down_depth_cloud_3d->points[i].z < cur_floor_height + filter_max_height_)
+    else if (down_depth_cloud_3d->points[i].z > obstacle_min_z &&
+             down_depth_cloud_3d->points[i].z < obstacle_max_z)
       filtered_cloud_3d->points.push_back(pt);
+    else if (down_depth_cloud_3d->points[i].z <= obstacle_min_z)
+      ++below_obstacle_band_points;
+    else
+      ++above_obstacle_band_points;
   }
 
   pcl::RadiusOutlierRemoval<Point3D> outrem;
@@ -632,7 +992,15 @@ void MapROS::filterPointCloudToXY()
     outrem.filter(*filtered_cloud_3d);
   }
 
-  publishPointCloud(filtered_depth_cloud_pub_, filtered_cloud_3d);
+  publishPointCloud(filtered_depth_cloud_pub_, filtered_cloud_3d, current_depth_source_stamp_);
+  ROS_INFO_THROTTLE(2.0,
+      "Depth self-filter removed %d points inside yaw-aligned %.2f x %.2f m vehicle footprint",
+      self_filtered_points, self_filter_length_, self_filter_width_);
+  ROS_INFO_THROTTLE(2.0,
+      "Depth obstacle height band %s [%.2f, %.2f]m: kept %zu, rejected %d low / %d high",
+      height_filter_reference_.c_str(), obstacle_min_z, obstacle_max_z,
+      filtered_cloud_3d->points.size(), below_obstacle_band_points,
+      above_obstacle_band_points);
 
   // Project 3D obstacle points to 2D for occupancy mapping
   for (auto pt : filtered_cloud_3d->points) {
@@ -641,6 +1009,25 @@ void MapROS::filterPointCloudToXY()
     pt_xy.y = pt.y;
     filtered_depth_cloud2d_->points.push_back(pt_xy);
   }
+
+  // Max-range samples clear visible free space but must never contribute an
+  // occupied endpoint. Apply the same navigation-height and body filters used
+  // for obstacle returns so these rays describe the same 2-D map slice.
+  for (const auto& pt : down_max_range_cloud_3d->points) {
+    const SelfFilterFootprint self_footprint{
+        self_filter_length_, self_filter_width_, self_filter_tolerance_};
+    if (isInsideSelfFootprint(pt.x, pt.y, vehicle_center.x(), vehicle_center.y(),
+            currentVehicleYaw(), self_footprint))
+      continue;
+    if (pt.z <= obstacle_min_z || pt.z >= obstacle_max_z)
+      continue;
+    Point2D pt_xy;
+    pt_xy.x = pt.x;
+    pt_xy.y = pt.y;
+    free_ray_cloud2d_->points.push_back(pt_xy);
+  }
+  ROS_INFO_THROTTLE(2.0, "Depth map endpoints: %zu occupied, %zu max-range free rays",
+      filtered_depth_cloud2d_->points.size(), free_ray_cloud2d_->points.size());
 
   // Remove outliers from under-ground points (handles noisy depth data)
   if (!under_ground_cloud_3d->points.empty()) {
@@ -671,6 +1058,32 @@ void MapROS::filterPointCloudToXY()
   double filter_time = (ros::Time::now() - t1).toSec();
   ROS_WARN_COND(filter_time > 0.1, "Filter point cloud time maybe a little long = %.3f ms",
       filter_time * 1000);
+}
+
+Eigen::Vector2d MapROS::currentVehicleCenter2D() const
+{
+  // Optical +Z is camera forward. The Gazebo camera is mounted 0.10 m in
+  // front of base_link, so translate backwards to recover the body center.
+  const Eigen::Vector3d optical_forward = camera_q_.toRotationMatrix().col(2);
+  return camera_pos_.head(2) - camera_forward_offset_ * optical_forward.head(2);
+}
+
+double MapROS::currentVehicleYaw() const
+{
+  const Eigen::Vector3d optical_forward = camera_q_.toRotationMatrix().col(2);
+  return std::atan2(optical_forward.y(), optical_forward.x());
+}
+
+std::pair<double, double> MapROS::obstacleHeightBounds() const
+{
+  // PX4/MAVROS local frames are not required to place the launch floor at
+  // world z=0. In sensor-relative mode the 2-D occupancy slice follows the
+  // vehicle, so surfaces below/above its swept vertical envelope cannot turn
+  // into false horizontal walls when the local origin changes.
+  const double reference_z =
+      height_filter_reference_ == "sensor" ? camera_pos_.z() : 0.0;
+  return std::make_pair(
+      reference_z + filter_min_height_, reference_z + filter_max_height_);
 }
 
 bool MapROS::interpolateLineAtZ(

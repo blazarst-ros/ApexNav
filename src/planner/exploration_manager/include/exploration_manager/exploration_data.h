@@ -91,6 +91,23 @@ struct FSMParam {
     replan_traj_end_threshold_ = 1.0;
     replan_frontier_change_delay_ = 0.5;
     replan_timeout_ = 2.0;
+    replan_wall_timeout_ = 12.0;
+    replan_min_execution_time_ = 2.5;
+    replan_min_progress_ = 0.25;
+    local_target_distance_ = 1.0;
+    local_target_min_progress_ = 0.10;
+    plan_failure_retry_sec_ = 0.25;
+    tracking_reanchor_threshold_ = 0.25;
+    tracking_error_threshold_ = 0.40;
+    tracking_error_hold_sec_ = 0.60;
+    trajectory_speed_limit_ = 0.22;
+    trajectory_yaw_rate_limit_ = 0.35;
+    replan_settle_speed_ = 0.05;
+    replan_settle_sec_ = 0.50;
+    trajectory_start_tolerance_ = 0.10;
+    target_lock_sec_ = 10.0;
+    target_reached_distance_ = 0.35;
+    target_failure_limit_ = 3;
 
     const double step_length = 0.25;
     const double angle_increment = M_PI / 6;
@@ -108,6 +125,23 @@ struct FSMParam {
   double replan_traj_end_threshold_;
   double replan_frontier_change_delay_;
   double replan_timeout_;
+  double replan_wall_timeout_;
+  double replan_min_execution_time_;
+  double replan_min_progress_;
+  double local_target_distance_;
+  double local_target_min_progress_;
+  double plan_failure_retry_sec_;
+  double tracking_reanchor_threshold_;
+  double tracking_error_threshold_;
+  double tracking_error_hold_sec_;
+  double trajectory_speed_limit_;
+  double trajectory_yaw_rate_limit_;
+  double replan_settle_speed_;
+  double replan_settle_sec_;
+  double trajectory_start_tolerance_;
+  double target_lock_sec_;
+  double target_reached_distance_;
+  int target_failure_limit_;
 };
 
 struct ExplorationData {

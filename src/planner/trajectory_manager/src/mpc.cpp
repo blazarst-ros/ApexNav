@@ -40,6 +40,14 @@ void MPC::setOdom(const Eigen::Vector4d& car_state)
   now_state.v = car_state(3);
 }
 
+void MPC::reset()
+{
+  output.setZero();
+  last_output.setZero();
+  dref.setZero();
+  output_buff.assign(std::max(0, delay_num), Eigen::Vector2d::Zero());
+}
+
 Eigen::Vector2d MPC::calCmd(const std::vector<Eigen::Vector3d>& _xref)
 {
   std_msgs::Float64 err;

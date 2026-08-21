@@ -11,6 +11,7 @@
 // Custom messages and mapping components
 #include <plan_env/MultipleMasksWithConfidence.h>
 #include <plan_env/SemanticObservation.h>
+#include <plan_env/map_filter_policy.h>
 #include <plan_env/sdf_map2d.h>
 #include <plan_env/object_map2d.h>
 #include <plan_env/value_map2d.h>
@@ -25,6 +26,8 @@
 #include <nav_msgs/Odometry.h>
 #include <visualization_msgs/Marker.h>
 #include <std_msgs/Float64.h>
+#include <std_msgs/Bool.h>
+#include <std_msgs/Header.h>
 
 // PCL for point cloud processing
 #include <pcl/filters/voxel_grid.h>
@@ -44,6 +47,7 @@
 #include <pcl/filters/conditional_removal.h>
 #include <unordered_set>
 #include <deque>
+#include <utility>
 
 // Type aliases for convenience
 using std::shared_ptr;
@@ -69,8 +73,12 @@ private:
       const sensor_msgs::ImageConstPtr& img, const nav_msgs::OdometryConstPtr& pose);
   void updateESDFCallback(const ros::TimerEvent& /*event*/);
   void detectedObjectCloudCallback(const plan_env::MultipleMasksWithConfidenceConstPtr& msg);
+  void processDetectedObjectCloud(const plan_env::MultipleMasksWithConfidenceConstPtr& msg,
+      const ros::Time& source_stamp);
   void semanticObservationCallback(const plan_env::SemanticObservationConstPtr& msg);
   void cameraInfoCallback(const sensor_msgs::CameraInfoConstPtr& msg);
+  void mappingEnabledCallback(const std_msgs::BoolConstPtr& msg);
+  void navigationEnabledCallback(const std_msgs::BoolConstPtr& msg);
   void itmScoreCallback(const std_msgs::Float64ConstPtr& msg);
   void visCallback(const ros::TimerEvent& /*event*/);
 
@@ -85,7 +93,10 @@ private:
   void publishValueMap();
   void publishConfidenceMap();
   void publishUpdateRange();
-  void publishPointCloud(const ros::Publisher& pub, const PointCloud3D::Ptr& point_cloud);
+  void publishPointCloud(const ros::Publisher& pub, const PointCloud3D::Ptr& point_cloud,
+      const ros::Time& source_stamp);
+  ros::Time mapOutputStamp() const;
+  ros::Time esdfOutputStamp() const;
 
   // Data processing functions
   void processDepthImage();     ///< Process raw depth image into 3D point cloud
@@ -98,6 +109,11 @@ private:
       const Eigen::Vector3d& A, const Eigen::Vector3d& B, double target_z, Eigen::Vector2d& P);
   PointCloud3D::Ptr dbscan(const PointCloud3D::Ptr& cloud, double eps, int minPts);
   void dilateGrids(std::vector<Eigen::Vector2i>& grids, int dilation_radius);
+  Eigen::Vector2d currentVehicleCenter2D() const;
+  double currentVehicleYaw() const;
+  std::pair<double, double> obstacleHeightBounds() const;
+  void observeClock(const ros::Time& now);
+  void resetSourceEpoch(bool clear_map_contents);
 
   // Core mapping interface
   SDFMap2D* map_;
@@ -117,11 +133,11 @@ private:
   ros::Publisher occupied_pub_, occupied_inflate_pub_, unknown_pub_, free_pub_, esdf_pub_,
       object_grid_pub_, update_range_pub_, depth_cloud_pub_, filtered_depth_cloud_pub_,
       filtered_object_cloud_pub_, all_object_cloud_pub_, over_depth_object_cloud_pub_,
-      value_map_pub_, confidence_map_pub_;
+      value_map_pub_, confidence_map_pub_, map_commit_pub_;
 
   // ROS subscribers for sensor data
   ros::Subscriber detected_object_cloud_sub_, itm_score_sub_, semantic_observation_sub_,
-      camera_info_sub_;
+      camera_info_sub_, mapping_enabled_sub_, navigation_enabled_sub_;
 
   // ROS timers for periodic updates
   ros::Timer esdf_timer_, vis_timer_;
@@ -130,10 +146,16 @@ private:
   double cx_, cy_, fx_, fy_;
   bool camera_info_ready_, use_camera_info_, require_downward_camera_;
   int camera_width_, camera_height_;
+  std::string camera_frame_id_;
+  ros::Time last_camera_info_source_stamp_;
+  double camera_info_match_tolerance_;
 
   // Depth filtering parameters
   double depth_filter_maxdist_, depth_filter_mindist_;  ///< Valid depth range for filtering
-  double filter_min_height_, filter_max_height_;        ///< Height range for obstacle detection
+  double self_filter_length_, self_filter_width_, self_filter_tolerance_;
+  double camera_forward_offset_;       ///< Camera offset from vehicle center along optical +Z
+  double filter_min_height_, filter_max_height_;  ///< Absolute heights or sensor-relative offsets
+  std::string height_filter_reference_;           ///< "world" or "sensor"
   int depth_filter_margin_;        ///< Margin pixels to ignore near image borders
   double k_depth_scaling_factor_;  ///< Depth value scaling factor for different sensors
   double depth_unit_scale_;        ///< Metres per raw depth unit; 0 keeps normalized-depth compatibility
@@ -142,7 +164,7 @@ private:
   double virtual_ground_height_;   ///< Virtual ground plane offset for navigation
 
   // Map state flags
-  bool local_updated_, esdf_need_update_;
+  bool local_updated_, esdf_need_update_, mapping_enabled_, navigation_enabled_;
 
   // Current sensor data
   Eigen::Vector3d camera_pos_;                ///< Current camera position in world frame
@@ -151,12 +173,20 @@ private:
   vector<Eigen::Vector3d> proj_points_;       ///< Projected 3D points from depth image
   int proj_points_cnt_;                       ///< Count of valid projected points
   PointCloud3D::Ptr depth_cloud_;             ///< Raw 3D point cloud from depth sensor
+  PointCloud3D::Ptr max_range_cloud_;         ///< Rays with no hit inside the mapping range
   PointCloud2D::Ptr filtered_depth_cloud2d_;  ///< Filtered 2D point cloud for occupancy mapping
+  PointCloud2D::Ptr free_ray_cloud2d_;        ///< Free-space endpoints for max-range rays
 
   // Object detection and ITM integration
   int continue_over_depth_count_;  ///< Counter for maintaining over-depth object consistency
   double itm_score_;               ///< Current image-text matching score
   ros::Time map_start_time_;       ///< Timestamp of mapping system initialization
+  ros::Time last_map_source_stamp_;  ///< Last fully committed depth source stamp
+  ros::Time pending_esdf_source_stamp_;  ///< Source whose map mutation awaits ESDF completion
+  ros::Time last_esdf_source_stamp_;  ///< Source stamp of the completed ESDF buffer
+  ros::Time current_depth_source_stamp_;  ///< Source stamp for in-callback debug outputs only
+  ros::Time last_clock_now_;
+  double max_map_source_age_sec_, max_map_future_sec_;
 
   struct MappingFrame {
     ros::Time stamp;
@@ -244,6 +274,8 @@ inline void MapROS::publishObjectMap()
   cloud.header.frame_id = frame_id_;
   sensor_msgs::PointCloud2 cloud_msg;
   pcl::toROSMsg(cloud, cloud_msg);
+  cloud_msg.header.frame_id = frame_id_;
+  cloud_msg.header.stamp = mapOutputStamp();
   object_grid_pub_.publish(cloud_msg);
 }
 
@@ -269,6 +301,8 @@ inline void MapROS::publishOccupied()
   cloud.header.frame_id = frame_id_;
   sensor_msgs::PointCloud2 cloud_msg;
   pcl::toROSMsg(cloud, cloud_msg);
+  cloud_msg.header.frame_id = frame_id_;
+  cloud_msg.header.stamp = mapOutputStamp();
   occupied_pub_.publish(cloud_msg);
 }
 
@@ -302,6 +336,8 @@ inline void MapROS::publishInfOccupied()
   sensor_msgs::PointCloud2 cloud_msg;
 
   pcl::toROSMsg(cloud, cloud_msg);
+  cloud_msg.header.frame_id = frame_id_;
+  cloud_msg.header.stamp = mapOutputStamp();
   occupied_inflate_pub_.publish(cloud_msg);
 }
 
@@ -334,6 +370,8 @@ inline void MapROS::publishUnknown()
   cloud.header.frame_id = frame_id_;
   sensor_msgs::PointCloud2 cloud_msg;
   pcl::toROSMsg(cloud, cloud_msg);
+  cloud_msg.header.frame_id = frame_id_;
+  cloud_msg.header.stamp = mapOutputStamp();
   unknown_pub_.publish(cloud_msg);
 }
 
@@ -371,6 +409,8 @@ inline void MapROS::publishFree()
   cloud.header.frame_id = frame_id_;
   sensor_msgs::PointCloud2 cloud_msg;
   pcl::toROSMsg(cloud, cloud_msg);
+  cloud_msg.header.frame_id = frame_id_;
+  cloud_msg.header.stamp = mapOutputStamp();
   free_pub_.publish(cloud_msg);
 }
 
@@ -412,6 +452,8 @@ inline void MapROS::publishConfidenceMap()
   cloud.header.frame_id = frame_id_;
   sensor_msgs::PointCloud2 cloud_msg;
   pcl::toROSMsg(cloud, cloud_msg);
+  cloud_msg.header.frame_id = frame_id_;
+  cloud_msg.header.stamp = mapOutputStamp();
   confidence_map_pub_.publish(cloud_msg);
 }
 
@@ -461,11 +503,13 @@ inline void MapROS::publishValueMap()
   cloud.header.frame_id = frame_id_;
   sensor_msgs::PointCloud2 cloud_msg;
   pcl::toROSMsg(cloud, cloud_msg);
+  cloud_msg.header.frame_id = frame_id_;
+  cloud_msg.header.stamp = mapOutputStamp();
   value_map_pub_.publish(cloud_msg);
 }
 
 inline void MapROS::publishPointCloud(
-    const ros::Publisher& pub, const PointCloud3D::Ptr& point_cloud)
+    const ros::Publisher& pub, const PointCloud3D::Ptr& point_cloud, const ros::Time& source_stamp)
 {
   Point3D pt;
   PointCloud3D cloud;
@@ -481,11 +525,19 @@ inline void MapROS::publishPointCloud(
   // Convert and publish
   sensor_msgs::PointCloud2 cloud_msg;
   pcl::toROSMsg(cloud, cloud_msg);
+  cloud_msg.header.frame_id = frame_id_;
+  cloud_msg.header.stamp = source_stamp;
   pub.publish(cloud_msg);
 }
 
 inline void MapROS::publishESDFMap()
 {
+  // Occupancy and inflation are updated synchronously, whereas ESDF runs on a
+  // timer. Suppress the topic while either pending flag is set so no message
+  // can combine a new occupancy mask with an older distance buffer.
+  if (!mayPublishEsdfSnapshot(esdf_need_update_, !pending_esdf_source_stamp_.isZero()))
+    return;
+
   double dist;
   pcl::PointCloud<pcl::PointXYZI> cloud;
   pcl::PointXYZI pt;
@@ -533,6 +585,8 @@ inline void MapROS::publishESDFMap()
   cloud.header.frame_id = frame_id_;
   sensor_msgs::PointCloud2 cloud_msg;
   pcl::toROSMsg(cloud, cloud_msg);
+  cloud_msg.header.frame_id = frame_id_;
+  cloud_msg.header.stamp = esdfOutputStamp();
 
   esdf_pub_.publish(cloud_msg);
 }

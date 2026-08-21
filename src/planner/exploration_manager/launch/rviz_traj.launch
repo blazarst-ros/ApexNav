@@ -1,5 +1,14 @@
 <launch>
-  <arg name="fixed_frame" default="odom"/>
+  <!-- Mapping, odometry and executed trajectories use the configured map frame. -->
+  <arg name="fixed_frame" default="map"/>
+  <!-- Legacy KinoAstar/MINCO/MPC visualizers still stamp messages as "world".
+       Their coordinates are generated from the same map-frame odometry, so an
+       identity compatibility transform makes them visible without moving the
+       RViz fixed frame away from the maps. -->
+  <arg name="trajectory_frame" default="world"/>
   <node name="rviz_visualisation" pkg="rviz" type="rviz" output="log" args="-d $(find exploration_manager)/config/ApexNav_Traj.rviz -f $(arg fixed_frame)" />
-  <node pkg="tf" type="static_transform_publisher" name="tf_53" args="0 0 0 0 0 0 $(arg fixed_frame) navigation 100" />
+  <node pkg="tf" type="static_transform_publisher" name="tf_rviz_navigation"
+        args="0 0 0 0 0 0 $(arg fixed_frame) navigation 100" />
+  <node pkg="tf" type="static_transform_publisher" name="tf_rviz_trajectory_compat"
+        args="0 0 0 0 0 0 $(arg fixed_frame) $(arg trajectory_frame) 100" />
 </launch>

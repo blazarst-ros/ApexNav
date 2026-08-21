@@ -1,7 +1,25 @@
 <launch>
+  <arg name="world_frame" default="map"/>
+  <arg name="state_logging" default="true"/>
+  <arg name="state_log_directory"
+       default="$(find apexnav_gazebo)/../../../RuntimeData/logs"/>
   <param name="/use_sim_time" value="true"/>
+  <node pkg="apexnav_gazebo" type="gazebo_vision_height_bridge.py"
+        name="gazebo_vision_height_bridge" output="screen">
+    <param name="world_frame" value="$(arg world_frame)"/>
+    <param name="gazebo_model_name" value="iris_depth_camera"/>
+    <param name="publish_rate" value="30.0"/>
+  </node>
+  <node if="$(arg state_logging)" pkg="apexnav_gazebo"
+        type="apexnav_state_logger.py" name="apexnav_state_logger" output="screen">
+    <param name="log_directory" value="$(arg state_log_directory)"/>
+    <param name="mission_sample_period_sec" value="1.0"/>
+    <param name="state_heartbeat_sec" value="5.0"/>
+    <param name="gazebo_model_name" value="iris_depth_camera"/>
+  </node>
   <node pkg="apexnav_gazebo" type="px4_mission_supervisor.py"
         name="px4_mission_supervisor" output="screen">
     <rosparam command="load" file="$(find apexnav_gazebo)/config/px4_supervisor.yaml"/>
+    <param name="world_frame" value="$(arg world_frame)"/>
   </node>
 </launch>

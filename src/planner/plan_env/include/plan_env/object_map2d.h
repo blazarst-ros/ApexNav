@@ -51,6 +51,7 @@ struct DetectedObject {
   pcl::shared_ptr<pcl::PointCloud<pcl::PointXYZ>> cloud;  ///< 3D point cloud of detected object
   double score;                                           ///< Confidence score from detector (0-1)
   int label;                                              ///< Semantic class label from detection
+  ros::Time source_stamp;                                 ///< Matched semantic/depth source stamp
 };
 
 struct Viewpoint2D {
@@ -109,6 +110,7 @@ public:
       const vector<pcl::shared_ptr<pcl::PointCloud<pcl::PointXYZ>>> observation_clouds,
       const double& itm_score);
   void setConfidenceThreshold(double val);
+  void reset();
 
   void getAllConfidenceObjectClouds(pcl::shared_ptr<pcl::PointCloud<pcl::PointXYZ>>& object_clouds);
   void getTopConfidenceObjectCloud(
@@ -123,7 +125,7 @@ public:
   int getObjectGrid(const Eigen::Vector2i& id);
   int getObjectGrid(const int& adr);
 
-  void publishObjectClouds();
+  void publishObjectClouds(const ros::Time& source_stamp);
   void wrapYaw(double& yaw);
 
   pcl::shared_ptr<pcl::PointCloud<pcl::PointXYZ>> all_object_clouds_;
@@ -212,6 +214,8 @@ inline bool ObjectMap2D::isSatisfyObject(const Eigen::Vector2d& pos)
 
 inline bool ObjectMap2D::isObjectClustered(const int& adr)
 {
+  if (adr < 0 || adr >= static_cast<int>(object_indexs_.size()))
+    return false;
   if (object_indexs_[adr] == -1)
     return false;
   return true;
@@ -329,6 +333,8 @@ inline bool ObjectMap2D::inMap(const Eigen::Vector2i& idx)
 
 inline int ObjectMap2D::getObjectGrid(const int& adr)
 {
+  if (adr < 0 || adr >= static_cast<int>(object_buffer_.size()))
+    return -1;
   return int(object_buffer_[adr]);
 }
 
@@ -395,8 +401,12 @@ inline Eigen::Vector4d ObjectMap2D::getColor(const double& h, double alpha)
   return fcolor;
 }
 
-inline void ObjectMap2D::publishObjectClouds()
+inline void ObjectMap2D::publishObjectClouds(const ros::Time& source_stamp)
 {
+  if (source_stamp.isZero()) {
+    ROS_WARN_THROTTLE(2.0, "Refusing to publish /object/clouds without source stamp");
+    return;
+  }
   // Create colored point cloud container
   pcl::PointCloud<pcl::PointXYZRGB>::Ptr combined_colored_cloud(
       new pcl::PointCloud<pcl::PointXYZRGB>);
@@ -442,7 +452,7 @@ inline void ObjectMap2D::publishObjectClouds()
   sensor_msgs::PointCloud2 output;
   pcl::toROSMsg(*combined_colored_cloud, output);
   output.header.frame_id = frame_id_;
-  output.header.stamp = ros::Time::now();
+  output.header.stamp = source_stamp;
   object_cloud_pub_.publish(output);
 }
 }  // namespace apexnav_planner

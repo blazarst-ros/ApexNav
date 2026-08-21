@@ -4,11 +4,31 @@
   <arg name="launch_mavros" default="true"/>
   <arg name="fcu_url" default="udp://:14540@localhost:14557"/>
   <arg name="launch_rviz" default="true"/>
+  <arg name="state_logging" default="true"/>
+  <arg name="state_log_directory"
+       default="$(find apexnav_gazebo)/../../../RuntimeData/logs"/>
   <param name="/use_sim_time" value="true"/>
+
+  <node if="$(arg state_logging)" pkg="apexnav_gazebo"
+        type="apexnav_state_logger.py" name="apexnav_state_logger" output="screen">
+    <param name="log_directory" value="$(arg state_log_directory)"/>
+    <param name="mission_sample_period_sec" value="1.0"/>
+    <param name="state_heartbeat_sec" value="5.0"/>
+    <param name="gazebo_model_name" value="iris_depth_camera"/>
+  </node>
 
   <include if="$(arg launch_mavros)" file="$(find mavros)/launch/px4.launch">
     <arg name="fcu_url" value="$(arg fcu_url)"/>
   </include>
+
+  <!-- Simulation-only vertical observation for EKF2_HGT_REF=Vision.  This is
+       a measurement input, not a second flight controller. -->
+  <node pkg="apexnav_gazebo" type="gazebo_vision_height_bridge.py"
+        name="gazebo_vision_height_bridge" output="screen">
+    <param name="world_frame" value="$(arg world_frame)"/>
+    <param name="gazebo_model_name" value="iris_depth_camera"/>
+    <param name="publish_rate" value="30.0"/>
+  </node>
 
   <node pkg="apexnav_gazebo" type="gazebo_sensor_adapter.py"
         name="gazebo_sensor_adapter" output="screen">
@@ -20,6 +40,7 @@
   <node pkg="apexnav_gazebo" type="px4_mission_supervisor.py"
         name="px4_mission_supervisor" output="screen">
     <rosparam command="load" file="$(find apexnav_gazebo)/config/px4_supervisor.yaml"/>
+    <param name="world_frame" value="$(arg world_frame)"/>
   </node>
 
   <node pkg="apexnav_gazebo" type="lite_perception_launcher.sh"
@@ -35,9 +56,20 @@
     <arg name="depth_unit_scale" value="1.0"/>
     <arg name="world_frame" value="$(arg world_frame)"/>
     <arg name="planning_param_file" value="$(find apexnav_gazebo)/config/iris_planning_param.yaml"/>
-    <arg name="obstacles_inflation" value="0.08"/>
-    <arg name="filter_min_height" value="0.35"/>
-    <arg name="filter_max_height" value="1.65"/>
+    <!-- Exact oriented-footprint runtime checks protect the 0.70 x 0.70 m
+         airframe; the global halo is kept slightly smaller for passability. -->
+    <arg name="obstacles_inflation" value="0.38"/>
+    <!-- Keep the 2-D collision slice attached to the aircraft instead of an
+         assumed world-z floor, which PX4 local odometry does not guarantee. -->
+    <arg name="height_filter_reference" value="sensor"/>
+    <arg name="filter_min_height" value="-0.18"/>
+    <arg name="filter_max_height" value="0.25"/>
+    <arg name="depth_filter_maxdist" value="4.0"/>
+    <arg name="depth_filter_mindist" value="0.20"/>
+    <arg name="camera_forward_offset" value="0.10"/>
+    <arg name="max_correction_vel" value="0.40"/>
+    <arg name="max_correction_omega" value="0.65"/>
+    <arg name="tracking_mode" value="px4_native"/>
   </include>
 
   <include if="$(arg launch_rviz)" file="$(find exploration_manager)/launch/rviz_traj.launch">

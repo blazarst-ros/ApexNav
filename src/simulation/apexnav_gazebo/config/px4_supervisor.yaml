@@ -1,17 +1,86 @@
 setpoint_rate: 30.0
 prestream_sec: 2.0
 takeoff_altitude: 1.0
-altitude_tolerance: 0.10
-altitude_stable_sec: 2.0
+altitude_stable_sec: 2.5
+# Navigation starts only after fixed-height takeoff has actually settled.
+# There is deliberately no initial yaw scan: yaw sweep repeatedly coupled
+# into vertical loss in SITL before navigation began.
+takeoff_ready_altitude_tolerance: 0.05
+takeoff_ready_vertical_speed_tolerance: 0.025
 completion_hold_sec: 2.0
 fault_land_delay_sec: 3.0
+# Fixed-altitude 2-D flight uses a relaxed progressive guard. Small errors are
+# corrected while flying; a soft excursion stops XY motion and recovers Z;
+# only a persistent hard excursion becomes a landing fault.
+altitude_soft_error: 0.08
+altitude_recovery_error: 0.03
+altitude_hard_error: 0.30
+altitude_hard_hold_sec: 2.0
+altitude_recovery_timeout_sec: 8.0
 recovery_stable_sec: 1.0
 command_timeout_sec: 0.30
-planner_start_timeout_sec: 3.0
+# The trajectory server accepts a spline before its first 50 Hz reference can
+# traverse the ROS queues.  This one-shot grace is deliberately separate from
+# the strict 0.30 s steady-stream watchdog.
+first_reference_timeout_sec: 0.80
+planner_start_timeout_sec: 10.0
+# Replanning legitimately pauses trajectory commands while KinoAstar/GCopter
+# searches. This watchdog is separate from the 0.30 s execution command age.
+planner_replan_timeout_sec: 10.0
+# A SEARCH_OBJECT -> EXPLORE fallback receives one fresh phase budget, while
+# the complete PLAN_TRAJ episode remains independently bounded.
+# KinoAstar may legitimately consume its 2 s search limit. Three failed
+# attempts plus the 2 s target-failure hysteresis and one replacement attempt
+# therefore need more than the old 5/12 s budget. Both budgets remain bounded.
+planner_replan_total_timeout_sec: 20.0
+planner_ready_timeout_sec: 10.0
+planner_ack_timeout_sec: 2.0
+navigation_ready_timeout_sec: 30.0
 arm_transition_timeout_sec: 10.0
 odom_timeout_sec: 0.20
+extended_state_timeout_sec: 2.0
 sensor_timeout_sec: 0.50
+vision_height_timeout_sec: 0.15
 semantic_timeout_sec: 5.0
-max_horizontal_speed: 0.25
-max_yaw_rate: 0.40
-auto_start_planner: true
+input_future_tolerance_sec: 0.02
+world_frame: map
+base_frame: base_link
+camera_frame: iris_camera_optical_frame
+tracking_mode: px4_native
+max_horizontal_speed: 0.40
+max_yaw_rate: 0.65
+# Independent FCU-boundary guard against a corrupted or wrong-epoch position
+# reference even when its velocity field looks plausible.
+max_reference_position_jump: 0.20
+# PX4 remains the sole Z controller. Gazebo supplies a simulation-only external
+# vision height measurement, so MPC closes on true launch-relative Z instead
+# of a barometer bias that can absorb slow vertical motion.
+px4_height_profile_check_enabled: true
+px4_expected_ekf2_hgt_ref: 3
+px4_expected_ekf2_ev_ctrl: 2
+px4_expected_ekf2_baro_noise: 3.5
+px4_expected_mpc_thr_hover: 0.70
+px4_expected_mpc_land_speed: 0.60
+# If the supervisor/setpoint stream dies, PX4 must land autonomously instead
+# of falling back to Position/Altitude mode without valid sticks.
+px4_expected_com_obl_rc_act: 4
+px4_expected_com_rc_in_mode: 4
+px4_expected_com_of_loss_t: 1.0
+px4_height_profile_tolerance: 0.02
+# The guard independently compares EKF output with the same Gazebo source
+# delivered through the vision bridge. In hardware, replace both with a real
+# downward range/VIO height source.
+gazebo_truth_guard_enabled: true
+gazebo_model_name: iris_depth_camera
+gazebo_truth_max_error: 0.15
+gazebo_truth_hold_sec: 1.0
+gazebo_truth_timeout_sec: 0.50
+gazebo_truth_min_airborne_altitude: 0.20
+# Normal mission/fault termination stays in OFFBOARD for a gentle vertical
+# descent. AUTO.LAND remains the bounded fallback if truth/odom/setpoints fail.
+controlled_land_speed: 0.25
+controlled_land_timeout_sec: 10.0
+# Trajectory search and map callbacks currently share exploration_node's
+# single ROS callback thread.  A planning cycle can therefore delay the
+# filtered cloud even though the depth sensor and mapper remain healthy.
+mapping_update_timeout_sec: 3.0

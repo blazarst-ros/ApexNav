@@ -20,6 +20,40 @@
 namespace apexnav_planner {
 SDFMap2D::~SDFMap2D() = default;
 
+void SDFMap2D::resetForSourceEpoch()
+{
+  if (!mp_ || !md_ || mp_->buffer_size_ <= 0) {
+    ROS_ERROR("Cannot reset map source epoch before map buffers are initialized");
+    return;
+  }
+
+  const bool reset_ok = resetEpochGridBuffers(static_cast<size_t>(mp_->buffer_size_),
+      mp_->clamp_min_log_ - mp_->unknown_flag_, mp_->default_dist_,
+      &md_->occupancy_buffer_, &md_->occupancy_buffer_inflate_,
+      &md_->distance_buffer_neg_, &md_->distance_buffer_, &md_->tmp_buffer_,
+      &md_->virtual_ground_buffer_, &md_->count_hit_, &md_->count_miss_,
+      &md_->count_hit_and_miss_, &md_->flag_rayend_);
+  if (!reset_ok) {
+    ROS_ERROR("Failed to reset map buffers for the new source-clock epoch");
+    return;
+  }
+
+  md_->occupancy_need_clear_.clear();
+  std::queue<int> empty_cache;
+  md_->cache_voxel_.swap(empty_cache);
+  md_->raycast_num_ = 0;
+  md_->local_bound_min_ = md_->local_bound_max_ = Eigen::Vector2i::Zero();
+  md_->local_update_min_ = md_->local_update_max_ = Eigen::Vector2i::Zero();
+  md_->local_update_mind_ = md_->local_update_maxd_ = Eigen::Vector2d::Zero();
+  md_->update_min_ = md_->update_max_ = Eigen::Vector2i::Zero();
+  md_->update_mind_ = md_->update_maxd_ = Eigen::Vector2d::Zero();
+
+  if (object_map2d_)
+    object_map2d_->reset();
+  if (value_map_)
+    value_map_->reset();
+}
+
 void SDFMap2D::initMap(ros::NodeHandle& nh)
 {
   mp_.reset(new MapParam2D);
@@ -94,7 +128,7 @@ void SDFMap2D::initMap(ros::NodeHandle& nh)
   md_->count_hit_and_miss_ = vector<short>(mp_->buffer_size_, 0);
   md_->count_hit_ = vector<short>(mp_->buffer_size_, 0);
   md_->count_miss_ = vector<short>(mp_->buffer_size_, 0);
-  md_->flag_rayend_ = vector<char>(mp_->buffer_size_, -1);
+  md_->flag_rayend_ = vector<RaycastEpoch>(mp_->buffer_size_, 0);
   md_->distance_buffer_neg_ = vector<double>(mp_->buffer_size_, mp_->default_dist_);
   md_->distance_buffer_ = vector<double>(mp_->buffer_size_, mp_->default_dist_);
   md_->tmp_buffer_ = vector<double>(mp_->buffer_size_, 0);
@@ -102,6 +136,7 @@ void SDFMap2D::initMap(ros::NodeHandle& nh)
 
   // Initialize tracking variables for map updates
   md_->raycast_num_ = 0;
+  md_->local_bound_min_ = md_->local_bound_max_ = Eigen::Vector2i(0, 0);
   md_->local_update_min_ = md_->local_update_max_ = Eigen::Vector2i(0, 0);
   md_->local_update_mind_ = md_->local_update_maxd_ = Eigen::Vector2d(0, 0);
   md_->update_min_ = md_->update_max_ = Eigen::Vector2i(0, 0);
@@ -167,15 +202,25 @@ void SDFMap2D::inputObjectCloud2D(
 }
 
 void SDFMap2D::inputDepthCloud2D(const pcl::PointCloud<pcl::PointXY>::Ptr& points,
+    const pcl::PointCloud<pcl::PointXY>::Ptr& free_ray_points,
     const Eigen::Vector3d& camera_pos, vector<Eigen::Vector2i>& free_grids)
 {
   free_grids.clear();
-  int point_num = points->points.size();
+  if (!camera_pos.allFinite())
+    return;
+  const int occupied_point_num = points->points.size();
+  const int free_ray_point_num = free_ray_points->points.size();
+  const int point_num = occupied_point_num + free_ray_point_num;
   if (point_num == 0)
     return;
     
   // Initialize raycast tracking and clear occupancy updates
-  md_->raycast_num_ += 1;
+  ++md_->raycast_num_;
+  if (md_->raycast_num_ == 0) {
+    // Preserve endpoint de-duplication even at the (now 32-bit) wraparound.
+    std::fill(md_->flag_rayend_.begin(), md_->flag_rayend_.end(), 0);
+    ++md_->raycast_num_;
+  }
   md_->occupancy_need_clear_.clear();
 
   // Convert 3D camera position to 2D sensor position
@@ -199,9 +244,11 @@ void SDFMap2D::inputDepthCloud2D(const pcl::PointCloud<pcl::PointXY>::Ptr& point
   std::unordered_map<int, char> flag_occ, flag_free;
 
   // First pass: Mark all occupied grids from depth points
-  for (int i = 0; i < point_num; ++i) {
+  for (int i = 0; i < occupied_point_num; ++i) {
     auto& pt = points->points[i];
     pt_w << pt.x, pt.y;
+    if (!pt_w.allFinite())
+      continue;
     int tmp_flag;
     
     // Process point and determine if it should be marked as occupied
@@ -230,8 +277,12 @@ void SDFMap2D::inputDepthCloud2D(const pcl::PointCloud<pcl::PointXY>::Ptr& point
 
   // Second pass: Perform raycasting to mark free space, excluding occupied grids
   for (int i = 0; i < point_num; ++i) {
-    auto& pt = points->points[i];
+    const bool endpoint_is_hit = i < occupied_point_num;
+    const auto& pt = endpoint_is_hit ? points->points[i]
+                                     : free_ray_points->points[i - occupied_point_num];
     pt_w << pt.x, pt.y;
+    if (!pt_w.allFinite())
+      continue;
     int tmp_flag;
     
     // Process point and determine occupancy flag
@@ -250,7 +301,7 @@ void SDFMap2D::inputDepthCloud2D(const pcl::PointCloud<pcl::PointXY>::Ptr& point
         tmp_flag = 0;
       }
       else
-        tmp_flag = 1;
+        tmp_flag = endpoint_is_hit ? 1 : 0;
     }
     posToIndex(pt_w, idx);
     vox_adr = toAddress(idx);
@@ -363,10 +414,58 @@ void SDFMap2D::inputDepthCloud2D(const pcl::PointCloud<pcl::PointXY>::Ptr& point
 void SDFMap2D::setForceOccGrid(const Eigen::Vector2d& pos)
 {
   // Force a grid cell to be occupied (used for debugging or special cases)
+  if (!isInMap(pos))
+    return;
   Eigen::Vector2i idx;
   posToIndex(pos, idx);
   int adr = toAddress(idx);
+  if (adr < 0)
+    return;
   md_->occupancy_buffer_[adr] = mp_->clamp_max_log_;
+}
+
+void SDFMap2D::clearOccupancyFootprint(
+    const Eigen::Vector2d& center, double yaw, const SelfFilterFootprint& footprint)
+{
+  if (!(footprint.length > 0.0) || !(footprint.width > 0.0) || !isInMap(center))
+    return;
+
+  Eigen::Vector2i min_idx, max_idx;
+  // A conservative AABB contains the yawed OBB; membership is checked with
+  // the exact shared predicate below.
+  const double half_diagonal = 0.5 * std::hypot(footprint.length, footprint.width);
+  posToIndex(center - Eigen::Vector2d::Constant(half_diagonal), min_idx);
+  posToIndex(center + Eigen::Vector2d::Constant(half_diagonal), max_idx);
+  boundIndex(min_idx);
+  boundIndex(max_idx);
+
+  for (int x = min_idx.x(); x <= max_idx.x(); ++x) {
+    for (int y = min_idx.y(); y <= max_idx.y(); ++y) {
+      const Eigen::Vector2i idx(x, y);
+      Eigen::Vector2d pos;
+      indexToPos(idx, pos);
+      if (!isInsideSelfFootprint(pos.x(), pos.y(), center.x(), center.y(), yaw, footprint))
+        continue;
+      const int address = toAddress(idx);
+      if (md_->occupancy_buffer_[address] > mp_->min_occupancy_log_ ||
+          md_->occupancy_buffer_inflate_[address] != 0)
+        md_->occupancy_need_clear_.push_back(idx);
+      // clamp_min_log_ is known free, unlike the lower sentinel used for
+      // unknown cells.
+      md_->occupancy_buffer_[address] = mp_->clamp_min_log_;
+      md_->occupancy_buffer_inflate_[address] = 0;
+    }
+  }
+
+  md_->local_update_min_ = md_->local_update_min_.cwiseMin(min_idx);
+  md_->local_update_max_ = md_->local_update_max_.cwiseMax(max_idx);
+  md_->update_min_ = md_->update_min_.cwiseMin(min_idx);
+  md_->update_max_ = md_->update_max_.cwiseMax(max_idx);
+  indexToPos(md_->local_update_min_, md_->local_update_mind_);
+  indexToPos(md_->local_update_max_, md_->local_update_maxd_);
+  indexToPos(md_->update_min_, md_->update_mind_);
+  indexToPos(md_->update_max_, md_->update_maxd_);
+  map_ros_->local_updated_ = true;
 }
 
 Eigen::Vector2d SDFMap2D::closetPointInMap(
@@ -510,38 +609,35 @@ void SDFMap2D::updateESDFMap()
 
 void SDFMap2D::clearAndInflateLocalMap()
 {
-  // Clear previous inflation and inflate obstacles in local map area
+  // Rebuild every affected target cell from all still-occupied sources. A
+  // simple clear of a removed obstacle's halo punches holes where a nearby
+  // obstacle's halo overlaps it.
   int inf_step = ceil(mp_->obstacles_inflation_ / mp_->resolution_);
-  vector<Eigen::Vector2i> inf_pts;
-  Eigen::Vector2i range_min = md_->local_update_min_;
-  Eigen::Vector2i range_max = md_->local_update_max_;
+  Eigen::Vector2i target_min = md_->local_update_min_ - Eigen::Vector2i::Constant(inf_step);
+  Eigen::Vector2i target_max = md_->local_update_max_ + Eigen::Vector2i::Constant(inf_step);
+  boundIndex(target_min);
+  boundIndex(target_max);
+  md_->update_min_ = md_->update_min_.cwiseMin(target_min);
+  md_->update_max_ = md_->update_max_.cwiseMax(target_max);
+  indexToPos(md_->update_min_, md_->update_mind_);
+  indexToPos(md_->update_max_, md_->update_maxd_);
 
-  // Clear inflation for voxels that changed from occupied to free
-  for (auto idx : md_->occupancy_need_clear_) {
-    inflatePoint(idx, inf_step, inf_pts);
-    for (auto& inf_pt : inf_pts) {
-      int idx_inf = toAddress(inf_pt(0), inf_pt(1));
-      if (idx_inf >= 0 && idx_inf < mp_->map_voxel_num_(0) * mp_->map_voxel_num_(1)) {
-        md_->occupancy_buffer_inflate_[idx_inf] = 0;
-      }
-    }
+  // Use the same tested policy as the production map. It rebuilds each
+  // target cell from every occupied source whose exact-radius halo reaches it.
+  std::vector<unsigned char> occupied_source(mp_->buffer_size_, 0);
+  std::vector<unsigned char> rebuilt_inflation(mp_->buffer_size_, 0);
+  for (int address = 0; address < mp_->buffer_size_; ++address) {
+    occupied_source[address] =
+        md_->occupancy_buffer_[address] > mp_->min_occupancy_log_ ? 1 : 0;
+    rebuilt_inflation[address] = md_->occupancy_buffer_inflate_[address] ? 1 : 0;
   }
-
-  // Inflate newly occupied voxels
-  for (int x = range_min(0); x <= range_max(0); ++x)
-    for (int y = range_min(1); y <= range_max(1); ++y) {
-      int id1 = toAddress(x, y);
-      if (md_->occupancy_buffer_[id1] > mp_->min_occupancy_log_) {
-        inflatePoint(Eigen::Vector2i(x, y), inf_step, inf_pts);
-
-        for (auto& inf_pt : inf_pts) {
-          int idx_inf = toAddress(inf_pt(0), inf_pt(1));
-          if (idx_inf >= 0 && idx_inf < mp_->map_voxel_num_(0) * mp_->map_voxel_num_(1)) {
-            md_->occupancy_buffer_inflate_[idx_inf] = 1;
-          }
-        }
-      }
-    }
+  rebuildInflationRegion(occupied_source, mp_->map_voxel_num_.x(), mp_->map_voxel_num_.y(),
+      target_min.x(), target_max.x(), target_min.y(), target_max.y(),
+      mp_->obstacles_inflation_ * mp_->resolution_inv_, &rebuilt_inflation);
+  for (int x = target_min.x(); x <= target_max.x(); ++x)
+    for (int y = target_min.y(); y <= target_max.y(); ++y)
+      md_->occupancy_buffer_inflate_[toAddress(x, y)] =
+          static_cast<char>(rebuilt_inflation[toAddress(x, y)]);
 }
 
 double SDFMap2D::getDistWithGrad(const Eigen::Vector2d& pos, Eigen::Vector2d& grad)

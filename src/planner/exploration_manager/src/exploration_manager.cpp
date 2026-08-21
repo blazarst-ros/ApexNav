@@ -175,6 +175,18 @@ int ExplorationManager::planNextBestPoint(const Vector3d& pos, const double& yaw
   return EXPLORATION;
 }
 
+bool ExplorationManager::planPathToLockedTarget(
+    const Vector3d& pos, const Vector2d& target)
+{
+  Eigen::Vector2d refined_pos;
+  std::vector<Eigen::Vector2d> refined_path;
+  if (!searchFrontierPath(pos.head(2), target, refined_pos, refined_path))
+    return false;
+  ed_->next_pos_ = refined_pos;
+  ed_->next_best_path_ = refined_path;
+  return true;
+}
+
 void ExplorationManager::chooseExplorationPolicy(Vector2d cur_pos, vector<Vector2d> frontiers,
     Vector2d& next_best_pos, vector<Vector2d>& next_best_path)
 {
@@ -505,31 +517,79 @@ Vector2d ExplorationManager::findNearestObjectPoint(
 bool ExplorationManager::trySearchObjectPathWithDistance(const Vector2d& start2d,
     const Vector2d& object_pose, double distance, double max_search_time,
     Eigen::Vector2d& refined_pos, std::vector<Eigen::Vector2d>& refined_path,
-    const std::string& debug_msg)
+    const std::string& debug_msg, int safety_mode)
 {
   path_finder_->reset();
-  if (path_finder_->astarSearch(start2d, object_pose, distance, max_search_time) ==
+  if (path_finder_->astarSearch(start2d, object_pose, distance, max_search_time, safety_mode) ==
       Astar2D::REACH_END) {
     std::vector<Eigen::Vector2d> path = path_finder_->getPath();
     Vector2d tmp_pos(-1000.0, -1000.0);
+    const double minimum_standoff = std::max(0.0, distance - 0.15);
+    const double maximum_standoff = distance + 0.35;
 
-    // Find valid position along the path (from end to start)
-    for (int i = path.size() - 1; i >= 0; i--) {
-      if (sdf_map_->getOccupancy(path[i]) != SDFMap2D::OCCUPIED &&
+    // Astar2D::backtrack() appends the exact requested endpoint even when the
+    // search succeeded because it merely entered the standoff radius. That
+    // synthetic endpoint is the object centre and must never become an
+    // approach pose. Start at the last real search node and select the nearest
+    // free, footprint-safe pose that still respects the requested standoff.
+    for (int i = static_cast<int>(path.size()) - 2; i >= 0; --i) {
+      const double candidate_standoff = (path[i] - object_pose).norm();
+      const double candidate_yaw =
+          atan2(object_pose.y() - path[i].y(), object_pose.x() - path[i].x());
+      if (candidate_standoff >= minimum_standoff &&
+          candidate_standoff <= maximum_standoff &&
+          sdf_map_->getOccupancy(path[i]) != SDFMap2D::OCCUPIED &&
           sdf_map_->getOccupancy(path[i]) != SDFMap2D::UNKNOWN &&
-          sdf_map_->getInflateOccupancy(path[i]) != 1) {
+          sdf_map_->getInflateOccupancy(path[i]) != 1 &&
+          !kinoastar_->isCollisionPosYaw(path[i], candidate_yaw)) {
         tmp_pos = path[i];
         break;
       }
     }
+    if (tmp_pos.x() < -999.0) {
+      ROS_WARN_THROTTLE(1.0,
+          "No free footprint-safe %.2fm standoff pose on object path", distance);
+      return false;
+    }
 
     // Search path to the valid position
     path_finder_->reset();
-    if (path_finder_->astarSearch(start2d, tmp_pos, 0.2, max_search_time) == Astar2D::REACH_END) {
-      refined_path = path_finder_->getPath();
-      refined_pos = tmp_pos;
+    if (path_finder_->astarSearch(start2d, tmp_pos, 0.2, max_search_time, safety_mode) ==
+        Astar2D::REACH_END) {
+      auto candidate_path = path_finder_->getPath();
+      // A free grid cell is not necessarily collision-free for the complete
+      // vehicle footprint. Walk back toward the vehicle and select the closest
+      // approach pose whose position and yaw pass KinoAstar's footprint check.
+      int safe_index = -1;
+      for (int i = static_cast<int>(candidate_path.size()) - 1; i >= 0; --i) {
+        double safe_yaw = atan2(object_pose.y() - candidate_path[i].y(),
+            object_pose.x() - candidate_path[i].x());
+        if (!kinoastar_->isCollisionPosYaw(candidate_path[i], safe_yaw)) {
+          safe_index = i;
+          break;
+        }
+      }
+      if (safe_index < 0)
+        return false;
+
+      const double progress = (candidate_path[safe_index] - start2d).norm();
+      const double achieved_standoff = (candidate_path[safe_index] - object_pose).norm();
+      // Enforce the standoff independently of path progress. The old guard
+      // only rejected bad endpoints when progress was below 0.30m, allowing a
+      // long path ending at the object centre (0.00m standoff) to pass.
+      if (achieved_standoff < minimum_standoff ||
+          achieved_standoff > maximum_standoff) {
+        ROS_WARN_THROTTLE(1.0,
+            "Rejecting object path: progress %.2fm, standoff %.2fm outside %.2f--%.2fm",
+            progress, achieved_standoff, minimum_standoff, maximum_standoff);
+        return false;
+      }
+
+      refined_path.assign(candidate_path.begin(), candidate_path.begin() + safe_index + 1);
+      refined_pos = candidate_path[safe_index];
       if (!debug_msg.empty()) {
-        ROS_WARN("%s", debug_msg.c_str());
+        ROS_WARN("%s footprint-safe approach distance %.2fm", debug_msg.c_str(),
+            (refined_pos - object_pose).norm());
       }
       return true;
     }
@@ -550,9 +610,9 @@ bool ExplorationManager::searchObjectPath(const Vector3d& start,
     return false;  // Error indicator from findNearestObjectPoint
 
   // Try different safety distances in order of preference
-  const std::vector<double> distances = { 0.5, 0.70, 0.85 };
-  const std::vector<std::string> debug_messages = { "I'm going to the object! dist = 0.5m!",
-    "I'm going to the object! dist = 0.70m!", "I'm going to the object! dist = 0.85m!" };
+  const std::vector<double> distances = { 0.85, 0.70, 0.5 };
+  const std::vector<std::string> debug_messages = { "Approaching object with 0.85m standoff.",
+    "Approaching object with 0.70m standoff.", "Approaching object with 0.50m standoff." };
 
   // Attempt path planning with each safety distance
   for (size_t i = 0; i < distances.size(); ++i) {
@@ -562,7 +622,7 @@ bool ExplorationManager::searchObjectPath(const Vector3d& start,
     }
   }
 
-  ROS_ERROR("Failed to find object path.");
+  ROS_WARN_THROTTLE(1.0, "Failed to find a footprint-safe object path; exploration fallback will run.");
   return false;
 }
 
@@ -621,6 +681,7 @@ void ExplorationManager::calcSemanticFrontierInfo(const vector<SemanticFrontier>
     std::cout << "No semantic frontiers available." << std::endl;
     max_to_mean = 1.0;  // Neutral ratio
     std_dev = 0.0;      // No variation
+    mean = 0.0;
     return;
   }
 
@@ -638,8 +699,10 @@ void ExplorationManager::calcSemanticFrontierInfo(const vector<SemanticFrontier>
   for (const auto& frontier : sem_frontiers)
     variance_sum += (frontier.semantic_value - mean) * (frontier.semantic_value - mean);
 
-  max_to_mean = max_value / mean;
   std_dev = std::sqrt(variance_sum / sem_frontiers.size());
+  // A completely neutral semantic map is valid while exploring. Avoid NaN,
+  // which used to leak into hybrid-mode branch selection and logs.
+  max_to_mean = mean > 1e-9 ? max_value / mean : 1.0;
 
   // Print summary statistics
   std::cout << "Mean Value: " << std::fixed << std::setprecision(3) << mean;
@@ -669,7 +732,7 @@ bool ExplorationManager::planTrajectory(
 
   // Kinodynamic A* search
   kinoastar_->reset();
-  kinoastar_->search(goal_state, current_state, control);
+  const int search_result = kinoastar_->search(goal_state, current_state, control);
   kinoastar_->getKinoNode();
   
   if (kinoastar_->has_path_) {
@@ -679,7 +742,11 @@ bool ExplorationManager::planTrajectory(
     gcopter_->mincoPathPub(gcopter_->final_trajes, gcopter_->final_singuls);
     return true;
   }
-  
+
+  ROS_WARN_THROTTLE(1.0,
+      "[ExplorationManager] KinoAstar failed (status=%d), start=(%.3f, %.3f, %.3f), "
+      "goal=(%.3f, %.3f, %.3f)",
+      search_result, start[0], start[1], start[2], end[0], end[1], end[2]);
   return false;
 }
 

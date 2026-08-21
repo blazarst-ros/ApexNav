@@ -8,9 +8,13 @@
 #include <utility>
 #include <queue>
 #include <tuple>
+#include <limits>
+#include <cmath>
 
 #include <pcl/point_cloud.h>
 #include <pcl/point_types.h>
+
+#include <plan_env/map_filter_policy.h>
 
 using std::cout;
 using std::endl;
@@ -47,6 +51,7 @@ public:
   // Core map management functions
   void initMap(ros::NodeHandle& nh);
   void inputDepthCloud2D(const pcl::PointCloud<pcl::PointXY>::Ptr& points,
+      const pcl::PointCloud<pcl::PointXY>::Ptr& free_ray_points,
       const Eigen::Vector3d& camera_pos, vector<Eigen::Vector2i>& free_grids);
   void inputObjectCloud2D(
       const vector<DetectedObject>& detected_objects, vector<int>& object_cluster_ids);
@@ -73,6 +78,7 @@ public:
 
   // Map processing functions
   void updateESDFMap();
+  void resetForSourceEpoch();
 
   // Map property accessors
   void getRegion(Eigen::Vector2d& ori, Eigen::Vector2d& size);
@@ -81,6 +87,8 @@ public:
   double getResolution();
   int getVoxelNum();
   void setForceOccGrid(const Eigen::Vector2d& pos);
+  void clearOccupancyFootprint(
+      const Eigen::Vector2d& center, double yaw, const SelfFilterFootprint& footprint);
 
   // Integrated mapping components
   shared_ptr<ObjectMap2D> object_map2d_;
@@ -141,8 +149,8 @@ struct MapData2D {
 
   // Probabilistic update tracking
   vector<short> count_hit_, count_miss_, count_hit_and_miss_;  ///< Ray hit/miss counters
-  vector<char> flag_rayend_;                                   ///< Ray endpoint flags
-  char raycast_num_;                                           ///< Current raycast iteration number
+  vector<RaycastEpoch> flag_rayend_;                           ///< Ray endpoint epochs
+  RaycastEpoch raycast_num_;                                   ///< Current raycast epoch
   queue<int> cache_voxel_;                                     ///< Queue of voxels pending updates
 
   // Boundary tracking for efficient updates
@@ -157,7 +165,19 @@ struct MapData2D {
 /// Convert world position to grid index coordinates
 inline void SDFMap2D::posToIndex(const Eigen::Vector2d& pos, Eigen::Vector2i& id)
 {
-  for (int i = 0; i < 2; ++i) id(i) = floor((pos(i) - mp_->map_origin_(i)) * mp_->resolution_inv_);
+  if (!pos.allFinite()) {
+    id = Eigen::Vector2i(-1, -1);
+    return;
+  }
+  for (int i = 0; i < 2; ++i) {
+    const double scaled = (pos(i) - mp_->map_origin_(i)) * mp_->resolution_inv_;
+    if (!std::isfinite(scaled) || scaled < std::numeric_limits<int>::min() ||
+        scaled > std::numeric_limits<int>::max()) {
+      id = Eigen::Vector2i(-1, -1);
+      return;
+    }
+    id(i) = static_cast<int>(std::floor(scaled));
+  }
 }
 
 /// Convert grid index to world position coordinates
@@ -178,6 +198,8 @@ inline void SDFMap2D::boundIndex(Eigen::Vector2i& id)
 /// Convert 2D coordinates to linear array address
 inline int SDFMap2D::toAddress(const int& x, const int& y)
 {
+  if (x < 0 || y < 0 || x >= mp_->map_voxel_num_(0) || y >= mp_->map_voxel_num_(1))
+    return -1;
   return x * mp_->map_voxel_num_(1) + y;
 }
 
@@ -190,6 +212,8 @@ inline int SDFMap2D::toAddress(const Eigen::Vector2i& id)
 /// Convert linear array address to 2D grid index
 inline Eigen::Vector2i SDFMap2D::addressToIdx(const int& address)
 {
+  if (address < 0 || address >= mp_->buffer_size_)
+    return Eigen::Vector2i(-1, -1);
   int y = address % mp_->map_voxel_num_(1);
   int x = address / mp_->map_voxel_num_(1);
   return Eigen::Vector2i(x, y);
@@ -198,6 +222,8 @@ inline Eigen::Vector2i SDFMap2D::addressToIdx(const int& address)
 /// Check if world position is within map bounds
 inline bool SDFMap2D::isInMap(const Eigen::Vector2d& pos)
 {
+  if (!pos.allFinite())
+    return false;
   if (pos(0) < mp_->map_min_boundary_(0) + 1e-4 || pos(1) < mp_->map_min_boundary_(1) + 1e-4)
     return false;
   if (pos(0) > mp_->map_max_boundary_(0) - 1e-4 || pos(1) > mp_->map_max_boundary_(1) - 1e-4)
