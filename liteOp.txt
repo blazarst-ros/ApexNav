@@ -98,7 +98,9 @@ bash scripts/run-lite-multiagent.sh habitat_manual_control_multiagent.py --datas
 
 ## 5. 当前帧与无内部积压的语义
 
-每次感知直接处理该 agent 当前观察帧，并在一次有界 HTTP 请求窗口内等待结果；没有内部
-图像队列、内部队列积压、后台积压或“稍后处理旧帧”的重试队列。默认 `VLM_REQUEST_ATTEMPTS=1`、
-`VLM_REQUEST_TIMEOUT=5`、`VLM_RETRY_BACKOFF=0.5`。这不代表网络或服务端绝不会阻塞，
-而是客户端不累积待处理帧；请求失败会在当前调用处报告，除非调用方显式设置有限次数重试。
+Habitat client 每次感知直接处理该 agent 当前观察帧，并在一次有界 HTTP 请求窗口内等待
+结果；该 client/current-observation 路径不维护 image pending queue、retry pending queue 或
+客户端内部队列，不会在客户端内部积累旧帧。默认 `VLM_REQUEST_ATTEMPTS=1`、`VLM_REQUEST_TIMEOUT=5`、
+`VLM_RETRY_BACKOFF=0.5`。Flask server 使用 `request_lock` 串行执行模型推理；外部并发请求可能等待
+在 HTTP 传输或 server 线程中，因此这里不声明 external drop-latest。请求失败会在当前调用处报告，
+除非调用方显式设置有限次数重试。

@@ -23,18 +23,18 @@ if [[ "$actual_base" != "$HABITAT_BASE" ]]; then
     fail "Habitat-Lab must be at base commit $HABITAT_BASE, but HEAD is $actual_base. Recover with: git -C $HABITAT_LAB_DIR checkout --detach $HABITAT_BASE"
 fi
 
-if git -C "$HABITAT_LAB_DIR" apply --reverse --check "$PATCH_FILE"; then
+if git -C "$HABITAT_LAB_DIR" apply --unidiff-zero --reverse --check "$PATCH_FILE"; then
     printf 'MultiAgentSim-v0 patch is already applied to %s.\n' "$HABITAT_LAB_DIR"
     exit 0
 fi
 
-if ! git -C "$HABITAT_LAB_DIR" diff --quiet || [[ -n "$(git -C "$HABITAT_LAB_DIR" ls-files --others --exclude-standard)" ]]; then
+if ! git -C "$HABITAT_LAB_DIR" diff --cached --quiet || ! git -C "$HABITAT_LAB_DIR" diff --quiet || [[ -n "$(git -C "$HABITAT_LAB_DIR" ls-files --others --exclude-standard)" ]]; then
     fail "Habitat-Lab has local changes that are not this patch. Preserve them, or use a clean v0.3.1 checkout before applying: git -C $HABITAT_LAB_DIR status --short"
 fi
 
-if ! git -C "$HABITAT_LAB_DIR" apply --check "$PATCH_FILE"; then
-    fail "The patch cannot be applied cleanly. Confirm this is the exact v0.3.1 base and inspect with: git -C $HABITAT_LAB_DIR apply --check $PATCH_FILE"
+if ! git -C "$HABITAT_LAB_DIR" apply --unidiff-zero --check "$PATCH_FILE"; then
+    fail "The patch cannot be applied cleanly. Confirm this is the exact v0.3.1 base and inspect with: git -C $HABITAT_LAB_DIR apply --unidiff-zero --check $PATCH_FILE"
 fi
 
-git -C "$HABITAT_LAB_DIR" apply "$PATCH_FILE"
+git -C "$HABITAT_LAB_DIR" apply --unidiff-zero "$PATCH_FILE"
 printf 'Applied MultiAgentSim-v0 patch to %s.\n' "$HABITAT_LAB_DIR"

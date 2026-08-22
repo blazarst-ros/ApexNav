@@ -1,15 +1,13 @@
 # ApexNav MultiAgentSim-v0 patch for Habitat-Lab v0.3.1.
 # Applies from the Habitat-Lab checkout root at base commit 142616776544f918c19e7f0392b65cc8cc69fa13.
+# Zero-context hunks require git apply --unidiff-zero; setup verifies the exact base first.
 diff --git a/habitat-lab/habitat/config/default_structured_configs.py b/habitat-lab/habitat/config/default_structured_configs.py
 index 1796cd1fe..3cb705f75 100644
 --- a/habitat-lab/habitat/config/default_structured_configs.py
 +++ b/habitat-lab/habitat/config/default_structured_configs.py
-@@ -1481,2 +1481,3 @@ class SimulatorSensorConfig(HabitatBaseConfig):
-     type: str = MISSING
+@@ -1481,0 +1482 @@ class SimulatorSensorConfig(HabitatBaseConfig):
 +    uuid: str = ""  # Empty string = use sensor class default _get_uuid()
-     height: int = 480
-@@ -1486,2 +1487,12 @@ class SimulatorSensorConfig(HabitatBaseConfig):
-     orientation: List[float] = field(default_factory=lambda: [0.0, 0.0, 0.0])
+@@ -1486,0 +1488,10 @@ class SimulatorSensorConfig(HabitatBaseConfig):
 +    # Horizontal field of view in degrees (added here to allow overrides in subclasses)
 +    hfov: int = 90
 +    # Camera sensor extras
@@ -20,22 +18,18 @@ index 1796cd1fe..3cb705f75 100644
 +    min_depth: float = 0.0
 +    max_depth: float = 10.0
 +    normalize_depth: bool = True
- 
 diff --git a/habitat-lab/habitat/core/simulator.py b/habitat-lab/habitat/core/simulator.py
 index 4c30bfc45..05d6ec44f 100644
 --- a/habitat-lab/habitat/core/simulator.py
 +++ b/habitat-lab/habitat/core/simulator.py
-@@ -85,3 +85,3 @@ class Sensor(metaclass=abc.ABCMeta):
-         self.config = kwargs["config"] if "config" in kwargs else None
+@@ -86 +86 @@ class Sensor(metaclass=abc.ABCMeta):
 -        if hasattr(self.config, "uuid"):
 +        if hasattr(self.config, "uuid") and self.config.uuid:
-             # We allow any sensor config to override the uuid
 diff --git a/habitat-lab/habitat/sims/habitat_simulator/__init__.py b/habitat-lab/habitat/sims/habitat_simulator/__init__.py
 index c7f34cc97..9906a5449 100644
 --- a/habitat-lab/habitat/sims/habitat_simulator/__init__.py
 +++ b/habitat-lab/habitat/sims/habitat_simulator/__init__.py
-@@ -23 +23,7 @@ def _try_register_habitat_sim():
-                 raise habitat_sim_import_error
+@@ -23,0 +24,6 @@ def _try_register_habitat_sim():
 +
 +    if has_habitat_sim:
 +        # Register MultiAgentSim-v0 (multi-agent ObjectNav simulator)
@@ -46,19 +40,15 @@ diff --git a/habitat-lab/habitat/sims/habitat_simulator/habitat_simulator.py b/h
 index 1f5a86394..396e15047 100644
 --- a/habitat-lab/habitat/sims/habitat_simulator/habitat_simulator.py
 +++ b/habitat-lab/habitat/sims/habitat_simulator/habitat_simulator.py
-@@ -106,2 +106,8 @@ class HabitatSimRGBSensor(RGBSensor, HabitatSimSensor):
-     _get_default_spec = habitat_sim.CameraSensorSpec
+@@ -106,0 +107,6 @@ class HabitatSimRGBSensor(RGBSensor, HabitatSimSensor):
 +    _config_ignore_keys = {
 +        "max_depth",
 +        "min_depth",
 +        "normalize_depth",
 +        "uuid",
 +    }.union(HabitatSimSensor._config_ignore_keys)
-     sim_sensor_type = habitat_sim.SensorType.COLOR
-@@ -143,2 +149,3 @@ class HabitatSimDepthSensor(DepthSensor, HabitatSimSensor):
-         "normalize_depth",
+@@ -143,0 +150 @@ class HabitatSimDepthSensor(DepthSensor, HabitatSimSensor):
 +        "uuid",
-     }.union(HabitatSimSensor._config_ignore_keys)
 diff --git a/habitat-lab/habitat/sims/habitat_simulator/multi_agent_sim.py b/habitat-lab/habitat/sims/habitat_simulator/multi_agent_sim.py
 new file mode 100644
 index 000000000..9c9f6d21b

@@ -71,7 +71,7 @@ class LiteMultiAgentRuntimeSetupTests(unittest.TestCase):
                 for relative_path in PATCHED_PATHS:
                     self.assertTrue((worktree / relative_path).is_file(), relative_path)
                 reverse_check = self.run_command(
-                    "git", "-C", str(worktree), "apply", "--reverse", "--check", str(PATCH)
+                    "git", "-C", str(worktree), "apply", "--unidiff-zero", "--reverse", "--check", str(PATCH)
                 )
                 self.assertEqual(reverse_check.returncode, 0, reverse_check.stderr)
                 second = self.run_command("bash", str(SETUP), env=env)
@@ -112,6 +112,39 @@ class LiteMultiAgentRuntimeSetupTests(unittest.TestCase):
                 self.assertIn(HABITAT_BASE, result.stderr)
                 self.assertIn("git -C", result.stderr)
                 self.assertIn("checkout --detach", result.stderr)
+            finally:
+                removed = self.run_command(
+                    "git", "-C", str(source_checkout), "worktree", "remove", "--force", str(worktree)
+                )
+                self.assertEqual(removed.returncode, 0, removed.stderr)
+
+    def test_setup_rejects_staged_tracked_changes_before_applying_patch(self):
+        """Catches setup applying the patch over an unrelated staged user edit."""
+        source_checkout = ROOT / "habitat-lab"
+        if not source_checkout.is_dir():
+            self.skipTest("the ignored Habitat-Lab checkout is unavailable")
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            worktree = Path(temp_dir) / "habitat-lab"
+            created = self.run_command(
+                "git", "-C", str(source_checkout), "worktree", "add", "--detach", str(worktree), HABITAT_BASE
+            )
+            self.assertEqual(created.returncode, 0, created.stderr)
+            try:
+                readme = worktree / "README.md"
+                readme.write_text(readme.read_text(encoding="utf-8") + "\nStaged test edit.\n", encoding="utf-8")
+                staged = self.run_command("git", "-C", str(worktree), "add", "README.md")
+                self.assertEqual(staged.returncode, 0, staged.stderr)
+                env = os.environ | {
+                    "APEXNAV_ROOT": str(ROOT),
+                    "HABITAT_LAB_DIR": str(worktree),
+                    "PATCH_FILE": str(PATCH),
+                }
+                result = self.run_command("bash", str(SETUP), env=env)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("local changes", result.stderr)
+                self.assertIn("status --short", result.stderr)
+                self.assertFalse((worktree / PATCHED_PATHS[-1]).exists())
             finally:
                 removed = self.run_command(
                     "git", "-C", str(source_checkout), "worktree", "remove", "--force", str(worktree)
@@ -172,6 +205,11 @@ class LiteMultiAgentRuntimeSetupTests(unittest.TestCase):
         self.assertIn("/healthz", guide)
         self.assertIn("当前帧", guide)
         self.assertIn("内部队列", guide)
+        self.assertIn("Habitat client", guide)
+        self.assertIn("Flask server", guide)
+        self.assertIn("request_lock", guide)
+        self.assertIn("外部并发请求可能等待", guide)
+        self.assertNotIn("后台积压", guide)
         self.assertNotIn("grounding_dino", guide)
         self.assertNotIn("blip2itm", guide)
 
