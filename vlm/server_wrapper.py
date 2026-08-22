@@ -53,7 +53,7 @@ def str_to_bool_arr(s: str, shape: tuple) -> np.ndarray:
 
 
 def image_to_str(img_np: np.ndarray, quality: float = 90.0) -> str:
-    encode_param = [int(cv2.IMWRITE_JPEG_QUALITY), quality]
+    encode_param = [int(cv2.IMWRITE_JPEG_QUALITY), int(quality)]
     retval, buffer = cv2.imencode(".jpg", img_np, encode_param)
     img_str = base64.b64encode(buffer).decode("utf-8")
     return img_str
@@ -74,8 +74,7 @@ def send_request(url: str, **kwargs: Any) -> dict:
             break
         except Exception as e:
             if attempt == 9:
-                print(e)
-                exit()
+                raise RuntimeError(f"VLM request failed after 10 attempts: {url}") from e
             else:
                 print(f"VLM Server Error Type: {type(e).__name__}")
                 print(f"VLM Server Error Detail: {str(e)}")

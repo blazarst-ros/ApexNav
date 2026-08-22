@@ -22,6 +22,7 @@ class ObjectDetections:
         logits: torch.Tensor,
         phrases: List[str],
         image_source: Optional[np.ndarray],
+        masks: Optional[List[Optional[np.ndarray]]] = None,
         fmt: str = "cxcywh",
     ):
         self.image_source = image_source
@@ -31,6 +32,7 @@ class ObjectDetections:
             self.boxes = boxes
         self.logits = logits
         self.phrases = phrases
+        self.masks = masks if masks is not None else [None] * len(phrases)
         self._annotated_frame: Optional[np.ndarray] = None
 
     @property
@@ -123,6 +125,7 @@ class ObjectDetections:
             logits=torch.tensor(json_dict["logits"]),
             phrases=json_dict["phrases"],
             fmt="xyxy",
+            masks=[None] * len(json_dict["phrases"]),
         )
 
 

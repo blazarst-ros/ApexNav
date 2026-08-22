@@ -1,251 +1,143 @@
+"""Object-map helpers backed exclusively by the Lite YOLOE segmentation service."""
+
+import time
+
 import cv2
 import numpy as np
-import socket
-from vlm.coco_classes import COCO_CLASSES
-from vlm.detector.yolov7 import YOLOv7Client
-from vlm.segmentor.sam import MobileSAMClient
-from vlm.detector.grounding_dino import GroundingDINOClient
-from vlm.itm.blip2itm import BLIP2ITMClient
+
+from vlm.detector.yoloe import YOLOEClient
 from vlm.utils.get_itm_message import get_itm_message
 
-YOLOV7_PORT = 12184
-GROUNDING_DINO_PORT = 12181
 
-yolov7_detector = YOLOv7Client(port=YOLOV7_PORT)
-blip2_itm = BLIP2ITMClient(port=12182)
-sam_segmentor = MobileSAMClient(port=12183)
-dino_detector = GroundingDINOClient(port=GROUNDING_DINO_PORT)
+yoloe_detector = YOLOEClient(port=12184)
 
 
 def get_object_class_names(right_label, similar_answer):
-    """Return the label dictionary used by the object-map message contract."""
-    target_aliases = [item.strip() for item in right_label.split("|") if item.strip()]
-    target_name = target_aliases[0] if target_aliases else "target"
-    return [target_name] + [str(item).strip() for item in similar_answer]
-
-
-def _is_port_open(host, port, timeout=0.2):
-    try:
-        with socket.create_connection((host, port), timeout=timeout):
-            return True
-    except OSError:
-        return False
-
-
-def _is_yolov7_available():
-    return _is_port_open("localhost", YOLOV7_PORT)
-
-
-def _is_grounding_dino_available():
-    return _is_port_open("localhost", GROUNDING_DINO_PORT)
-
-
-def _select_detector_labels(right_label, similar_answer):
-    """Select exactly one detector from the target class, not its aliases.
-
-    COCO targets are handled only by YOLOv7.  A non-COCO target selects
-    GroundingDINO, which may receive both COCO and open-vocabulary aliases.
-    """
-    target_labels = [label.strip() for label in right_label.split("|") if label.strip()]
-    all_labels = target_labels + list(similar_answer)
-    if target_labels and all(label in COCO_CLASSES for label in target_labels):
-        return "yolo", [label for label in all_labels if label in COCO_CLASSES]
-    return "gdino", all_labels
-
-
-def _predict_with_grounding_dino(labels, img, cfg):
-    caption = ' '.join(f'{item}.  ' for item in labels)
-    return dino_detector.predict(
-        img,
-        caption=caption,
-        box_threshold=cfg.groundingDINO.confidence_threshold_dino,
-        text_threshold=cfg.groundingDINO.text_threshold,
-    )
+    """Return target-first, de-duplicated names for ``MultipleMasksWithConfidence``."""
+    targets, labels = _merge_labels(right_label, similar_answer)
+    target_name = targets[0] if targets else "target"
+    return [target_name] + [label for label in labels if label not in targets]
 
 
 def get_segmentation(segmented_img, idx, detections, img, label, score, color):
-    object_mask = np.zeros((480, 640), dtype=np.uint8)
-    bbox_denorm = detections.boxes[idx] * np.array(
+    """Render one detection and return its model mask (or a box fallback)."""
+    object_mask = np.zeros(img.shape[:2], dtype=np.uint8)
+    bbox_denorm = detections.boxes[idx].detach().cpu().numpy() * np.array(
         [img.shape[1], img.shape[0], img.shape[1], img.shape[0]]
     )
-    x1, y1, x2, y2 = [int(v) for v in bbox_denorm]
-    bbox_area = (x2 - x1) * (y2 - y1)
-    img_area = img.shape[0] * img.shape[1]
+    x1, y1, x2, y2 = [int(value) for value in bbox_denorm]
+    x1, y1 = max(x1, 0), max(y1, 0)
+    x2, y2 = min(x2, img.shape[1] - 1), min(y2, img.shape[0] - 1)
+    if idx < len(detections.masks) and detections.masks[idx] is not None:
+        object_mask = detections.masks[idx].astype(np.uint8)
+    else:
+        object_mask[y1 : y2 + 1, x1 : x2 + 1] = 1
 
-    if bbox_area / img_area < 0.99:
-        object_mask = sam_segmentor.segment_bbox(img, bbox_denorm.tolist())
-        contours, _ = cv2.findContours(
-            object_mask, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE
-        )
-        for contour in contours:
-            cv2.drawContours(segmented_img, [contour], 0, color, 4)
-
-        cv2.rectangle(
-            segmented_img,
-            (x1, y1),
-            (x2, y2),
-            color,
-            2,
-        )
-
-        label_text = f"{label} ({score:.2f})"
-        (text_width, text_height), _ = cv2.getTextSize(
-            label_text, cv2.FONT_HERSHEY_DUPLEX, 0.7, 2
-        )
-        label_x = x1
-        label_y = y1 - text_height
-        cv2.rectangle(
-            segmented_img,
-            (label_x, label_y - 30),
-            (label_x + text_width, label_y + text_height),
-            color,
-            2,
-        )
-        cv2.putText(
-            segmented_img,
-            label_text,
-            (label_x, label_y),
-            cv2.FONT_HERSHEY_DUPLEX,
-            0.7,
-            (255, 255, 255),
-            1,
-        )
-
+    contours, _ = cv2.findContours(object_mask, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
+    for contour in contours:
+        cv2.drawContours(segmented_img, [contour], 0, color, 4)
+    cv2.rectangle(segmented_img, (x1, y1), (x2, y2), color, 2)
+    label_text = f"{label} ({score:.2f})"
+    (text_width, text_height), _ = cv2.getTextSize(
+        label_text, cv2.FONT_HERSHEY_DUPLEX, 0.7, 2
+    )
+    label_y = y1 - text_height
+    cv2.rectangle(
+        segmented_img,
+        (x1, label_y - 30),
+        (x1 + text_width, label_y + text_height),
+        color,
+        2,
+    )
+    cv2.putText(
+        segmented_img,
+        label_text,
+        (x1, label_y),
+        cv2.FONT_HERSHEY_DUPLEX,
+        0.7,
+        (255, 255, 255),
+        1,
+    )
     return segmented_img, object_mask
 
-def get_object(right_label, img, cfg, similar_answer):
-    score_list = []
-    object_masks_list = []
+
+def _get_yoloe_params(cfg):
+    yoloe_cfg = getattr(cfg, "yoloe", None)
+    if yoloe_cfg is None:
+        raise ValueError("Lite VLM requires detector.yoloe configuration")
+    return (
+        getattr(yoloe_cfg, "confidence_threshold", 0.3),
+        getattr(yoloe_cfg, "iou_threshold", 0.5),
+        getattr(yoloe_cfg, "agnostic_nms", True),
+    )
+
+
+def _merge_labels(right_label, similar_answer):
+    targets = [label.strip() for label in right_label.split("|") if label.strip()]
+    all_labels = list(
+        dict.fromkeys(
+            targets + [str(label).strip() for label in similar_answer if str(label).strip()]
+        )
+    )
+    return targets, all_labels
+
+
+def get_object(right_label, img, cfg, similar_answer, return_stats=False):
+    """Detect target/confusion objects while preserving the legacy four-value result."""
+    score_list, object_masks_list, label_list = [], [], []
     segmented_img = img.copy()
-    label_list = []
-    right_label_list = list(map(str.strip, right_label.split('|')))
-    all_answer = right_label_list + similar_answer
-    detector_name, detector_labels = _select_detector_labels(right_label, similar_answer)
+    targets, all_labels = _merge_labels(right_label, similar_answer)
+    conf_thres, iou_thres, agnostic_nms = _get_yoloe_params(cfg)
+    request_start = time.perf_counter()
+    detections = yoloe_detector.predict(
+        img,
+        classes=all_labels,
+        agnostic_nms=agnostic_nms,
+        conf_thres=conf_thres,
+        iou_thres=iou_thres,
+    )
+    yoloe_latency_ms = (time.perf_counter() - request_start) * 1000.0
 
-    if detector_name == "yolo":
-        if not _is_yolov7_available():
-            raise RuntimeError(
-                f"YOLOv7 server is not running on port {YOLOV7_PORT} for COCO target "
-                f"{right_label!r}."
-            )
-        detections = yolov7_detector.predict(img, agnostic_nms=cfg.yolo.agnostic_nms, 
-                                            conf_thres=cfg.yolo.confidence_threshold_yolo, iou_thres=cfg.yolo.iou_threshold_yolo)
-        for idx in range(len(detections.logits)):
-            label_detected = detections.phrases[idx]
-            score = detections.logits[idx].item()
-            if detections.phrases[idx] in right_label_list:
-                segmented_img, object_mask = get_segmentation(
-                    segmented_img, idx, detections, img, label_detected, score, color=(255, 0, 0)
-                )
-                score_list.append(score)
-                object_masks_list.append(object_mask)
-                label_list.append(0)
-            elif detections.phrases[idx] in detector_labels:
-                segmented_img, object_mask = get_segmentation(
-                    segmented_img, idx, detections, img, label_detected, score, color=(0, 255, 0)
-                )
-                score_list.append(score)
-                object_masks_list.append(object_mask)
-                label_list.append(list(all_answer).index(label_detected) - len(right_label_list)+1)
+    for idx, label_detected in enumerate(detections.phrases):
+        if label_detected not in all_labels:
+            continue
+        score = detections.logits[idx].item()
+        color = (255, 0, 0) if label_detected in targets else (0, 255, 0)
+        segmented_img, object_mask = get_segmentation(
+            segmented_img, idx, detections, img, label_detected, score, color
+        )
+        score_list.append(float(score))
+        object_masks_list.append(object_mask)
+        label_list.append(
+            0 if label_detected in targets else all_labels.index(label_detected) - len(targets) + 1
+        )
 
-    else:
-        if not _is_grounding_dino_available():
-            raise RuntimeError(
-                f"GroundingDINO server is not running on port {GROUNDING_DINO_PORT} for "
-                f"non-COCO target {right_label!r}."
-            )
-        detections = _predict_with_grounding_dino(detector_labels, img, cfg)
-        for idx in range(len(detections.logits)):
-            label_detected = detections.phrases[idx]
-            score = detections.logits[idx].item()
-            if label_detected in right_label_list:
-                segmented_img, object_mask = get_segmentation(
-                    segmented_img, idx, detections, img, label_detected, score, color=(255, 0, 0)
-                )
-                score_list.append(score)
-                object_masks_list.append(object_mask)
-                label_list.append(0)
+    result = (segmented_img, score_list, object_masks_list, label_list)
+    if return_stats:
+        return result + ({"yoloe_latency_ms": yoloe_latency_ms},)
+    return result
 
-            elif label_detected in detector_labels:
-                segmented_img, object_mask = get_segmentation(
-                    segmented_img, idx, detections, img, label_detected, score, color=(0, 255, 0)
-                )
-                score_list.append(score)
-                object_masks_list.append(object_mask)
-                label_list.append(list(all_answer).index(label_detected) - len(right_label_list)+1)
-
-    return segmented_img, score_list, object_masks_list, label_list
 
 def get_object_with_itm(label, img, cfg):
-    score_list = []
-    object_masks_list = []
-    cosine_list = []
-    itm_score_list = []
-    segmented_img = img.copy()
-    if label in COCO_CLASSES:
-        if not _is_yolov7_available():
-            raise RuntimeError(
-                f"YOLOv7 server is not running on port {YOLOV7_PORT} for COCO label {label!r}."
-            )
-        detections = yolov7_detector.predict(img, agnostic_nms=cfg.yolo.agnostic_nms,
-                                             conf_thres=cfg.yolo.confidence_threshold_yolo, iou_thres=cfg.yolo.iou_threshold_yolo)
-        for idx in range(len(detections.logits)):
-            label_detected = detections.phrases[idx]
-            score = detections.logits[idx].item()
-            if detections.phrases[idx] == label:
-                segmented_img, object_mask = get_segmentation(
-                    segmented_img, idx, detections, img, label_detected, score, color=(255, 0, 0)
-                )
-                img_detected = crop_and_expand_box(img, detections, idx)
-                # cv2.imshow(f"img_detected{idx}", img_detected)
-                cosine, itm_score = get_itm_message(img_detected, label)
-                print(f"cosine: {cosine:.3f}, itm_score: {itm_score:.3f}")
-                score_list.append(score)
-                object_masks_list.append(object_mask)
-                cosine_list.append(cosine)
-                itm_score_list.append(itm_score)
-        return segmented_img, score_list, object_masks_list, cosine_list, itm_score_list
-
-    if not _is_grounding_dino_available():
-        raise RuntimeError(
-            f"GroundingDINO server is not running on port {GROUNDING_DINO_PORT} for "
-            f"non-COCO label {label!r}."
-        )
-    detections = _predict_with_grounding_dino([label], img, cfg)
-    for idx in range(len(detections.logits)):
-        label_detected = detections.phrases[idx]
-        score = detections.logits[idx].item()
-        if score > cfg.groundingDINO.confidence_threshold_dino:
-            segmented_img, object_mask = get_segmentation(
-                segmented_img, idx, detections, img, label_detected, score, color=(255, 0, 0)
-            )
-            score_list.append(score)
-            object_masks_list.append(object_mask)
-            img_detected = crop_and_expand_box(img, detections, idx)
-            # cv2.imshow(f"img_detected{idx}", img_detected)
-            cosine, itm_score = get_itm_message(img_detected, label)
-            print(f"cosine: {cosine}, itm_score: {itm_score}")
-            cosine_list.append(cosine)
-            itm_score_list.append(itm_score)
-
-    return segmented_img, score_list, object_masks_list, cosine_list, itm_score_list
+    """Retain the combined helper using the same Lite YOLOE detector."""
+    segmented_img, scores, masks, _ = get_object(label, img, cfg, [])
+    cosine_list, itm_score_list = [], []
+    for object_mask in masks:
+        image_detected = crop_and_expand_box(img, object_mask)
+        cosine, itm_score = get_itm_message(image_detected, label)
+        cosine_list.append(cosine)
+        itm_score_list.append(itm_score)
+    return segmented_img, scores, masks, cosine_list, itm_score_list
 
 
-def crop_and_expand_box(img, detections, idx, expand_pixels=0.4):
-    # Get bounding box coordinates in [x_min, y_min, x_max, y_max] format
-    x_min, y_min, x_max, y_max = detections.boxes[idx]
-    x_min = int(x_min * img.shape[1])
-    y_min = int(y_min * img.shape[0])
-    x_max = int(x_max * img.shape[1])
-    y_max = int(y_max * img.shape[0])
-
-    # Expand the box outward; clamp to image boundaries
-    x_min = max(int(x_min*(1-expand_pixels)), 0)
-    y_min = max(int(y_min*(1-expand_pixels)), 0)
-    x_max = min(int(x_max*(1+expand_pixels)), img.shape[1] - 1)
-    y_max = min(int(y_max*(1+expand_pixels)), img.shape[0] - 1)
-
-    # Crop the image to keep only the box region
-    img_detected = img[y_min:y_max+1, x_min:x_max+1]
-
-    return img_detected
+def crop_and_expand_box(img, object_mask, expand_pixels=0.4):
+    ys, xs = np.where(object_mask > 0)
+    if len(xs) == 0 or len(ys) == 0:
+        return img
+    x_min, x_max = xs.min(), xs.max()
+    y_min, y_max = ys.min(), ys.max()
+    x_min = max(int(x_min * (1 - expand_pixels)), 0)
+    y_min = max(int(y_min * (1 - expand_pixels)), 0)
+    x_max = min(int(x_max * (1 + expand_pixels)), img.shape[1] - 1)
+    y_max = min(int(y_max * (1 + expand_pixels)), img.shape[0] - 1)
+    return img[y_min : y_max + 1, x_min : x_max + 1]

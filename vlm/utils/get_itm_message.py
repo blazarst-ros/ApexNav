@@ -1,19 +1,26 @@
-import cv2
-import numpy as np
-from vlm.itm.blip2itm import BLIP2ITMClient
+"""Image-text matching helpers backed by the Lite CLIPITM service."""
 
-itmclient = BLIP2ITMClient(port=12182)
+from vlm.itm.clipitm import CLIPITMClient
 
-def get_itm_message(rgb_image, label):
-    txt = f"Is there a {label} in the image?"
-    cosine = itmclient.cosine(rgb_image, txt)
-    itm_score = itmclient.itm_score(rgb_image, txt)
-    return cosine, itm_score
 
-def get_itm_message_cosine(rgb_image, label, room):
+itmclient = CLIPITMClient(port=12182)
+
+
+def get_itm_message(rgb_image, label, return_stats=False):
+    response = itmclient.infer(rgb_image, f"Is there a {label} in the image?")
+    result = (float(response["response"]), float(response["itm score"]))
+    if return_stats:
+        return result + (response.get("timing", {}),)
+    return result
+
+
+def get_itm_message_cosine(rgb_image, label, room, return_stats=False):
     if room != "everywhere":
-        txt = f"Seems like there is a {room} or a {label} ahead?"
+        prompt = f"Seems like there is a {room} or a {label} ahead?"
     else:
-        txt = f"Seems like there is a {label} ahead?"
-    cosine = itmclient.cosine(rgb_image, txt)
+        prompt = f"Seems like there is a {label} ahead?"
+    response = itmclient.infer(rgb_image, prompt)
+    cosine = float(response["response"])
+    if return_stats:
+        return cosine, response.get("timing", {})
     return cosine

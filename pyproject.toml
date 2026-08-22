@@ -18,21 +18,12 @@ dependencies = [
     "flask == 3.0.3",
     "seaborn == 0.13.2",
     "open3d == 0.18.0",
-    "transformers == 4.43.2",
-    "timm == 0.4.12",
     "prettytable >= 3.12.0",
     "opencv-python == 4.6.0.66",
     "moviepy == 1.0.3",
-    "mobile_sam @ git+https://github.com/ChaoningZhang/MobileSAM.git",
-    "groundingdino @ git+https://github.com/IDEA-Research/GroundingDINO.git",
-    "ultralytics==8.3.39",
-    "fastapi==0.111.1",
-    "uvicorn==0.30.3",
-    "modelscope==1.16.1",
-    "accelerate==0.32.1",
-    "openai>=1.58.1",
+    "ultralytics==8.3.209",
+    "clip @ git+https://github.com/ultralytics/CLIP.git@488e81a6711eea7346872b46ea928b367da8889d",
     "habitat2ros @ file:./habitat2ros",
-    "ollama",
 ]
 
 [project.optional-dependencies]
