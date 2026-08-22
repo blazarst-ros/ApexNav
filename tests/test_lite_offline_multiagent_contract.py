@@ -1,3 +1,4 @@
+import ast
 import tempfile
 import unittest
 from pathlib import Path
@@ -61,30 +62,88 @@ class LiteOfflineMultiAgentContractTests(unittest.TestCase):
             self.assertFalse(answer_path.exists())
             self.assertFalse(response_path.exists())
 
+    def test_offline_reader_rejects_poisoned_cache_without_executing_it(self):
+        """Catches cache parsing that executes an expression before offline fallback."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            answer_path = temp_path / "answers.txt"
+            response_path = temp_path / "responses.txt"
+            marker_path = temp_path / "cache-payload-ran"
+            answer_path.write_text(
+                "unseen target: __import__('pathlib').Path(%r).write_text('ran')\n" % str(marker_path),
+                encoding="utf-8",
+            )
+
+            with patch(
+                "llm.answer_reader.answer_reader.get_answer",
+                side_effect=AssertionError("offline mode must not call an LLM client"),
+            ):
+                result = read_answer(
+                    str(answer_path),
+                    str(response_path),
+                    "unseen target",
+                    SimpleNamespace(llm_client="offline"),
+                )
+
+            self.assertEqual(result, ([], "unknown", 0.4))
+            self.assertFalse(marker_path.exists())
+            self.assertFalse(response_path.exists())
+
+    def test_shipped_legacy_cache_values_remain_literal_evaluable(self):
+        """Catches a safe cache parser that cannot read the shipped answer literals."""
+        legacy_count = 0
+        for answer_path in (
+            Path("llm/answers/llm_answer_hm3d.txt"),
+            Path("llm/answers/llm_answer_mp3d.txt"),
+        ):
+            for line in answer_path.read_text(encoding="utf-8").splitlines():
+                if not line or line.startswith("#"):
+                    continue
+                _, literal = line.split(": ", 1)
+                self.assertIsInstance(ast.literal_eval(literal), list, line)
+                legacy_count += 1
+        self.assertEqual(legacy_count, 42)
+
     def test_eval_configs_select_lite_services_without_changing_two_agent_contract(self):
         """Catches a Lite config that regresses topology, scheduling, or ObjectNav semantics."""
+        expected_dataset_paths = {
+            Path("config/habitat_eval_hm3dv1.yaml"): "data/datasets/objectnav/hm3d/v1/{split}/{split}.json.gz",
+            Path("config/habitat_eval_hm3dv2.yaml"): "data/datasets/objectnav/hm3d/v2/{split}/{split}.json.gz",
+            Path("config/habitat_eval_mp3d.yaml"): "data/datasets/objectnav/mp3d/v1/{split}/{split}.json.gz",
+        }
+        expected_agents = {
+            "agent_0": {"height": 0.8, "position": [0, 0.8, 0]},
+            "agent_1": {"height": 1.5, "position": [0, 1.5, 0]},
+        }
+
         for config_path in CONFIG_PATHS:
             config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+            simulator = config["habitat"]["simulator"]
 
             self.assertEqual(config["num_agents"], 2, config_path)
-            self.assertEqual(config["habitat"]["simulator"]["type"], "MultiAgentSim-v0", config_path)
-            self.assertEqual(
-                config["habitat"]["simulator"]["agents_order"], ["agent_0", "agent_1"], config_path
-            )
-            self.assertEqual(
-                [config["habitat"]["simulator"]["agents"][name]["height"] for name in ("agent_0", "agent_1")],
-                [0.8, 1.5],
-                config_path,
-            )
+            self.assertEqual(simulator["type"], "MultiAgentSim-v0", config_path)
+            self.assertEqual(simulator["agents_order"], ["agent_0", "agent_1"], config_path)
+            for agent_name, expected_agent in expected_agents.items():
+                agent = simulator["agents"][agent_name]
+                self.assertEqual(agent["height"], expected_agent["height"], config_path)
+                self.assertEqual(agent["radius"], 0.18, config_path)
+                for sensor_name in ("rgb_sensor", "depth_sensor"):
+                    sensor = agent["sim_sensors"][sensor_name]
+                    self.assertEqual(sensor["uuid"], f"{agent_name}_{sensor_name[:-7]}", config_path)
+                    self.assertEqual(sensor["position"], expected_agent["position"], config_path)
+
+            self.assertEqual(config["habitat"]["environment"]["max_episode_steps"], 250, config_path)
             self.assertEqual(config["multiagent"]["perception_agents_per_step"], 3, config_path)
             self.assertEqual(config["multiagent"]["perception_interval_steps"], 1, config_path)
             self.assertEqual(config["multiagent"]["episode_termination"], "cooperative", config_path)
+            self.assertFalse(config["multiagent"]["inter_agent_avoidance"], config_path)
+            self.assertEqual(config["multiagent"]["agent_spawn_offset"], 1.0, config_path)
             self.assertEqual(
                 config["habitat"]["task"]["measurements"]["success"]["success_distance"],
                 0.35,
                 config_path,
             )
-            self.assertIn("objectnav", config["habitat"]["dataset"]["data_path"], config_path)
+            self.assertEqual(config["habitat"]["dataset"]["data_path"], expected_dataset_paths[config_path], config_path)
 
             self.assertEqual(set(config["detector"]), {"yoloe"}, config_path)
             self.assertEqual(config["detector"]["yoloe"], {

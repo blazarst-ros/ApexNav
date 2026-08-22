@@ -10,6 +10,7 @@ from llm.utils.answer_validation import (
     is_valid_legacy_answer,
     split_legacy_answer,
 )
+import ast
 import os
 """业务解包层,
 从结构化列表中解包出ApexNav 执行层可直接使用的 3 个业务参数，是连接 LLM 与导航核心逻辑的关键
@@ -35,9 +36,9 @@ def read_answer(llm_answer_path, llm_response_path, label, llm_client):
             for line in lines:
                 if line.startswith(f"{label}:"):
                     try:
-                        # 使用 eval 解析存入的列表字符串
+                        # 缓存仅允许历史答案文件使用的 Python 字面量。
                         raw_content = line[len(label) + 1 :].strip()
-                        cached_answer = eval(raw_content)
+                        cached_answer = ast.literal_eval(raw_content)
                         if is_valid_legacy_answer(cached_answer):
                             label_existing = True
                             llm_answer = cached_answer
