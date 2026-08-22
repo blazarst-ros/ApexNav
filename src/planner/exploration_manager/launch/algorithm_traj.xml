@@ -5,18 +5,11 @@
     <arg name="odometry_topic_"/>
     <arg name="sensor_pose_topic_"/>
     <arg name="depth_topic_"/>
-    <arg name="camera_info_topic_"/>
 
     <arg name="cx_"/>
     <arg name="cy_"/>
     <arg name="fx_"/>
     <arg name="fy_"/>
-    <arg name="depth_unit_scale_" default="0.0"/>
-    <arg name="world_frame_" default="world"/>
-    <arg name="planning_param_file_" default="$(find trajectory_manager)/config/planning_param.yaml"/>
-    <arg name="obstacles_inflation_" default="0.18"/>
-    <arg name="filter_min_height_" default="0.28"/>
-    <arg name="filter_max_height_" default="1.18"/>
     
     <!-- Real-world mode flag (default to false for simulation) -->
     <arg name="is_real_world_" default="false"/>
@@ -24,12 +17,11 @@
     <!-- main node -->
     <node pkg="exploration_manager" name="exploration_node" type="exploration_node" output="screen">
         <!-- Load trajectory planning parameters for real-world mode -->
-        <rosparam file="$(arg planning_param_file_)" command="load" />
+        <rosparam file="$(find trajectory_manager)/config/planning_param.yaml" command="load" />
 
         <remap from ="/odom_world"    to = "$(arg odometry_topic_)"/>
         <remap from ="/map_ros/pose"  to = "$(arg sensor_pose_topic_)"/>
         <remap from ="/map_ros/depth" to = "$(arg depth_topic_)"/>
-        <remap from ="/map_ros/camera_info" to = "$(arg camera_info_topic_)"/>
 
         <!-- FSM mode selection -->
         <param name="is_real_world" value="$(arg is_real_world_)" type="bool"/>
@@ -40,7 +32,7 @@
         <param name="sdf_map/resolution" value="0.05" />
         <param name="sdf_map/map_size_x" value="$(arg map_size_x_)" />
         <param name="sdf_map/map_size_y" value="$(arg map_size_y_)" />
-        <param name="sdf_map/obstacles_inflation" value="$(arg obstacles_inflation_)" />
+        <param name="sdf_map/obstacles_inflation" value="0.18" />
         <param name="sdf_map/local_bound" value="5.0"/>
 
         <param name="sdf_map/p_hit" value="0.90"/>
@@ -54,22 +46,16 @@
 
         <param name="map_ros/cx" value="$(arg cx_)"/>
         <param name="map_ros/cy" value="$(arg cy_)"/>
-        <param name="map_ros/use_camera_info" value="true" type="bool"/>
-        <param name="map_ros/enable_legacy_semantics" value="false" type="bool"/>
-        <param name="map_ros/require_downward_camera" value="false" type="bool"/>
-        <param name="map_ros/mapping_history_sec" value="5.0"/>
-        <param name="map_ros/semantic_match_tolerance" value="0.05"/>
         <param name="map_ros/fx" value="$(arg fx_)"/>
         <param name="map_ros/fy" value="$(arg fy_)"/>
         <param name="map_ros/depth_filter_maxdist" value="4.99"/>
         <param name="map_ros/depth_filter_mindist" value="0.0"/>
         <param name="map_ros/depth_filter_margin" value="2"/>
-        <param name="map_ros/filter_min_height" value="$(arg filter_min_height_)"/>
-        <param name="map_ros/filter_max_height" value="$(arg filter_max_height_)"/>
+        <param name="map_ros/filter_min_height" value="0.28"/>
+        <param name="map_ros/filter_max_height" value="1.18"/>
         <param name="map_ros/k_depth_scaling_factor" value="65535.0"/>
-        <param name="map_ros/depth_unit_scale" value="$(arg depth_unit_scale_)"/>
         <param name="map_ros/skip_pixel" value="1"/>
-        <param name="map_ros/frame_id" value="$(arg world_frame_)"/>
+        <param name="map_ros/frame_id" value="world"/>
         <param name="map_ros/virtual_ground_height" value="-0.34"/>
 
         <param name="fsm/replan_time" value="0.30" type="double"/>

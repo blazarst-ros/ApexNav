@@ -32,7 +32,6 @@ cd /home/blazarst/ApexNav
 /media/blazarst/Getea/Lite-ApexNav/run-lite-apex.sh \
   -m vlm.itm.clipitm --port 12182
 
-# 继续前确认输出：Hosting on port 12182...
 
 
 
@@ -44,7 +43,6 @@ LITE_APEX_WORKDIR=/media/blazarst/Getea/Lite-ApexNav/model-cache/ultralytics \
   -m vlm.detector.yoloe --port 12184 \
   --weights /media/blazarst/Getea/Lite-ApexNav/model-cache/yoloe-11l-seg.pt
 
-# 继续前确认输出：YOLOE warmup complete! 和 Hosting on port 12184...
 
 
 
@@ -76,13 +74,74 @@ roslaunch exploration_manager exploration.launch
 终端 6：HM3D-v2 Habitat 评测
 -----------------------------
 cd /home/blazarst/ApexNav
-# 必须保留 libffi 预加载；它修复 Conda 环境与 ROS cv_bridge 的兼容问题。
 LD_PRELOAD=/lib/x86_64-linux-gnu/libffi.so.7 \
 PYTHONUNBUFFERED=1 \
   /media/blazarst/Getea/Lite-ApexNav/run-lite-apex.sh \
   habitat_evaluation.py --dataset hm3dv2
 
 
+  cd /home/blazarst/ApexNav
+
+  LD_PRELOAD=/lib/x86_64-linux-gnu/libffi.so.7 \
+  PYTHONUNBUFFERED=1 \
+    /media/blazarst/Getea/Lite-ApexNav/run-lite-apex.sh \
+    habitat_evaluation.py --dataset mp3d \
+    'habitat.dataset.content_scenes=[EU6Fwq7SyZv]' \
+    habitat.environment.iterator_options.shuffle=true \
+    habitat.seed=20260822 \
+    video_output_path=videos/test_mp3d_EU6_shuffle_val
+
+
+
+  cd /home/blazarst/ApexNav
+
+  LD_PRELOAD=/lib/x86_64-linux-gnu/libffi.so.7 \
+  PYTHONUNBUFFERED=1 \
+    /media/blazarst/Getea/Lite-ApexNav/run-lite-apex.sh \
+    habitat_evaluation.py --dataset mp3d \
+    'habitat.dataset.content_scenes=[pLe4wQe7qrG]' \
+    habitat.environment.iterator_options.shuffle=true \
+    habitat.seed=20260822 \
+    video_output_path=videos/test_mp3d_PLE_shuffle_val
+
+
+
+  cd /home/blazarst/ApexNav
+
+  LD_PRELOAD=/lib/x86_64-linux-gnu/libffi.so.7 \
+  PYTHONUNBUFFERED=1 \
+    /media/blazarst/Getea/Lite-ApexNav/run-lite-apex.sh \
+    habitat_evaluation.py --dataset mp3d \
+    'habitat.dataset.content_scenes=[TbHJrupSAjP]' \
+    habitat.environment.iterator_options.shuffle=true \
+    habitat.seed=20260822 \
+    video_output_path=videos/test_mp3d_TBH_shuffle_val
+
+
+    cd /home/blazarst/ApexNav
+
+  LD_PRELOAD=/lib/x86_64-linux-gnu/libffi.so.7 \
+  PYTHONUNBUFFERED=1 \
+    /media/blazarst/Getea/Lite-ApexNav/run-lite-apex.sh \
+    habitat_evaluation.py --dataset mp3d \
+    'habitat.dataset.content_scenes=[X7HyMhZNoso]' \
+    habitat.environment.iterator_options.shuffle=true \
+    habitat.seed=20260822 \
+    video_output_path=videos/test_mp3d_X7H_shuffle_val
+
+
+
+
+    cd /home/blazarst/ApexNav
+
+  LD_PRELOAD=/lib/x86_64-linux-gnu/libffi.so.7 \
+  PYTHONUNBUFFERED=1 \
+    /media/blazarst/Getea/Lite-ApexNav/run-lite-apex.sh \
+    habitat_evaluation.py --dataset mp3d \
+    'habitat.dataset.content_scenes=[zsNo4HB9uLZ]' \
+    habitat.environment.iterator_options.shuffle=true \
+    habitat.seed=20260822 \
+    video_output_path=videos/test_mp3d_ZSN_shuffle_val
 
 
 常用选项（替换终端 6 的最后一行）

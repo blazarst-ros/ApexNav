@@ -69,7 +69,7 @@ Visualization Manager:
             Shaft Length: 1
             Shaft Radius: 0.05000000074505806
             Value: Axes
-          Topic: /mavros/local_position/odom
+          Topic: /habitat/odom
           Unreliable: false
           Value: false
         - Angle Tolerance: 0.10000000149011612
@@ -104,7 +104,7 @@ Visualization Manager:
             Shaft Length: 1
             Shaft Radius: 0.05000000074505806
             Value: Axes
-          Topic: /apexnav/camera/pose
+          Topic: /habitat/sensor_pose
           Unreliable: false
           Value: false
         - Class: rviz/Marker
@@ -120,7 +120,7 @@ Visualization Manager:
           Displays:
             - Class: rviz/Image
               Enabled: false
-              Image Topic: /apexnav/camera/depth/image_raw
+              Image Topic: /habitat/camera_depth
               Max Value: 1
               Median window: 5
               Min Value: 0
@@ -132,7 +132,7 @@ Visualization Manager:
               Value: false
             - Class: rviz/Image
               Enabled: true
-              Image Topic: /apexnav/camera/rgb/image_raw
+              Image Topic: /habitat/camera_rgb
               Max Value: 1
               Median window: 5
               Min Value: 0
@@ -628,7 +628,7 @@ Visualization Manager:
       Value: false
     - Class: rviz/Image
       Enabled: true
-      Image Topic: /apexnav/vlm/annotated_image
+      Image Topic: /detector/detect_img
       Max Value: 1
       Median window: 5
       Min Value: 0
@@ -638,19 +638,11 @@ Visualization Manager:
       Transport Hint: raw
       Unreliable: false
       Value: true
-    - Class: rviz/Marker
-      Enabled: true
-      Marker Topic: /apexnav/vlm/status_marker
-      Name: VLM_status
-      Namespaces:
-        apexnav_vlm: true
-      Queue Size: 10
-      Value: true
   Enabled: true
   Global Options:
     Background Color: 255; 255; 255
     Default Light: true
-    Fixed Frame: map
+    Fixed Frame: world
     Frame Rate: 30
   Name: root
   Tools:

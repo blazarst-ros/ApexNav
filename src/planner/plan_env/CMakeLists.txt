@@ -18,7 +18,6 @@ find_package(catkin REQUIRED COMPONENTS
   cv_bridge
   message_filters
   message_generation
-  nav_msgs
 )
 
 find_package(Eigen3 REQUIRED)
@@ -27,13 +26,6 @@ find_package(PCL 1.7 REQUIRED)
 add_message_files(
   FILES
   MultipleMasksWithConfidence.msg
-  SemanticObservation.msg
-  MissionState.msg
-)
-
-add_service_files(
-  FILES
-  StartMission.srv
 )
 
 generate_messages(
@@ -45,7 +37,7 @@ generate_messages(
 catkin_package(
   INCLUDE_DIRS include
   LIBRARIES plan_env
-  CATKIN_DEPENDS roscpp std_msgs message_runtime sensor_msgs nav_msgs
+  CATKIN_DEPENDS roscpp std_msgs message_runtime sensor_msgs
   #  DEPENDS system_lib
 )
 

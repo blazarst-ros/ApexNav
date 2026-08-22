@@ -26,7 +26,6 @@ public:
     nh.param("need_init", need_init, false);
     nh.param("max_correction_vel", max_correction_vel_, 0.6);
     nh.param("max_correction_omega", max_correction_omega_, 1.2);
-    nh.param<std::string>("world_frame", world_frame_, "map");
     traj_sub_ = nh_.subscribe("trajectory", 10, &TrajectoryServer::polyTrajCallback, this);
     odom_sub_ = nh_.subscribe("odometry", 10, &TrajectoryServer::odometryCallback, this);
     stop_sub_ = nh_.subscribe("/traj_server/stop", 10, &TrajectoryServer::stopCallback, this);
@@ -175,11 +174,10 @@ public:
 
   void stopCallback(const std_msgs::EmptyConstPtr& msg)
   {
-    receive_traj_ = false;
-    has_target_angle_ = false;
-    geometry_msgs::Twist zero;
-    vel_cmd_pub_.publish(zero);
-    ROS_WARN_THROTTLE(1.0, "[traj_server] Trajectory cleared; zero command published");
+    // Immediate emergency stop
+    ros::Time time_now = ros::Time::now();
+    double t_stop = (time_now - start_time_).toSec();
+    traj_duration_ = min(t_stop, traj_duration_);
   }
 
   void targetAngleCallback(const std_msgs::Float32ConstPtr& msg)
@@ -391,7 +389,7 @@ public:
     const double robot_radius = 0.18;
 
     visualization_msgs::Marker marker;
-    marker.header.frame_id = world_frame_;
+    marker.header.frame_id = "world";  // Set reference frame
     marker.header.stamp = ros::Time::now();
     marker.ns = "robot_position";
     marker.id = 0;
@@ -421,7 +419,7 @@ public:
 
     // Create and publish arrow (direction)
     visualization_msgs::Marker arrow_marker;
-    arrow_marker.header.frame_id = world_frame_;
+    arrow_marker.header.frame_id = "world";
     arrow_marker.header.stamp = ros::Time::now();
     arrow_marker.ns = "robot_direction";
     arrow_marker.id = 1;
@@ -457,7 +455,7 @@ public:
       vector<Eigen::Vector3d> path, double resolution, Eigen::Vector4d color, int id)
   {
     visualization_msgs::Marker mk;
-    mk.header.frame_id = world_frame_;
+    mk.header.frame_id = "world";
     mk.header.stamp = ros::Time::now();
     mk.type = visualization_msgs::Marker::SPHERE_LIST;
     mk.action = visualization_msgs::Marker::DELETE;
@@ -524,7 +522,6 @@ private:
   double rotation_accum_;  // accumulated absolute yaw change (rad)
   double last_odom_yaw_;   // last odom yaw used for accumulation
   double max_correction_vel_, max_correction_omega_;
-  std::string world_frame_;
 };
 
 int main(int argc, char** argv)

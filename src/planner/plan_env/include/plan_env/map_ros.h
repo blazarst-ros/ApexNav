@@ -10,7 +10,6 @@
 
 // Custom messages and mapping components
 #include <plan_env/MultipleMasksWithConfidence.h>
-#include <plan_env/SemanticObservation.h>
 #include <plan_env/sdf_map2d.h>
 #include <plan_env/object_map2d.h>
 #include <plan_env/value_map2d.h>
@@ -21,7 +20,6 @@
 // Standard ROS messages
 #include <geometry_msgs/PoseStamped.h>
 #include <sensor_msgs/PointCloud2.h>
-#include <sensor_msgs/CameraInfo.h>
 #include <nav_msgs/Odometry.h>
 #include <visualization_msgs/Marker.h>
 #include <std_msgs/Float64.h>
@@ -43,7 +41,6 @@
 #include <pcl/search/impl/search.hpp>
 #include <pcl/filters/conditional_removal.h>
 #include <unordered_set>
-#include <deque>
 
 // Type aliases for convenience
 using std::shared_ptr;
@@ -69,8 +66,6 @@ private:
       const sensor_msgs::ImageConstPtr& img, const nav_msgs::OdometryConstPtr& pose);
   void updateESDFCallback(const ros::TimerEvent& /*event*/);
   void detectedObjectCloudCallback(const plan_env::MultipleMasksWithConfidenceConstPtr& msg);
-  void semanticObservationCallback(const plan_env::SemanticObservationConstPtr& msg);
-  void cameraInfoCallback(const sensor_msgs::CameraInfoConstPtr& msg);
   void itmScoreCallback(const std_msgs::Float64ConstPtr& msg);
   void visCallback(const ros::TimerEvent& /*event*/);
 
@@ -120,23 +115,19 @@ private:
       value_map_pub_, confidence_map_pub_;
 
   // ROS subscribers for sensor data
-  ros::Subscriber detected_object_cloud_sub_, itm_score_sub_, semantic_observation_sub_,
-      camera_info_sub_;
+  ros::Subscriber detected_object_cloud_sub_, itm_score_sub_;
 
   // ROS timers for periodic updates
   ros::Timer esdf_timer_, vis_timer_;
 
   // Camera intrinsic parameters
   double cx_, cy_, fx_, fy_;
-  bool camera_info_ready_, use_camera_info_, require_downward_camera_;
-  int camera_width_, camera_height_;
 
   // Depth filtering parameters
   double depth_filter_maxdist_, depth_filter_mindist_;  ///< Valid depth range for filtering
   double filter_min_height_, filter_max_height_;        ///< Height range for obstacle detection
   int depth_filter_margin_;        ///< Margin pixels to ignore near image borders
   double k_depth_scaling_factor_;  ///< Depth value scaling factor for different sensors
-  double depth_unit_scale_;        ///< Metres per raw depth unit; 0 keeps normalized-depth compatibility
   int skip_pixel_;                 ///< Pixel skip factor for processing efficiency
   std::string frame_id_;           ///< Reference frame ID for published data
   double virtual_ground_height_;   ///< Virtual ground plane offset for navigation
@@ -157,19 +148,6 @@ private:
   int continue_over_depth_count_;  ///< Counter for maintaining over-depth object consistency
   double itm_score_;               ///< Current image-text matching score
   ros::Time map_start_time_;       ///< Timestamp of mapping system initialization
-
-  struct MappingFrame {
-    ros::Time stamp;
-    Eigen::Vector3d camera_pos;
-    Eigen::Quaterniond camera_q;
-    double camera_yaw;
-    std::vector<Eigen::Vector2i> free_grids;
-    PointCloud3D::Ptr depth_cloud;
-  };
-  std::deque<MappingFrame> mapping_history_;
-  double mapping_history_sec_, semantic_match_tolerance_;
-  ros::Time last_semantic_stamp_;
-  std::string semantic_target_;
 
   friend SDFMap2D;
 };

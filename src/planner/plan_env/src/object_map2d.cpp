@@ -31,7 +31,6 @@ ObjectMap2D::ObjectMap2D(SDFMap2D* sdf_map, ros::NodeHandle& nh)
   nh.param("object/fusion_type", fusion_type_, 1);
   nh.param("object/use_observation", use_observation_, true);
   nh.param("object/vis_cloud", is_vis_cloud_, false);
-  nh.param("map_ros/frame_id", frame_id_, std::string("world"));
 
   // Setup ROS communication
   object_cloud_pub_ = nh.advertise<sensor_msgs::PointCloud2>("/object/clouds", 10);
