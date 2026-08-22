@@ -58,6 +58,8 @@ AGENT_CHARS = {
     2: {"forward": "t", "left": "f", "right": "h", "up": "r", "down": "y", "finish": "g"},
 }
 fusion_threshold = 0.4
+observation_snapshots = {}
+ros_pubs = {}
 
 def signal_handler(sig, frame):
     print("Ctrl+C detected! Shutting down...")
@@ -82,10 +84,12 @@ def print_manual_controls():
     print("Note: Focus the 'Observations' window before pressing keys.\n")
 
 def publish_observations(event):
-    global msg_observations, fusion_threshold
-    global ros_pub, confidence_threshold_pub
-    tmp = deepcopy(msg_observations)
-    ros_pub.habitat_publish_ros_topic(tmp)
+    global observation_snapshots, fusion_threshold
+    global ros_pubs, confidence_threshold_pub
+    for agent_name, ros_publisher in ros_pubs.items():
+        snapshot = observation_snapshots.get(agent_name)
+        if snapshot is not None:
+            ros_publisher.habitat_publish_ros_topic(deepcopy(snapshot))
     publish_float64(confidence_threshold_pub, fusion_threshold)
 
 def _parse_dataset_arg():
@@ -98,8 +102,8 @@ def _parse_dataset_arg():
     return args.dataset, unknown
 
 def main(cfg: DictConfig) -> None:
-    global msg_observations, fusion_threshold
-    global ros_pub, confidence_threshold_pub
+    global observation_snapshots, fusion_threshold
+    global ros_pubs, confidence_threshold_pub
 
     num_agents = cfg.get("num_agents", 2)
     agent_names = [f"agent_{i}" for i in range(num_agents)]
@@ -197,10 +201,12 @@ def main(cfg: DictConfig) -> None:
             "observations": agent_obs,
         }
 
-    # Use agent_0 as primary for shared messages
-    ros_pub = ros_pubs[agent_names[0]]
-    timer = rospy.Timer(rospy.Duration(0.1), publish_observations)
+    observation_snapshots = {
+        agent_name: deepcopy(agent_states[agent_name]["observations"])
+        for agent_name in agent_names
+    }
     confidence_threshold_pub = rospy.Publisher("/detector/confidence_threshold", Float64, queue_size=10)
+    timer = rospy.Timer(rospy.Duration(0.1), publish_observations)
 
     # Per-agent ITM and cloud publishers
     _itm_pubs = {}
@@ -266,8 +272,10 @@ def main(cfg: DictConfig) -> None:
         else:
             continue
 
-        timer.shutdown()
         observations = _multi_step({agent_name: action})
+        for updated_name, updated_obs in observations.items():
+            updated_obs["camera_pitch"] = agent_states[updated_name]["camera_pitch"]
+            observation_snapshots[updated_name] = deepcopy(updated_obs)
         count_steps += 1
         info = env.get_metrics()
 
@@ -289,6 +297,7 @@ def main(cfg: DictConfig) -> None:
 
         agent_obs["rgb"] = detect_img
         agent_obs["camera_pitch"] = ast["camera_pitch"]
+        observation_snapshots[agent_name] = deepcopy(agent_obs)
         ros_pubs[agent_name].habitat_publish_ros_topic(agent_obs)
 
         # Per-agent point cloud publisher
