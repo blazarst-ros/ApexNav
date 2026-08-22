@@ -1,0 +1,332 @@
+# ApexNav MultiAgentSim-v0 patch for Habitat-Lab v0.3.1.
+# Applies from the Habitat-Lab checkout root at base commit 142616776544f918c19e7f0392b65cc8cc69fa13.
+diff --git a/habitat-lab/habitat/config/default_structured_configs.py b/habitat-lab/habitat/config/default_structured_configs.py
+index 1796cd1fe..3cb705f75 100644
+--- a/habitat-lab/habitat/config/default_structured_configs.py
++++ b/habitat-lab/habitat/config/default_structured_configs.py
+@@ -1481,2 +1481,3 @@ class SimulatorSensorConfig(HabitatBaseConfig):
+     type: str = MISSING
++    uuid: str = ""  # Empty string = use sensor class default _get_uuid()
+     height: int = 480
+@@ -1486,2 +1487,12 @@ class SimulatorSensorConfig(HabitatBaseConfig):
+     orientation: List[float] = field(default_factory=lambda: [0.0, 0.0, 0.0])
++    # Horizontal field of view in degrees (added here to allow overrides in subclasses)
++    hfov: int = 90
++    # Camera sensor extras
++    sensor_subtype: str = "PINHOLE"
++    noise_model: str = "None"
++    noise_model_kwargs: Dict[str, Any] = field(default_factory=dict)
++    # Depth sensor fields
++    min_depth: float = 0.0
++    max_depth: float = 10.0
++    normalize_depth: bool = True
+ 
+diff --git a/habitat-lab/habitat/core/simulator.py b/habitat-lab/habitat/core/simulator.py
+index 4c30bfc45..05d6ec44f 100644
+--- a/habitat-lab/habitat/core/simulator.py
++++ b/habitat-lab/habitat/core/simulator.py
+@@ -85,3 +85,3 @@ class Sensor(metaclass=abc.ABCMeta):
+         self.config = kwargs["config"] if "config" in kwargs else None
+-        if hasattr(self.config, "uuid"):
++        if hasattr(self.config, "uuid") and self.config.uuid:
+             # We allow any sensor config to override the uuid
+diff --git a/habitat-lab/habitat/sims/habitat_simulator/__init__.py b/habitat-lab/habitat/sims/habitat_simulator/__init__.py
+index c7f34cc97..9906a5449 100644
+--- a/habitat-lab/habitat/sims/habitat_simulator/__init__.py
++++ b/habitat-lab/habitat/sims/habitat_simulator/__init__.py
+@@ -23 +23,7 @@ def _try_register_habitat_sim():
+                 raise habitat_sim_import_error
++
++    if has_habitat_sim:
++        # Register MultiAgentSim-v0 (multi-agent ObjectNav simulator)
++        from habitat.sims.habitat_simulator.multi_agent_sim import (  # noqa: F401
++            MultiAgentHabitatSim,
++        )
+diff --git a/habitat-lab/habitat/sims/habitat_simulator/habitat_simulator.py b/habitat-lab/habitat/sims/habitat_simulator/habitat_simulator.py
+index 1f5a86394..396e15047 100644
+--- a/habitat-lab/habitat/sims/habitat_simulator/habitat_simulator.py
++++ b/habitat-lab/habitat/sims/habitat_simulator/habitat_simulator.py
+@@ -106,2 +106,8 @@ class HabitatSimRGBSensor(RGBSensor, HabitatSimSensor):
+     _get_default_spec = habitat_sim.CameraSensorSpec
++    _config_ignore_keys = {
++        "max_depth",
++        "min_depth",
++        "normalize_depth",
++        "uuid",
++    }.union(HabitatSimSensor._config_ignore_keys)
+     sim_sensor_type = habitat_sim.SensorType.COLOR
+@@ -143,2 +149,3 @@ class HabitatSimDepthSensor(DepthSensor, HabitatSimSensor):
+         "normalize_depth",
++        "uuid",
+     }.union(HabitatSimSensor._config_ignore_keys)
+diff --git a/habitat-lab/habitat/sims/habitat_simulator/multi_agent_sim.py b/habitat-lab/habitat/sims/habitat_simulator/multi_agent_sim.py
+new file mode 100644
+index 000000000..9c9f6d21b
+--- /dev/null
++++ b/habitat-lab/habitat/sims/habitat_simulator/multi_agent_sim.py
+@@ -0,0 +1,265 @@
++#!/usr/bin/env python3
++
++# Copyright (c) Meta Platforms, Inc. and its affiliates.
++# This source code is licensed under the MIT license found in the
++# LICENSE file in the root directory of this source tree.
++
++"""
++Multi-agent extension of HabitatSim (Sim-v0) for ObjectNav.
++
++Sim-v0 only creates ONE agent in habitat-sim because create_sim_config()
++passes [agent_config] as a single-element list to habitat_sim.Configuration().
++This class overrides create_sim_config() to build one AgentConfiguration per
++agent and pass them all, so habitat-sim creates all agents natively.
++
++Key differences from Sim-v0:
++  - Sensor UUIDs are namespaced with agent name prefix (e.g. agent_0_rgb)
++    so observations from different agents don't collide.
++  - create_sim_config() builds N AgentConfigurations (one per agent).
++  - reset() / step() / get_sensor_observations() return observations for
++    all agents keyed by agent_id.
++"""
++
++from typing import Dict, List, Optional, Union, cast
++
++import habitat_sim
++import numpy as np
++from gym import spaces
++from omegaconf import DictConfig, read_write
++
++from habitat.config.default import get_agent_config
++from habitat.core.registry import registry
++from habitat.core.simulator import Observations, SensorSuite
++from habitat.sims.habitat_simulator.habitat_simulator import (
++    HabitatSim,
++    HabitatSimSensor,
++    overwrite_config,
++)
++
++
++@registry.register_simulator(name="MultiAgentSim-v0")
++class MultiAgentHabitatSim(HabitatSim):
++    """HabitatSim subclass that creates multiple agents in habitat-sim.
++
++    Use this instead of Sim-v0 when num_agents > 1.  It follows the same
++    sensor-UUID namespacing pattern as RearrangeSim-v0 (see
++    rearrange_sim.py:68-82) but without the rearrangement-specific machinery
++    (articulated agents, physics, PDDL, grasp managers, etc.).
++    """
++
++    def __init__(self, config: DictConfig) -> None:
++        # Before building the simulator, namespace sensor UUIDs per-agent
++        # so that observations don't collide (same pattern as RearrangeSim).
++        self._agent_names: List[str] = list(config.agents_order)
++        self._num_agents: int = len(self._agent_names)
++
++        if self._num_agents > 1:
++            with read_write(config):
++                for agent_name in list(config.agents.keys()):
++                    agent_cfg = config.agents[agent_name]
++                    sensor_keys = list(agent_cfg.sim_sensors.keys())
++                    for sensor_key in sensor_keys:
++                        sensor_config = agent_cfg.sim_sensors[sensor_key]
++                        # Only add prefix if not already prefixed
++                        if not sensor_config.uuid.startswith(f"{agent_name}_"):
++                            with read_write(sensor_config):
++                                sensor_config.uuid = f"{agent_name}_{sensor_config.uuid}"
++
++        super().__init__(config)
++
++    def create_sim_config(
++        self, _sensor_suite: SensorSuite
++    ) -> habitat_sim.Configuration:
++        """Build a habitat_sim.Configuration with one AgentConfiguration per agent.
++
++        This is the core fix: Sim-v0 only creates one agent because it calls
++        ``habitat_sim.Configuration(sim_config, [agent_config])`` with a
++        single-element list.  We iterate over all agents in agents_order and
++        build an AgentConfiguration for each.
++        """
++        sim_config = habitat_sim.SimulatorConfiguration()
++        if not hasattr(sim_config, "scene_id"):
++            raise RuntimeError(
++                "Incompatible version of Habitat-Sim detected, please upgrade habitat_sim"
++            )
++        overwrite_config(
++            config_from=self.habitat_config.habitat_sim_v0,
++            config_to=sim_config,
++            ignore_keys={"gpu_gpu"},
++        )
++        sim_config.scene_dataset_config_file = (
++            self.habitat_config.scene_dataset
++        )
++        sim_config.scene_id = self.habitat_config.scene
++
++        sensor_specs_by_uuid = {}
++        for sensor in _sensor_suite.sensors.values():
++            assert isinstance(sensor, HabitatSimSensor)
++            sim_sensor_cfg = sensor._get_default_spec()
++            overwrite_config(
++                config_from=sensor.config,
++                config_to=sim_sensor_cfg,
++                ignore_keys=sensor._config_ignore_keys,
++                trans_dict={
++                    "sensor_model_type": lambda v: getattr(
++                        habitat_sim.FisheyeSensorModelType, v
++                    ),
++                    "sensor_subtype": lambda v: getattr(
++                        habitat_sim.SensorSubType, v
++                    ),
++                },
++            )
++            sim_sensor_cfg.uuid = sensor.uuid
++            sim_sensor_cfg.resolution = list(
++                sensor.observation_space.shape[:2]
++            )
++            sim_sensor_cfg.sensor_type = sensor.sim_sensor_type
++            sim_sensor_cfg.gpu2gpu_transfer = (
++                self.habitat_config.habitat_sim_v0.gpu_gpu
++            )
++            sensor_specs_by_uuid[sensor.uuid] = sim_sensor_cfg
++
++        agent_configs: List[habitat_sim.AgentConfiguration] = []
++        for agent_name in self.habitat_config.agents_order:
++            agent_cfg = self.habitat_config.agents[agent_name]
++
++            hab_agent_config = habitat_sim.AgentConfiguration()
++            overwrite_config(
++                config_from=agent_cfg,
++                config_to=hab_agent_config,
++                ignore_keys={
++                    "is_set_start_state",
++                    "sensors",
++                    "sim_sensors",
++                    "start_position",
++                    "start_rotation",
++                    "articulated_agent_urdf",
++                    "articulated_agent_type",
++                    "joint_start_noise",
++                    "joint_that_can_control",
++                    "motion_data_path",
++                    "ik_arm_urdf",
++                    "grasp_managers",
++                    "max_climb",
++                    "max_slope",
++                    "joint_start_override",
++                },
++            )
++
++            agent_sensor_specs = []
++            for sensor_key in agent_cfg.sim_sensors.keys():
++                sensor_cfg = agent_cfg.sim_sensors[sensor_key]
++                uuid = sensor_cfg.uuid
++                if uuid in sensor_specs_by_uuid:
++                    agent_sensor_specs.append(sensor_specs_by_uuid[uuid])
++
++            hab_agent_config.sensor_specifications = agent_sensor_specs
++
++            hab_agent_config.action_space = {
++                0: habitat_sim.ActionSpec("stop"),
++                1: habitat_sim.ActionSpec(
++                    "move_forward",
++                    habitat_sim.ActuationSpec(
++                        amount=self.habitat_config.forward_step_size
++                    ),
++                ),
++                2: habitat_sim.ActionSpec(
++                    "turn_left",
++                    habitat_sim.ActuationSpec(
++                        amount=self.habitat_config.turn_angle
++                    ),
++                ),
++                3: habitat_sim.ActionSpec(
++                    "turn_right",
++                    habitat_sim.ActuationSpec(
++                        amount=self.habitat_config.turn_angle
++                    ),
++                ),
++                4: habitat_sim.ActionSpec(
++                    "look_up",
++                    habitat_sim.ActuationSpec(
++                        amount=self.habitat_config.turn_angle
++                    ),
++                ),
++                5: habitat_sim.ActionSpec(
++                    "look_down",
++                    habitat_sim.ActuationSpec(
++                        amount=self.habitat_config.turn_angle
++                    ),
++                ),
++            }
++
++            if len(agent_configs) == 0 and self.habitat_config.default_agent_navmesh:
++                sim_config.navmesh_settings = habitat_sim.nav.NavMeshSettings()
++                sim_config.navmesh_settings.set_defaults()
++                sim_config.navmesh_settings.agent_radius = hab_agent_config.radius
++                sim_config.navmesh_settings.agent_height = hab_agent_config.height
++                sim_config.navmesh_settings.agent_max_climb = agent_cfg.max_climb
++                sim_config.navmesh_settings.agent_max_slope = agent_cfg.max_slope
++                sim_config.navmesh_settings.include_static_objects = (
++                    self.habitat_config.navmesh_include_static_objects
++                )
++
++            agent_configs.append(hab_agent_config)
++
++        output = habitat_sim.Configuration(sim_config, agent_configs)
++        output.enable_batch_renderer = (
++            self.habitat_config.renderer.enable_batch_renderer
++        )
++        return output
++
++    def _get_all_agent_observations(self, sim_obs) -> Observations:
++        """Convert raw sim observations into the habitat-lab Observations format."""
++        if not isinstance(sim_obs, dict) or not any(
++            isinstance(k, int) for k in sim_obs.keys()
++        ):
++            return self._sensor_suite.get_observations(sim_obs)
++
++        merged = {}
++        for agent_id, agent_obs in sim_obs.items():
++            merged.update(agent_obs)
++        return self._sensor_suite.get_observations(merged)
++
++    def reset(self) -> Observations:
++        sim_obs = habitat_sim.Simulator.reset(self)
++        if self._update_agents_state():
++            sim_obs = self.get_sensor_observations(
++                agent_ids=list(range(self._num_agents))
++            )
++
++        self._prev_sim_obs = sim_obs
++        if self.config.enable_batch_renderer:
++            self.add_keyframe_to_observations(sim_obs)
++            return sim_obs
++        return self._get_all_agent_observations(sim_obs)
++
++    def step(
++        self, action: Optional[Union[str, np.ndarray, int]]
++    ) -> Observations:
++        if action is None:
++            sim_obs = self.get_sensor_observations(
++                agent_ids=list(range(self._num_agents))
++            )
++        else:
++            sim_obs = habitat_sim.Simulator.step(self, action)
++        self._prev_sim_obs = sim_obs
++        if self.config.enable_batch_renderer:
++            self.add_keyframe_to_observations(sim_obs)
++            return sim_obs
++        return self._get_all_agent_observations(sim_obs)
++
++    def get_sensor_observations(self, agent_ids=None):
++        """Get observations for specified agents."""
++        if agent_ids is None:
++            agent_ids = list(range(self._num_agents))
++        return habitat_sim.Simulator.get_sensor_observations(
++            self, agent_ids=agent_ids
++        )
++
++    @property
++    def num_agents(self) -> int:
++        return self._num_agents
++
++    @property
++    def agent_names(self) -> List[str]:
++        return list(self._agent_names)
