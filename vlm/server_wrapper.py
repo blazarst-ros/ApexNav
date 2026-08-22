@@ -10,9 +10,6 @@ import requests
 from flask import Flask, jsonify, request
 
 
-VLM_REQUEST_TIMEOUT = float(os.environ.get("VLM_REQUEST_TIMEOUT", "5"))
-
-
 class ServerMixin:
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
@@ -64,53 +61,56 @@ def str_to_image(img_str: str) -> np.ndarray:
     return cv2.imdecode(img_arr, cv2.IMREAD_ANYCOLOR)
 
 
-def send_request(
-    url: str,
-    *,
-    max_attempts: int = 1,
-    backoff_seconds: float = 0.0,
-    timeout: float = VLM_REQUEST_TIMEOUT,
-    **kwargs: Any,
-) -> dict:
-    """Send a bounded VLM request without waiting for stale work to drain."""
-    if max_attempts < 1:
-        raise ValueError("max_attempts must be at least one")
-    if backoff_seconds < 0:
-        raise ValueError("backoff_seconds cannot be negative")
-    if timeout <= 0:
-        raise ValueError("timeout must be positive")
-
-    deadline = time.monotonic() + timeout
-    for attempt in range(max_attempts):
+def send_request(url: str, **kwargs: Any) -> dict:
+    """Match Lite-ApexNav's bounded request and retry contract."""
+    max_attempts = int(
+        kwargs.pop("max_attempts", os.environ.get("VLM_REQUEST_ATTEMPTS", 1))
+    )
+    retry_backoff = float(
+        kwargs.pop("retry_backoff", os.environ.get("VLM_RETRY_BACKOFF", 0.5))
+    )
+    last_error = None
+    for attempt in range(max(1, max_attempts)):
         try:
-            return _send_request(url, deadline=deadline, **kwargs)
-        except requests.exceptions.RequestException:
-            if attempt == max_attempts - 1 or time.monotonic() >= deadline:
-                raise
-            sleep_seconds = min(backoff_seconds, max(0.0, deadline - time.monotonic()))
-            if sleep_seconds:
-                time.sleep(sleep_seconds)
-    raise RuntimeError("unreachable")
+            return _send_request(url, **kwargs)
+        except Exception as exc:
+            last_error = exc
+            if attempt + 1 < max_attempts:
+                time.sleep(retry_backoff * (attempt + 1))
+    raise RuntimeError(
+        f"VLM request to {url} failed after {max(1, max_attempts)} attempts: {last_error}"
+    ) from last_error
 
 
-def _send_request(url: str, *, deadline: float, **kwargs: Any) -> dict:
-    """Perform one HTTP request using the caller's end-to-end deadline."""
-    remaining = deadline - time.monotonic()
-    if remaining <= 0:
-        raise requests.exceptions.Timeout("VLM request deadline expired")
-
+def _send_request(url: str, **kwargs: Any) -> dict:
+    """Perform one Lite-ApexNav HTTP request window after payload encoding."""
+    request_timeout = float(
+        kwargs.pop("request_timeout", os.environ.get("VLM_REQUEST_TIMEOUT", 5))
+    )
     payload = {
         key: image_to_str(value, quality=kwargs.get("quality", 90))
         if isinstance(value, np.ndarray)
         else value
         for key, value in kwargs.items()
     }
-    response = requests.post(
-        url,
-        headers={"Content-Type": "application/json"},
-        json=payload,
-        timeout=remaining,
-    )
-    if response.status_code != 200:
-        response.raise_for_status()
-    return response.json()
+    deadline = time.monotonic() + request_timeout
+    while True:
+        remaining_timeout = deadline - time.monotonic()
+        if remaining_timeout <= 0:
+            raise Exception(f"Request timed out after {request_timeout} seconds")
+        try:
+            response = requests.post(
+                url,
+                headers={"Content-Type": "application/json"},
+                json=payload,
+                timeout=remaining_timeout,
+            )
+            if response.status_code == 200:
+                return response.json()
+            raise RuntimeError(
+                f"Request failed with HTTP {response.status_code}: {response.text[:200]}"
+            )
+        except (requests.exceptions.Timeout, requests.exceptions.RequestException):
+            if time.monotonic() >= deadline:
+                raise Exception(f"Request timed out after {request_timeout} seconds")
+            time.sleep(min(1.0, deadline - time.monotonic()))
