@@ -4,6 +4,10 @@ import subprocess
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import patch
+
+from scripts import check_lite_multiagent_runtime as runtime_preflight
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -47,6 +51,48 @@ class LiteMultiAgentRuntimeSetupTests(unittest.TestCase):
         self.assertIn('version("habitat-sim")', source)
         self.assertIn("multi_agent_sim.py", source)
         self.assertIn('get_simulator("MultiAgentSim-v0")', source)
+
+    def test_preflight_rejects_registry_only_partial_patch(self):
+        """Catches a registry-only checkout passing without the other four patch files."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            checkout = Path(temp_dir) / "habitat-lab"
+            local_habitat = checkout / "habitat-lab"
+            expected_module = (
+                local_habitat
+                / "habitat/sims/habitat_simulator/multi_agent_sim.py"
+            )
+            expected_module.parent.mkdir(parents=True)
+            shutil.copy2(
+                ROOT
+                / "habitat-lab/habitat-lab/habitat/sims/habitat_simulator/multi_agent_sim.py",
+                expected_module,
+            )
+            initialized = self.run_command("git", "-C", str(checkout), "init")
+            self.assertEqual(initialized.returncode, 0, initialized.stderr)
+
+            fake_module = SimpleNamespace(__file__=str(expected_module))
+            fake_registry = SimpleNamespace(
+                get_simulator=lambda name: object() if name == "MultiAgentSim-v0" else None
+            )
+
+            def import_module(name):
+                if name == "habitat.sims.habitat_simulator.multi_agent_sim":
+                    return fake_module
+                if name == "habitat.core.registry":
+                    return SimpleNamespace(registry=fake_registry)
+                raise AssertionError(f"unexpected import: {name}")
+
+            with patch.object(
+                runtime_preflight,
+                "_habitat_sim_version",
+                return_value="0.3.1",
+            ), patch.object(
+                runtime_preflight.importlib,
+                "import_module",
+                side_effect=import_module,
+            ):
+                with self.assertRaisesRegex(RuntimeError, "complete Habitat.*patch"):
+                    runtime_preflight.check_runtime(local_habitat)
 
     def test_setup_applies_patch_to_clean_pinned_worktree_and_is_idempotent(self):
         """Catches setup mutating the live checkout or failing on a second invocation."""
@@ -178,7 +224,7 @@ class LiteMultiAgentRuntimeSetupTests(unittest.TestCase):
             python_path.write_text(
                 "#!/usr/bin/env bash\n"
                 "if [[ \"${1:-}\" == *check_lite_multiagent_runtime.py ]]; then\n"
-                "  printf 'preflight=%s\\n' \"$2\"\n"
+                "  printf 'preflight=%s patch=%s\\n' \"$2\" \"$3\"\n"
                 "  exit 0\n"
                 "fi\n"
                 "printf 'pythonpath=%s\\n' \"$PYTHONPATH\"\n"
@@ -195,10 +241,11 @@ class LiteMultiAgentRuntimeSetupTests(unittest.TestCase):
                 "LITE_APEX_ROOT": str(lite_root),
                 "ROS_SETUP": str(ros_setup),
                 "LITE_PREFLIGHT": str(PREFLIGHT),
+                "PATCH_FILE": str(PATCH),
             }
             result = self.run_command("bash", str(RUNNER), "arbitrary.py", "--flag", "value", env=env)
             self.assertEqual(result.returncode, 0, result.stderr)
-            self.assertIn(f"preflight={habitat_path}", result.stdout)
+            self.assertIn(f"preflight={habitat_path} patch={PATCH}", result.stdout)
             self.assertIn(f"pythonpath={habitat_path}:", result.stdout)
             self.assertIn(f"yoloe={lite_root}/model-cache/yoloe-11l-seg.pt", result.stdout)
             self.assertIn(f"clip={lite_root}/model-cache/clip", result.stdout)
@@ -236,6 +283,7 @@ class LiteMultiAgentRuntimeSetupTests(unittest.TestCase):
                 "LITE_APEX_ROOT": str(lite_root),
                 "ROS_SETUP": str(ros_setup),
                 "LITE_PREFLIGHT": str(PREFLIGHT),
+                "PATCH_FILE": str(PATCH),
             }
 
             result = self.run_command("bash", str(RUNNER), "arbitrary.py", env=env)
