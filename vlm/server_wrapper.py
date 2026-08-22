@@ -1,7 +1,6 @@
 import base64
 import os
-import random
-import socket
+import threading
 import time
 from typing import Any, Dict
 
@@ -9,6 +8,9 @@ import cv2
 import numpy as np
 import requests
 from flask import Flask, jsonify, request
+
+
+VLM_REQUEST_TIMEOUT = float(os.environ.get("VLM_REQUEST_TIMEOUT", "5"))
 
 
 class ServerMixin:
@@ -19,144 +21,96 @@ class ServerMixin:
         raise NotImplementedError
 
 
-def host_model(model: Any, name: str, port: int = 5000) -> None:
-    """
-    Hosts a model as a REST API using Flask.
-    """
+def host_model(model: Any, name: str, port: int = 5000, run: bool = True) -> Flask:
+    """Create a single-process, serialized REST endpoint for a VLM model."""
     app = Flask(__name__)
+    request_lock = threading.Lock()
+
+    @app.route("/healthz", methods=["GET"])
+    def healthz() -> Dict[str, str]:
+        return {"status": "ok"}
 
     @app.route(f"/{name}", methods=["POST"])
     def process_request() -> Dict[str, Any]:
-        payload = request.json
-        return jsonify(model.process_payload(payload))
+        payload = request.get_json()
+        with request_lock:
+            response = model.process_payload(payload)
+        return jsonify(response)
 
-    app.run(host="localhost", port=port, threaded=True)
+    if run:
+        app.run(host="localhost", port=port, threaded=True)
+    return app
 
 
 def bool_arr_to_str(arr: np.ndarray) -> str:
-    """Converts a boolean array to a string."""
-    packed_str = base64.b64encode(arr.tobytes()).decode()
-    return packed_str
+    """Convert a uint8 mask array to a JSON-safe string."""
+    return base64.b64encode(arr.tobytes()).decode()
 
 
 def str_to_bool_arr(s: str, shape: tuple) -> np.ndarray:
-    """Converts a string to a boolean array."""
-    # Convert the string back into bytes using base64 decoding
-    bytes_ = base64.b64decode(s)
-
-    # Convert bytes to np.uint8 array
-    bytes_array = np.frombuffer(bytes_, dtype=np.uint8)
-
-    # Reshape the data back into a boolean array
-    unpacked = bytes_array.reshape(shape)
-    return unpacked
+    """Convert a JSON-safe uint8 mask string back to an array."""
+    return np.frombuffer(base64.b64decode(s), dtype=np.uint8).reshape(shape)
 
 
 def image_to_str(img_np: np.ndarray, quality: float = 90.0) -> str:
     encode_param = [int(cv2.IMWRITE_JPEG_QUALITY), int(quality)]
-    retval, buffer = cv2.imencode(".jpg", img_np, encode_param)
-    img_str = base64.b64encode(buffer).decode("utf-8")
-    return img_str
+    _, buffer = cv2.imencode(".jpg", img_np, encode_param)
+    return base64.b64encode(buffer).decode("utf-8")
 
 
 def str_to_image(img_str: str) -> np.ndarray:
     img_bytes = base64.b64decode(img_str)
     img_arr = np.frombuffer(img_bytes, dtype=np.uint8)
-    img_np = cv2.imdecode(img_arr, cv2.IMREAD_ANYCOLOR)
-    return img_np
+    return cv2.imdecode(img_arr, cv2.IMREAD_ANYCOLOR)
 
 
-def send_request(url: str, **kwargs: Any) -> dict:
-    response = {}
-    for attempt in range(10):
+def send_request(
+    url: str,
+    *,
+    max_attempts: int = 1,
+    backoff_seconds: float = 0.0,
+    timeout: float = VLM_REQUEST_TIMEOUT,
+    **kwargs: Any,
+) -> dict:
+    """Send a bounded VLM request without waiting for stale work to drain."""
+    if max_attempts < 1:
+        raise ValueError("max_attempts must be at least one")
+    if backoff_seconds < 0:
+        raise ValueError("backoff_seconds cannot be negative")
+    if timeout <= 0:
+        raise ValueError("timeout must be positive")
+
+    deadline = time.monotonic() + timeout
+    for attempt in range(max_attempts):
         try:
-            response = _send_request(url, **kwargs)
-            break
-        except Exception as e:
-            if attempt == 9:
-                raise RuntimeError(f"VLM request failed after 10 attempts: {url}") from e
-            else:
-                print(f"VLM Server Error Type: {type(e).__name__}")
-                print(f"VLM Server Error Detail: {str(e)}")
-                print(f"Retrying in 20-30 seconds...")
-                time.sleep(20 + random.random() * 10)
-
-    return response
+            return _send_request(url, deadline=deadline, **kwargs)
+        except requests.exceptions.RequestException:
+            if attempt == max_attempts - 1 or time.monotonic() >= deadline:
+                raise
+            sleep_seconds = min(backoff_seconds, max(0.0, deadline - time.monotonic()))
+            if sleep_seconds:
+                time.sleep(sleep_seconds)
+    raise RuntimeError("unreachable")
 
 
-def _send_request(url: str, **kwargs: Any) -> dict:
-    lockfiles_dir = "lockfiles"
-    if not os.path.exists(lockfiles_dir):
-        os.makedirs(lockfiles_dir)
-    filename = url.replace("/", "_").replace(":", "_") + ".lock"
-    filename = filename.replace("localhost", socket.gethostname())
-    filename = os.path.join(lockfiles_dir, filename)
-    try:
-        while True:
-            # Use a while loop to wait until this filename does not exist
-            while os.path.exists(filename):
-                # If the file exists, wait 50ms and try again
-                time.sleep(0.001)
+def _send_request(url: str, *, deadline: float, **kwargs: Any) -> dict:
+    """Perform one HTTP request using the caller's end-to-end deadline."""
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        raise requests.exceptions.Timeout("VLM request deadline expired")
 
-                try:
-                    # If the file was last modified more than 120 seconds ago, delete it
-                    if time.time() - os.path.getmtime(filename) > 120:
-                        os.remove(filename)
-                except FileNotFoundError:
-                    pass
-
-            rand_str = str(random.randint(0, 1000000))
-
-            with open(filename, "w") as f:
-                f.write(rand_str)
-            time.sleep(0.001)
-            try:
-                with open(filename, "r") as f:
-                    if f.read() == rand_str:
-                        break
-            except FileNotFoundError:
-                pass
-
-        # Create a payload dict which is a clone of kwargs but all np.array values are
-        # converted to strings
-        payload = {}
-        for k, v in kwargs.items():
-            if isinstance(v, np.ndarray):
-                payload[k] = image_to_str(v, quality=kwargs.get("quality", 90))
-            else:
-                payload[k] = v
-        # Set the headers
-        headers = {"Content-Type": "application/json"}
-
-        start_time = time.time()
-        while True:
-            try:
-                resp = requests.post(url, headers=headers, json=payload, timeout=1)
-                if resp.status_code == 200:
-                    result = resp.json()
-                    break
-                else:
-                    raise Exception("Request failed")
-            except (
-                requests.exceptions.Timeout,
-                requests.exceptions.RequestException,
-            ) as e:
-                print(e)
-                if time.time() - start_time > 20:
-                    raise Exception("Request timed out after 20 seconds")
-
-        try:
-            # Delete the lock file
-            os.remove(filename)
-        except FileNotFoundError:
-            pass
-
-    except Exception as e:
-        try:
-            # Delete the lock file
-            os.remove(filename)
-        except FileNotFoundError:
-            pass
-        raise e
-
-    return result
+    payload = {
+        key: image_to_str(value, quality=kwargs.get("quality", 90))
+        if isinstance(value, np.ndarray)
+        else value
+        for key, value in kwargs.items()
+    }
+    response = requests.post(
+        url,
+        headers={"Content-Type": "application/json"},
+        json=payload,
+        timeout=remaining,
+    )
+    if response.status_code != 200:
+        response.raise_for_status()
+    return response.json()
