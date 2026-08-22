@@ -10,6 +10,7 @@ ROOT = Path(__file__).resolve().parents[1]
 PATCH = ROOT / "patches/habitat-lab-v0.3.1-multi-agent.patch"
 SETUP = ROOT / "scripts/setup_lite_multiagent_habitat.sh"
 RUNNER = ROOT / "scripts/run-lite-multiagent.sh"
+PREFLIGHT = ROOT / "scripts/check_lite_multiagent_runtime.py"
 HABITAT_BASE = "142616776544f918c19e7f0392b65cc8cc69fa13"
 PATCHED_PATHS = (
     "habitat-lab/habitat/config/default_structured_configs.py",
@@ -39,6 +40,13 @@ class LiteMultiAgentRuntimeSetupTests(unittest.TestCase):
             self.assertIn(f"a/{relative_path}", content)
             self.assertIn(f"b/{relative_path}", content)
         self.assertIn("@registry.register_simulator(name=\"MultiAgentSim-v0\")", content)
+
+    def test_preflight_checks_lite_version_local_module_and_registry(self):
+        source = PREFLIGHT.read_text(encoding="utf-8")
+        self.assertIn("__version__", source)
+        self.assertIn('version("habitat-sim")', source)
+        self.assertIn("multi_agent_sim.py", source)
+        self.assertIn('get_simulator("MultiAgentSim-v0")', source)
 
     def test_setup_applies_patch_to_clean_pinned_worktree_and_is_idempotent(self):
         """Catches setup mutating the live checkout or failing on a second invocation."""
@@ -169,6 +177,10 @@ class LiteMultiAgentRuntimeSetupTests(unittest.TestCase):
             devel_setup.write_text("export DEVEL_SETUP_MARKER=loaded\n", encoding="utf-8")
             python_path.write_text(
                 "#!/usr/bin/env bash\n"
+                "if [[ \"${1:-}\" == *check_lite_multiagent_runtime.py ]]; then\n"
+                "  printf 'preflight=%s\\n' \"$2\"\n"
+                "  exit 0\n"
+                "fi\n"
                 "printf 'pythonpath=%s\\n' \"$PYTHONPATH\"\n"
                 "printf 'yoloe=%s\\n' \"$YOLOE_WEIGHTS\"\n"
                 "printf 'clip=%s\\n' \"$CLIP_DOWNLOAD_ROOT\"\n"
@@ -182,15 +194,57 @@ class LiteMultiAgentRuntimeSetupTests(unittest.TestCase):
                 "APEXNAV_ROOT": str(project_root),
                 "LITE_APEX_ROOT": str(lite_root),
                 "ROS_SETUP": str(ros_setup),
+                "LITE_PREFLIGHT": str(PREFLIGHT),
             }
             result = self.run_command("bash", str(RUNNER), "arbitrary.py", "--flag", "value", env=env)
             self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn(f"preflight={habitat_path}", result.stdout)
             self.assertIn(f"pythonpath={habitat_path}:", result.stdout)
             self.assertIn(f"yoloe={lite_root}/model-cache/yoloe-11l-seg.pt", result.stdout)
             self.assertIn(f"clip={lite_root}/model-cache/clip", result.stdout)
             self.assertIn("attempts=1 timeout=5 backoff=0.5", result.stdout)
             self.assertIn("setup=loaded/loaded", result.stdout)
             self.assertIn("args=arbitrary.py --flag value", result.stdout)
+
+    def test_runner_stops_when_lite_runtime_preflight_fails(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp = Path(temp_dir)
+            project_root = temp / "ApexNav"
+            lite_root = temp / "Lite-ApexNav"
+            python_path = lite_root / "conda-env/Lite-apex/bin/python"
+            habitat_path = project_root / "habitat-lab/habitat-lab"
+            ros_setup = temp / "ros/setup.bash"
+            devel_setup = project_root / "devel/setup.bash"
+            python_path.parent.mkdir(parents=True)
+            habitat_path.mkdir(parents=True)
+            ros_setup.parent.mkdir(parents=True)
+            devel_setup.parent.mkdir(parents=True)
+            ros_setup.write_text("true\n", encoding="utf-8")
+            devel_setup.write_text("true\n", encoding="utf-8")
+            python_path.write_text(
+                "#!/usr/bin/env bash\n"
+                "if [[ \"${1:-}\" == *check_lite_multiagent_runtime.py ]]; then\n"
+                "  printf 'habitat-sim 0.3.0 is incompatible\\n' >&2\n"
+                "  exit 42\n"
+                "fi\n"
+                "printf 'PAYLOAD_RAN\\n'\n",
+                encoding="utf-8",
+            )
+            python_path.chmod(0o755)
+            env = os.environ | {
+                "APEXNAV_ROOT": str(project_root),
+                "LITE_APEX_ROOT": str(lite_root),
+                "ROS_SETUP": str(ros_setup),
+                "LITE_PREFLIGHT": str(PREFLIGHT),
+            }
+
+            result = self.run_command("bash", str(RUNNER), "arbitrary.py", env=env)
+
+            self.assertNotEqual(result.returncode, 0)
+            self.assertNotIn("PAYLOAD_RAN", result.stdout)
+            self.assertIn("habitat-sim 0.3.0", result.stderr)
+            self.assertIn("setup_lite_multiagent_habitat.sh", result.stderr)
+            self.assertIn("Lite", result.stderr)
 
     def test_operating_guide_uses_only_lite_services_and_explains_current_frame_semantics(self):
         """Catches documentation reviving retired services or promising a nonexistent VLM queue."""
