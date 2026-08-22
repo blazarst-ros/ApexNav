@@ -9,8 +9,6 @@ Allows manual control of all configured agents using keyboard:
 
 # Standard library imports
 import argparse
-import gzip
-import json
 import os
 import traceback
 import numpy as np
@@ -48,7 +46,7 @@ from llm.answer_reader.answer_reader import read_answer
 from basic_utils.object_point_cloud_utils.object_point_cloud import (
     get_object_point_cloud,
 )
-from vlm.Labels import MP3D_ID_TO_NAME
+from vlm.label_utils import normalize_objectnav_label
 
 # Global settings
 num_agents = 2  # Number of agents
@@ -107,12 +105,6 @@ def main(cfg: DictConfig) -> None:
 
     num_agents = cfg.get("num_agents", 2)
     agent_names = [f"agent_{i}" for i in range(num_agents)]
-
-    # Load dataset info
-    with gzip.open("data/datasets/objectnav/mp3d/v1/val/val.json.gz", "rt", encoding="utf-8") as f:
-        val_data = json.load(f)
-    category_to_coco = val_data.get("category_to_mp3d_category_id", {})
-    id_to_name = {category_to_coco[cat]: MP3D_ID_TO_NAME[idx] for idx, cat in enumerate(category_to_coco)}
 
     cfg = patch_config(cfg)
     env_count = 0 if cfg.test_epi_num == -1 else cfg.test_epi_num
@@ -216,9 +208,7 @@ def main(cfg: DictConfig) -> None:
     print_manual_controls()
 
     label = env.current_episode.object_category
-    if label in category_to_coco:
-        coco_id = category_to_coco[label]
-        label = id_to_name.get(coco_id, label)
+    label = normalize_objectnav_label(label, cfg.habitat.dataset.data_path)
 
     llm_answer, room, fusion_threshold = read_answer(llm_answer_path, llm_response_path, label, llm_client)
 

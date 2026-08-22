@@ -8,6 +8,7 @@ from unittest.mock import patch
 import yaml
 
 from llm.answer_reader.answer_reader import read_answer
+from vlm.label_utils import normalize_objectnav_label
 
 
 CONFIG_PATHS = (
@@ -18,6 +19,59 @@ CONFIG_PATHS = (
 
 
 class LiteOfflineMultiAgentContractTests(unittest.TestCase):
+    def test_dataset_label_normalization_needs_no_mp3d_metadata_file(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            answer_path = Path(temp_dir) / "answers.txt"
+            response_path = Path(temp_dir) / "responses.txt"
+            answer_path.write_text(
+                "couch: ['bench', 'chair', 0.55, 'living room']\n",
+                encoding="utf-8",
+            )
+
+            with patch("gzip.open", side_effect=FileNotFoundError("MP3D metadata absent")):
+                hm3d_label = normalize_objectnav_label(
+                    "sofa",
+                    "data/datasets/objectnav/hm3d/v2/{split}/{split}.json.gz",
+                )
+                result = read_answer(
+                    str(answer_path),
+                    str(response_path),
+                    hm3d_label,
+                    SimpleNamespace(llm_client="offline"),
+                )
+
+        self.assertEqual(hm3d_label, "couch")
+        self.assertEqual(result, (["bench", "chair"], "living room", 0.55))
+        self.assertEqual(
+            normalize_objectnav_label(
+                "table",
+                "data/datasets/objectnav/mp3d/v1/{split}/{split}.json.gz",
+            ),
+            "table | dining table | coffee table | desk",
+        )
+
+    def test_entrypoints_normalize_labels_from_the_configured_dataset(self):
+        for entrypoint in (
+            Path("habitat_evaluation.py"),
+            Path("habitat_manual_control_multiagent.py"),
+        ):
+            source = entrypoint.read_text(encoding="utf-8")
+            self.assertIn(
+                "from vlm.label_utils import normalize_objectnav_label",
+                source,
+                entrypoint,
+            )
+            self.assertIn(
+                "normalize_objectnav_label(label, cfg.habitat.dataset.data_path)",
+                source,
+                entrypoint,
+            )
+            self.assertNotIn(
+                "data/datasets/objectnav/mp3d/v1/val/val.json.gz",
+                source,
+                entrypoint,
+            )
+
     def test_offline_reader_uses_valid_cached_answer_without_calling_client(self):
         """Catches offline mode escaping to an LLM despite a usable local answer."""
         with tempfile.TemporaryDirectory() as temp_dir:

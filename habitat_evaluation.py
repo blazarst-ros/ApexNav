@@ -27,7 +27,6 @@ Author: Zager-Zhang
 
 # Standard library imports
 import argparse
-import gzip
 import json
 import os
 import signal
@@ -91,7 +90,7 @@ from stage1_detection_logging import (
     get_stage1_detection_output_dir,
     write_stage1_detection_records,
 )
-from vlm.Labels import MP3D_ID_TO_NAME
+from vlm.label_utils import normalize_objectnav_label
 from vlm.utils.get_itm_message import get_itm_message_cosine
 from vlm.utils.get_object_utils import get_object, get_object_class_names
 
@@ -523,17 +522,6 @@ def main(cfg: DictConfig) -> None:
     _itm_pubs = {}
     _cld_pubs = {}
 
-    # Load MP3D validation data for object category mapping
-    with gzip.open(
-        "data/datasets/objectnav/mp3d/v1/val/val.json.gz", "rt", encoding="utf-8"
-    ) as f:
-        val_data = json.load(f)
-    category_to_coco = val_data.get("category_to_mp3d_category_id", {})
-    id_to_name = {
-        category_to_coco[cat]: MP3D_ID_TO_NAME[idx]
-        for idx, cat in enumerate(category_to_coco)
-    }
-
     start_time = time.time()
 
     final_state = 0
@@ -759,9 +747,7 @@ def main(cfg: DictConfig) -> None:
 
         # ── LLM answer (shared across agents) ──
         label = env.current_episode.object_category
-        if label in category_to_coco:
-            coco_id = category_to_coco[label]
-            label = id_to_name.get(coco_id, label)
+        label = normalize_objectnav_label(label, cfg.habitat.dataset.data_path)
 
         llm_answer, room, _ = read_answer(
             llm_answer_path, llm_response_path, label, llm_client
