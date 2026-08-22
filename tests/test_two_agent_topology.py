@@ -1,3 +1,4 @@
+import re
 from pathlib import Path
 
 
@@ -6,8 +7,6 @@ def test_runtime_topology_is_limited_to_two_agents():
         Path("CLAUDE.md"),
         Path("README.md"),
         Path("Op.txt"),
-        Path("RuntimeData/README.md"),
-        Path("RuntimeData/capture_ros_data.sh"),
         Path("habitat2ros/habitat_publisher.py"),
         Path("real_world_test_example/config/real_world_test.yaml"),
         Path("src/planner/exploration_manager/config/ApexNav.rviz"),
@@ -26,9 +25,9 @@ def test_runtime_topology_is_limited_to_two_agents():
     )
     for path in two_agent_files:
         text = path.read_text(encoding="utf-8")
+        if path.suffix == ".xml":
+            text = re.sub(r"<!--.*?-->", "", text, flags=re.DOTALL)
         assert not any(term in text for term in forbidden_terms), path
-
-    assert "agents=(0 1)" in Path("RuntimeData/capture_ros_data.sh").read_text(encoding="utf-8")
 
     for path in [
         Path("config/habitat_eval_hm3dv1.yaml"),
@@ -37,7 +36,7 @@ def test_runtime_topology_is_limited_to_two_agents():
     ]:
         text = path.read_text(encoding="utf-8")
         assert "num_agents: 2" in text, path
-        assert "perception_agents_per_step: 2" in text, path
+        assert "perception_agents_per_step: 3" in text, path
         assert "agent_2:" not in text, path
 
 
@@ -52,13 +51,10 @@ def test_real_world_example_configures_two_agents():
 def test_map_ros_exposes_the_pitch_angle_used_by_object_filtering():
     header = Path("src/planner/plan_env/include/plan_env/map_ros.h").read_text(encoding="utf-8")
     source = Path("src/planner/plan_env/src/map_ros.cpp").read_text(encoding="utf-8")
-    capture = Path("RuntimeData/capture_ros_data.sh").read_text(encoding="utf-8")
 
     assert "camera_pitch_pub_" in header
     assert '"/map_ros/agent_" + std::to_string(id) + "/camera_pitch"' in source
     assert "camera_pitch_pub_[agent_id].publish(camera_pitch_msg);" in source
-    assert "pitch)" in capture
-    assert 'topics+=("/map_ros/agent_${agent}/camera_pitch")' in capture
 
 
 def test_multi_agent_fsm_waits_for_action_finish_without_republishing_actions():

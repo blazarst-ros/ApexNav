@@ -36,7 +36,7 @@ success_distance: 0.35
 The maximum episode length for evaluation is:
 
 ```yaml
-max_episode_steps: 400
+max_episode_steps: 250
 ```
 
 Step counting policy:
@@ -69,12 +69,13 @@ C++ reach-claim criterion.
 Multi-agent perception scheduling:
 
 ```yaml
-perception_agents_per_step: 2
+perception_agents_per_step: 3
 perception_interval_steps: 1
 ```
 
-This allows both agents to run ITM/VLM object detection in the same
-simulation loop when both have changed viewpoint. `perception_interval_steps`
+This keeps the all-agents perception behavior: both configured agents can run
+ITM/VLM object detection in the same simulation loop when both have changed
+viewpoint. `perception_interval_steps`
 is counted per agent, not as a global scheduler interval.
 
 These values are applied consistently in:
