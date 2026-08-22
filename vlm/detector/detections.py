@@ -90,6 +90,7 @@ class ObjectDetections:
         self.boxes = self.boxes[keep]
         self.logits = self.logits[keep]
         self.phrases = [p for i, p in enumerate(self.phrases) if keep[i]]
+        self.masks = [mask for i, mask in enumerate(self.masks) if keep[i]]
         self._annotated_frame = None
 
     def to_json(self) -> dict:

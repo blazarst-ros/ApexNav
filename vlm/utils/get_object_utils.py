@@ -73,7 +73,9 @@ def _get_yoloe_params(cfg):
 
 
 def _merge_labels(right_label, similar_answer):
-    targets = [label.strip() for label in right_label.split("|") if label.strip()]
+    targets = list(
+        dict.fromkeys(label.strip() for label in right_label.split("|") if label.strip())
+    )
     all_labels = list(
         dict.fromkeys(
             targets + [str(label).strip() for label in similar_answer if str(label).strip()]
