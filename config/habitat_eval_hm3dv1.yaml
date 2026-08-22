@@ -84,21 +84,16 @@ habitat:
 num_agents: 2
 
 detector:
-  yolo:
-    confidence_threshold_yolo: 0.3
-    iou_threshold_yolo: 0.5
+  yoloe:
+    confidence_threshold: 0.3
+    iou_threshold: 0.5
     agnostic_nms: True
-
-  groundingDINO:
-    confidence_threshold_dino: 0.40
-    text_threshold: 0.25
 
 llm:
   llm_answer_path: llm/answers/llm_answer_hm3d.txt
   llm_response_path: llm/answers/llm_response_list.txt
   llm_client:
-    llm_client: deepseek
-    #ollama: "qwen3:8b"
+    llm_client: offline
 
 multiagent:
   episode_termination: cooperative

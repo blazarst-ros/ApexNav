@@ -14,6 +14,15 @@ import os
 """业务解包层,
 从结构化列表中解包出ApexNav 执行层可直接使用的 3 个业务参数，是连接 LLM 与导航核心逻辑的关键
 """
+
+
+def _is_offline_client(llm_client):
+    """Accept the config object used by Hydra as well as simple test values."""
+    if isinstance(llm_client, str):
+        return llm_client == "offline"
+    return getattr(llm_client, "llm_client", None) == "offline"
+
+
 def read_answer(llm_answer_path, llm_response_path, label, llm_client):
     label_existing = False
     llm_answer = None
@@ -41,6 +50,10 @@ def read_answer(llm_answer_path, llm_response_path, label, llm_client):
 
     # 2. 获取新答案逻辑
     if not label_existing or llm_answer is None:
+        if _is_offline_client(llm_client):
+            print(f"No cached offline answer for {label}; using neutral defaults")
+            return [], DEFAULT_ROOM, DEFAULT_FUSION_SCORE
+
         # 调用 get_answer，确保返回的是经过 only_answer 处理的列表
         llm_answer, response = get_answer(prompt=label, client=llm_client)
         if not is_valid_legacy_answer(llm_answer):
