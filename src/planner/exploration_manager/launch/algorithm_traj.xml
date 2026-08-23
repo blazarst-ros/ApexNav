@@ -82,8 +82,9 @@
         <param name="object/use_observation" value="true" type="bool"/>
         <param name="object/vis_cloud" value="true" type="bool"/>
         <param name="object/exposure_heatmap_enabled" value="true" type="bool"/>
-        <param name="object/exposure_capacity" value="2.0" type="double"/>
+        <param name="object/exposure_capacity" value="6.0" type="double"/>
         <param name="object/exposure_hfov_deg" value="79.0" type="double"/>
+        <param name="object/exposure_angular_falloff" value="2.0" type="double"/>
 
         <!-- Perception utils -->
         <param name="perception_utils/left_angle" value="$(eval 30 * 3.1415926 / 180.0)" type="double"/>

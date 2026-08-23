@@ -217,6 +217,7 @@ private:
   bool exposure_heatmap_enabled_;
   double exposure_capacity_;
   double exposure_hfov_rad_;
+  double exposure_angular_falloff_;
   std::string exposure_scene_id_, exposure_episode_id_;
   uint32_t exposure_step_index_;
   Vector3d exposure_camera_position_;

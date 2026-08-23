@@ -35,9 +35,11 @@ ObjectMap2D::ObjectMap2D(SDFMap2D* sdf_map, ros::NodeHandle& nh)
   nh.param("object/use_observation", use_observation_, true);
   nh.param("object/vis_cloud", is_vis_cloud_, false);
   nh.param("object/exposure_heatmap_enabled", exposure_heatmap_enabled_, true);
-  nh.param("object/exposure_capacity", exposure_capacity_, 2.0);
+  nh.param("object/exposure_capacity", exposure_capacity_, 6.0);
   double exposure_hfov_deg;
   nh.param("object/exposure_hfov_deg", exposure_hfov_deg, 79.0);
+  nh.param("object/exposure_angular_falloff", exposure_angular_falloff_, 2.0);
+  exposure_angular_falloff_ = max(1.0, exposure_angular_falloff_);
   exposure_hfov_rad_ = exposure_hfov_deg * M_PI / 180.0;
 
   // Setup ROS communication
@@ -551,8 +553,9 @@ void ObjectMap2D::updateExposureHeatmap(
       continue;
 
     const double raw_weight = cos(M_PI * fabs(wrapped) / (2.0 * half_fov));
+    const double angular_weight = pow(max(0.0, raw_weight), exposure_angular_falloff_);
     const double before = object.exposure_by_grid_[entry.first];
-    const double after = min(exposure_capacity_, before + max(0.0, raw_weight));
+    const double after = min(exposure_capacity_, before + angular_weight);
     object.exposure_by_grid_[entry.first] = after;
     update.grid_addresses.push_back(entry.first);
     update.exposure_before.push_back(before);

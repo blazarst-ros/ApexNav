@@ -44,6 +44,17 @@ class ExposureHeatmapContractTests(unittest.TestCase):
         self.assertIn("computePathCost", planner)
         self.assertNotIn("if (label == 0) {\n    updateExposureHeatmap", source)
 
+    def test_exposure_uses_slow_capacity_and_stronger_edge_falloff(self):
+        header = (ROOT / "src/planner/plan_env/include/plan_env/object_map2d.h").read_text()
+        source = (ROOT / "src/planner/plan_env/src/object_map2d.cpp").read_text()
+        self.assertIn("exposure_angular_falloff_", header)
+        self.assertIn('nh.param("object/exposure_angular_falloff", exposure_angular_falloff_, 2.0)', source)
+        self.assertIn("pow(max(0.0, raw_weight), exposure_angular_falloff_)", source)
+        for config_name in ("algorithm.xml", "algorithm_traj.xml"):
+            config = (ROOT / "src/planner/exploration_manager/launch" / config_name).read_text()
+            self.assertIn('name="object/exposure_capacity" value="6.0"', config)
+            self.assertIn('name="object/exposure_angular_falloff" value="2.0"', config)
+
     def test_python_populates_context_and_subscribes_for_jsonl(self):
         source = (ROOT / "habitat_evaluation.py").read_text()
         for statement in (
