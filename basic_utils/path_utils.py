@@ -32,3 +32,11 @@ def resolve_existing_path(
             return str(candidate)
     tried = "\n".join(f"- {candidate}" for candidate in candidates)
     raise FileNotFoundError(f"Could not find required path. Tried:\n{tried}")
+
+
+def scene_runtime_output_dir(base_dir: Union[str, Path], scene_id: str) -> Path:
+    """Return the per-scene runtime directory using its three-character prefix."""
+    scene_prefix = Path(scene_id).stem[:3]
+    if not scene_prefix:
+        raise ValueError("scene_id must contain a scene name")
+    return Path(base_dir) / scene_prefix

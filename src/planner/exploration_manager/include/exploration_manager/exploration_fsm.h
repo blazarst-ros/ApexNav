@@ -43,8 +43,8 @@ constexpr double ACTION_ANGLE = M_PI / 6.0;
 
 // Distances (m)
 constexpr double STUCKING_DISTANCE = 0.05;       // consider stuck if movement < this
-constexpr double REACH_DISTANCE = 0.20;          // Habitat success distance
-constexpr double SOFT_REACH_DISTANCE = 0.20;     // no relaxed success distance
+constexpr double REACH_DISTANCE = 0.20;          // local object reach threshold
+constexpr double SOFT_REACH_DISTANCE = 0.20;     // no relaxed local threshold
 constexpr double LOCAL_DISTANCE = 0.80;          // local target lookahead
 constexpr double FORWARD_DISTANCE = 0.15;        // min clearance for marking obstacles
 constexpr double FORCE_DORMANT_DISTANCE = 0.35;  // force dormant frontier if very close
@@ -62,7 +62,7 @@ constexpr double SAMPLE_NUM = 10.0;  // samples along a step for safety cost
 
 // Visualization / robot marker
 constexpr double VIS_SCALE_FACTOR = 1.8;  // multiply by map resolution
-constexpr double ROBOT_HEIGHTS[NUM_AGENTS] = { 0.8, 1.5 };
+constexpr double ROBOT_HEIGHTS[NUM_AGENTS] = { 0.66, 1.11 };
 constexpr double ROBOT_RADIUS = 0.18;
 }  // namespace FSMConstants
 

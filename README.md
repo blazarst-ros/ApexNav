@@ -18,26 +18,29 @@ This branch runs the multi-agent evaluation with heterogeneous camera heights:
 
 | Agent | Height | RGB sensor y | Depth sensor y |
 | --- | ---: | ---: | ---: |
-| `agent_0` | `0.7 m` | `0.7 m` | `0.7 m` |
-| `agent_1` | `1.2 m` | `1.2 m` | `1.2 m` |
+| `agent_0` | `0.66 m` | `0.66 m` | `0.66 m` |
+| `agent_1` | `1.11 m` | `1.11 m` | `1.11 m` |
 
 The evaluation success distance is:
 
 ```text
-0.35 m
+1.0 m
 ```
 
 Config key:
 
 ```yaml
-success_distance: 0.35
+success_distance: 1.0
 ```
 
 The maximum episode length for evaluation is:
 
 ```yaml
-max_episode_steps: 250
+max_episode_steps: 500
 ```
+
+The multi-agent evaluation configs set `iterator_options.shuffle: true` and
+keep `cycle: false`, so episodes run once in a shuffled order.
 
 Step counting policy:
 

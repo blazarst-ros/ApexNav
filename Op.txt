@@ -53,67 +53,6 @@ source ./devel/setup.bash
 roslaunch exploration_manager rviz_traj.launch
 
 
-
-
-
-************自动推理（大脑）**************************
-conda activate apexnav
-cd ~/ApexNav
-source ./devel/setup.bash
-
-
-export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
-export LD_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu:/opt/ros/noetic/lib:$LD_LIBRARY_PATH
-
-roslaunch exploration_manager exploration_traj.launch
-(*自主導航與軌跡展示)
-
-
-*************启动导航（身体）***************************
-
-
-conda activate apexnav
-cd ~/ApexNav
-source ./devel/setup.bash
-
-export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
-export LD_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu:/opt/ros/noetic/lib:$LD_LIBRARY_PATH
-export LD_PRELOAD=/usr/lib/x86_64-linux-gnu/libffi.so.7
-
-
-python habitat_vel_control.py \
-  habitat.dataset.data_path="data/datasets/objectnav/hm3d/v1/val/content/TbHJrupSAjP.json.gz" \
-  test_epi_num=1
-
-python habitat_vel_control.py test_epi_num=8
-(*自主導航與軌跡展示)
-
-
-
-
-
-
-
-********真实世界节点启动（桥联节点）(测评模式切忌使用！！！！否则话题将会被覆盖)************************
-conda activate apexnav
-cd ~/ApexNav
-source ./devel/setup.bash
-
-export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
-export LD_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu:/opt/ros/noetic/lib:$LD_LIBRARY_PATH
-export LD_PRELOAD=/usr/lib/x86_64-linux-gnu/libffi.so.7
-
-
-
-python ./real_world_test_example/real_world_test_habitat.py # 3. 執行橋接節點
-
-
-
-
-
-
-
-
 ******************************* Multi_agent test example**************************************************
 
 ############################                #################################################
@@ -174,20 +113,107 @@ export http_proxy=http://127.0.0.1:7890
 export https_proxy=http://127.0.0.1:7890
 
 
-#######################################################################################
-
-
-
-################   PROMPT    SET   001     ##################################################
-  First, when refactoring codebase ,remember to pricisely log your changes in  /home/blazarst/桌面/Notebook_ICUS/Working_log/LOG.md with precise time
-  Then, do not compile any files after refactoring
-  Last, be precise and brief when answeing questions.Be explicit and systematically when giving refactoring scheme/plan.
-
-
-################### PROMPT  SET  002  #######################################################
- When analysing data, you should do a Code-Path Root-Cause Analysis like Processed_5.md Point 11. Have a comprehensive and concise response.It is better to have a infer to the episode.
- Furthurmore,you should list all need parameters in this dataset for me to compare
-
-
-
 python habitat_manual_control_multiagent.py --dataset hm3dv2
+
+
+
+======================================================================================================================================
+
+
+========================================================================================================================
+======================== l-Voro：Lite-ApexNav 双机当前启动指令（2026-08-23） ============================================
+========================================================================================================================
+
+
+************** 终端 0：首次准备、重新编译或 Habitat 补丁检查（通常只需执行一次） **************
+
+cd /home/blazarst/ApexNav
+conda deactivate
+unset LD_LIBRARY_PATH
+source /opt/ros/noetic/setup.bash
+
+catkin_make -DPYTHON_EXECUTABLE=/usr/bin/python3
+
+
+************** 终端 1：ROS Core（保持运行） **************
+
+source /opt/ros/noetic/setup.bash
+roscore
+
+************** 终端 2：CLIPITM 轻量图文匹配服务，端口 12182（保持运行） **************
+
+cd /home/blazarst/ApexNav
+bash scripts/run-lite-multiagent.sh \
+  -m vlm.itm.clipitm \
+  --port 12182
+
+
+************** 终端 3：YOLOE 检测与分割服务，端口 12184（保持运行） **************
+
+cd /home/blazarst/ApexNav
+bash scripts/run-lite-multiagent.sh \
+  -m vlm.detector.yoloe \
+  --port 12184
+
+************** 终端 4：一个共享双机 Planner（保持运行） **************
+
+cd /home/blazarst/ApexNav
+source /opt/ros/noetic/setup.bash
+source devel/setup.bash
+
+roslaunch exploration_manager exploration.launch
+
+
+************** 终端 5：自动双机评测（推荐先运行 HM3D-v2 单 episode） **************
+
+cd /home/blazarst/ApexNav
+
+LD_PRELOAD=/lib/x86_64-linux-gnu/libffi.so.7 \
+bash scripts/run-lite-multiagent.sh \
+  habitat_evaluation.py \
+  --dataset hm3dv2 \
+  test_epi_num=1
+
+
+LD_PRELOAD=/lib/x86_64-linux-gnu/libffi.so.7 \
+bash scripts/run-lite-multiagent.sh \
+  habitat_evaluation.py \
+  --dataset hm3dv2 \
+  'habitat.dataset.content_scenes=[TbHJrupSAjP]'
+
+
+
+
+LD_PRELOAD=/lib/x86_64-linux-gnu/libffi.so.7 \
+bash scripts/run-lite-multiagent.sh habitat_evaluation.py --dataset hm3dv1 test_epi_num=1
+
+
+
+LD_PRELOAD=/lib/x86_64-linux-gnu/libffi.so.7 \
+bash scripts/run-lite-multiagent.sh habitat_evaluation.py --dataset mp3d test_epi_num=1
+
+
+************** 终端 6：可选 RViz 可视化 **************
+
+cd /home/blazarst/ApexNav
+source /opt/ros/noetic/setup.bash
+source devel/setup.bash
+
+roslaunch exploration_manager rviz_traj.launch
+
+
+************** 终端 7：可选手动双机控制（与自动评测二选一） **************
+
+# 保持终端 1～4 的 ROS、两个 VLM 服务和共享 planner 运行，然后执行：
+cd /home/blazarst/ApexNav
+
+LD_PRELOAD=/lib/x86_64-linux-gnu/libffi.so.7 \
+bash scripts/run-lite-multiagent.sh \
+  habitat_manual_control_multiagent.py \
+  --dataset hm3dv2
+
+
+
+
+  roslaunch exploration_manager exploration.launch \
+    > RuntimeData/logs/planner.log 2>&1

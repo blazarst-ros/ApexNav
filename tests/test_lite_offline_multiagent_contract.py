@@ -166,8 +166,8 @@ class LiteOfflineMultiAgentContractTests(unittest.TestCase):
             Path("config/habitat_eval_mp3d.yaml"): "data/datasets/objectnav/mp3d/v1/{split}/{split}.json.gz",
         }
         expected_agents = {
-            "agent_0": {"height": 0.8, "position": [0, 0.8, 0]},
-            "agent_1": {"height": 1.5, "position": [0, 1.5, 0]},
+            "agent_0": {"height": 0.66, "position": [0, 0.66, 0]},
+            "agent_1": {"height": 1.11, "position": [0, 1.11, 0]},
         }
 
         for config_path in CONFIG_PATHS:
@@ -186,7 +186,15 @@ class LiteOfflineMultiAgentContractTests(unittest.TestCase):
                     self.assertEqual(sensor["uuid"], f"{agent_name}_{sensor_name[:-7]}", config_path)
                     self.assertEqual(sensor["position"], expected_agent["position"], config_path)
 
-            self.assertEqual(config["habitat"]["environment"]["max_episode_steps"], 250, config_path)
+            self.assertEqual(config["habitat"]["environment"]["max_episode_steps"], 500, config_path)
+            self.assertFalse(
+                config["habitat"]["environment"]["iterator_options"]["cycle"],
+                config_path,
+            )
+            self.assertTrue(
+                config["habitat"]["environment"]["iterator_options"]["shuffle"],
+                config_path,
+            )
             self.assertEqual(config["multiagent"]["perception_agents_per_step"], 3, config_path)
             self.assertEqual(config["multiagent"]["perception_interval_steps"], 1, config_path)
             self.assertEqual(config["multiagent"]["episode_termination"], "cooperative", config_path)
@@ -194,7 +202,7 @@ class LiteOfflineMultiAgentContractTests(unittest.TestCase):
             self.assertEqual(config["multiagent"]["agent_spawn_offset"], 1.0, config_path)
             self.assertEqual(
                 config["habitat"]["task"]["measurements"]["success"]["success_distance"],
-                0.35,
+                1.0,
                 config_path,
             )
             self.assertEqual(config["habitat"]["dataset"]["data_path"], expected_dataset_paths[config_path], config_path)

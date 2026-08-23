@@ -27,7 +27,7 @@ habitat:
         type: PointGoalWithGPSCompassSensor
     measurements:
       success:
-        success_distance: 0.35
+        success_distance: 1.0
     actions:
       move_forward:
         type: MoveForwardAction

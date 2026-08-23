@@ -15,10 +15,10 @@ habitat:
     split: val
     data_path: data/datasets/objectnav/mp3d/v1/{split}/{split}.json.gz
   environment:
-    max_episode_steps: 250
+    max_episode_steps: 500
     iterator_options:
       cycle: false
-      shuffle: false
+      shuffle: true
       max_scene_repeat_steps: 10000000
   task:
     lab_sensors:
@@ -26,7 +26,7 @@ habitat:
         type: PointGoalWithGPSCompassSensor
     measurements:
       success:
-        success_distance: 0.35
+        success_distance: 1.0
   simulator:
     type: MultiAgentSim-v0
     turn_angle: 30
@@ -39,7 +39,7 @@ habitat:
       - agent_1
     agents:
       agent_0:
-        height: 0.8
+        height: 0.66
         radius: 0.18
         sim_sensors:
           rgb_sensor:
@@ -48,7 +48,7 @@ habitat:
             width: 640
             height: 480
             hfov: 79
-            position: [0, 0.8, 0]
+            position: [0, 0.66, 0]
           depth_sensor:
             type: HabitatSimDepthSensor
             uuid: agent_0_depth
@@ -58,9 +58,9 @@ habitat:
             min_depth: 0.0
             max_depth: 5.0
             normalize_depth: true
-            position: [0, 0.8, 0]
+            position: [0, 0.66, 0]
       agent_1:
-        height: 1.5
+        height: 1.11
         radius: 0.18
         sim_sensors:
           rgb_sensor:
@@ -69,7 +69,7 @@ habitat:
             width: 640
             height: 480
             hfov: 79
-            position: [0, 1.5, 0]
+            position: [0, 1.11, 0]
           depth_sensor:
             type: HabitatSimDepthSensor
             uuid: agent_1_depth
@@ -79,7 +79,7 @@ habitat:
             min_depth: 0.0
             max_depth: 5.0
             normalize_depth: true
-            position: [0, 1.5, 0]
+            position: [0, 1.11, 0]
 
 num_agents: 2
 

@@ -91,6 +91,7 @@ from stage1_detection_logging import (
     write_stage1_detection_records,
 )
 from vlm.label_utils import normalize_objectnav_label
+from basic_utils.path_utils import scene_runtime_output_dir
 from vlm.utils.get_itm_message import get_itm_message_cosine
 from vlm.utils.get_object_utils import get_object, get_object_class_names
 
@@ -535,8 +536,6 @@ def main(cfg: DictConfig) -> None:
     # Extract configuration parameters
     video_output_path = cfg.video_output_path.format(split=cfg.habitat.dataset.split)
     need_video = cfg.need_video
-    record_file_path = os.path.join(video_output_path, cfg.record_file_name)
-    continue_path = os.path.join(video_output_path, cfg.continue_file_name)
     max_episode_steps = cfg.habitat.environment.max_episode_steps
     success_distance = cfg.habitat.task.measurements.success.success_distance
 
@@ -550,7 +549,6 @@ def main(cfg: DictConfig) -> None:
     flag_once = env_num_once != -1
 
     os.makedirs(os.path.dirname(llm_answer_path), exist_ok=True)
-    os.makedirs(video_output_path, exist_ok=True)
     stage1_detection_output_dir = get_stage1_detection_output_dir()
 
     # Add measurements
@@ -580,6 +578,13 @@ def main(cfg: DictConfig) -> None:
     env = habitat.Env(cfg)
     print(f"Environment created ({'multi-agent' if multi_agent else 'single-agent'}, "
           f"{num_agents} agent(s))")
+    video_output_path = scene_runtime_output_dir(
+        video_output_path, env.current_episode.scene_id
+    )
+    os.makedirs(video_output_path, exist_ok=True)
+    record_file_path = os.path.join(video_output_path, cfg.record_file_name)
+    continue_path = os.path.join(video_output_path, cfg.continue_file_name)
+    print(f"Scene runtime output directory: {video_output_path}")
     number_of_episodes = env.number_of_episodes
 
     # Read previous records
