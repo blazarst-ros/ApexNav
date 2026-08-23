@@ -262,3 +262,18 @@ python habitat_manual_control.py --dataset mp3d
 # Run one specific episode
 python habitat_manual_control.py --dataset hm3dv2 test_epi_num=10
 ```
+
+### Exposure heatmap diagnostics
+
+Single-agent evaluation publishes `/object/exposure_heatmap` for RViz. Each ObjectMap cluster
+uses its semantic label color; pale cells have low accumulated exposure and darker cells have
+been observed more often. The per-run event stream is appended to
+`videos/test_<dataset>_<split>/exposure_events.jsonl`.
+
+The planner terminal emits `[ExposureHeatmap][UPDATE]`, `[ExposureHeatmap][RANK]`,
+`[ExposureHeatmap][PUBLISH]`, and `[ExposureHeatmap][RESET]`. Capture the screen output and
+logs together with:
+
+```bash
+roslaunch exploration_manager exploration.launch 2>&1 | tee RuntimeData/logs/exposure_heatmap.log
+```

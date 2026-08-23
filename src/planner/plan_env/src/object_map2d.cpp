@@ -12,9 +12,12 @@
 
 #include <plan_env/object_map2d.h>
 
+#include <algorithm>
+
 namespace apexnav_planner {
 ObjectMap2D::ObjectMap2D(SDFMap2D* sdf_map, ros::NodeHandle& nh)
 {
+  exposure_rank_pending_ = false;
   // Initialize core mapping components
   this->sdf_map_ = sdf_map;
   int voxel_num = sdf_map_->getVoxelNum();
@@ -31,9 +34,15 @@ ObjectMap2D::ObjectMap2D(SDFMap2D* sdf_map, ros::NodeHandle& nh)
   nh.param("object/fusion_type", fusion_type_, 1);
   nh.param("object/use_observation", use_observation_, true);
   nh.param("object/vis_cloud", is_vis_cloud_, false);
+  nh.param("object/exposure_heatmap_enabled", exposure_heatmap_enabled_, true);
+  nh.param("object/exposure_capacity", exposure_capacity_, 2.0);
+  double exposure_hfov_deg;
+  nh.param("object/exposure_hfov_deg", exposure_hfov_deg, 79.0);
+  exposure_hfov_rad_ = exposure_hfov_deg * M_PI / 180.0;
 
   // Setup ROS communication
   object_cloud_pub_ = nh.advertise<sensor_msgs::PointCloud2>("/object/clouds", 10);
+  exposure_heatmap_pub_ = nh.advertise<sensor_msgs::PointCloud2>("/object/exposure_heatmap", 10);
 
   // Configure raycasting for spatial queries
   raycaster_.reset(new RayCaster2D);
@@ -50,6 +59,43 @@ void ObjectMap2D::setConfidenceThreshold(double val)
 {
   min_confidence_ = val;
   ROS_INFO("Set Confidence Threshold = %f", val);
+}
+
+void ObjectMap2D::setExposureObservationContext(const std::string& scene_id,
+    const std::string& episode_id, uint32_t step_index, const Vector3d& camera_position,
+    double camera_yaw)
+{
+  if ((!exposure_scene_id_.empty() || !exposure_episode_id_.empty()) &&
+      (scene_id != exposure_scene_id_ || episode_id != exposure_episode_id_)) {
+    clearExposureHeatmap();
+  }
+  exposure_scene_id_ = scene_id;
+  exposure_episode_id_ = episode_id;
+  exposure_step_index_ = step_index;
+  exposure_camera_position_ = camera_position;
+  exposure_camera_yaw_ = camera_yaw;
+}
+
+vector<ExposureHeatmapUpdate> ObjectMap2D::consumeExposureUpdates()
+{
+  vector<ExposureHeatmapUpdate> updates;
+  updates.swap(pending_exposure_updates_);
+  return updates;
+}
+
+void ObjectMap2D::clearExposureHeatmap()
+{
+  int cleared_clusters = 0;
+  for (auto& object : objects_) {
+    if (!object.exposure_by_grid_.empty()) {
+      object.exposure_by_grid_.clear();
+      ++cleared_clusters;
+    }
+  }
+  pending_exposure_updates_.clear();
+  exposure_rank_pending_ = false;
+  ROS_INFO("[ExposureHeatmap][RESET] scene=%s episode=%s cleared_clusters=%d",
+      exposure_scene_id_.c_str(), exposure_episode_id_.c_str(), cleared_clusters);
 }
 
 /**
@@ -201,6 +247,7 @@ int ObjectMap2D::searchSingleObjectCluster(const DetectedObject& detected_object
 
   // Update classification and visualization
   updateObjectBestLabel(obj_idx);
+  updateExposureHeatmap(obj_idx, detected_object.label, object_point2Ds);
   if (is_vis_cloud_)
     publishObjectClouds();
 
@@ -469,6 +516,180 @@ bool ObjectMap2D::checkSafety(const Eigen::Vector2d& pos)
   Eigen::Vector2i idx;
   sdf_map_->posToIndex(pos, idx);
   return checkSafety(idx);
+}
+
+void ObjectMap2D::updateExposureHeatmap(
+    int object_id, int observed_label, const vector<Eigen::Vector2d>& observed_cells)
+{
+  if (!exposure_heatmap_enabled_ || object_id < 0 || object_id >= (int)objects_.size())
+    return;
+
+  ObjectCluster& object = objects_[object_id];
+  for (const auto& cell : object.cells_)
+    object.exposure_by_grid_.emplace(toAdr(cell), 0.0);
+  std::unordered_map<int, Vector2d> unique_cells;
+  for (const auto& cell : observed_cells)
+    unique_cells.emplace(toAdr(cell), cell);
+
+  ExposureHeatmapUpdate update;
+  update.scene_id = exposure_scene_id_;
+  update.episode_id = exposure_episode_id_;
+  update.step_index = exposure_step_index_;
+  update.cluster_id = object.id_;
+  update.observed_label = observed_label;
+  update.best_label = object.best_label_;
+  update.camera_position = exposure_camera_position_;
+  update.camera_yaw = exposure_camera_yaw_;
+
+  const double half_fov = exposure_hfov_rad_ * 0.5;
+  for (const auto& entry : unique_cells) {
+    const Vector2d& cell = entry.second;
+    const Vector2d delta = cell - exposure_camera_position_.head<2>();
+    const double angle = atan2(delta.y(), delta.x()) - exposure_camera_yaw_;
+    const double wrapped = atan2(sin(angle), cos(angle));
+    if (fabs(wrapped) > half_fov)
+      continue;
+
+    const double raw_weight = cos(M_PI * fabs(wrapped) / (2.0 * half_fov));
+    const double before = object.exposure_by_grid_[entry.first];
+    const double after = min(exposure_capacity_, before + max(0.0, raw_weight));
+    object.exposure_by_grid_[entry.first] = after;
+    update.grid_addresses.push_back(entry.first);
+    update.exposure_before.push_back(before);
+    update.exposure_after.push_back(after);
+  }
+
+  if (update.grid_addresses.empty())
+    return;
+
+  double total = 0.0;
+  int saturated = 0;
+  for (const auto& entry : object.exposure_by_grid_) {
+    total += entry.second;
+    if (entry.second >= exposure_capacity_ - 1e-6)
+      ++saturated;
+  }
+  update.total_exposure = total;
+  update.mean_exposure = total / object.exposure_by_grid_.size();
+  update.saturation_ratio =
+      static_cast<float>(saturated) / static_cast<float>(object.exposure_by_grid_.size());
+  pending_exposure_updates_.push_back(update);
+  exposure_rank_pending_ = true;
+  ROS_INFO("[ExposureHeatmap][UPDATE] scene=%s episode=%s step=%u cluster=%d observed_label=%d "
+           "best_label=%d cells=%zu total=%.3f mean=%.3f saturated=%.3f pose=(%.2f,%.2f) yaw=%.2f",
+      update.scene_id.c_str(), update.episode_id.c_str(), update.step_index, update.cluster_id,
+      update.observed_label, update.best_label, update.grid_addresses.size(), update.total_exposure,
+      update.mean_exposure, update.saturation_ratio, update.camera_position.x(),
+      update.camera_position.y(), update.camera_yaw);
+}
+
+vector<ExposureViewCandidate> ObjectMap2D::consumeExposureViewCandidates(int max_candidates)
+{
+  vector<ExposureViewCandidate> candidates;
+  if (!exposure_rank_pending_ || max_candidates <= 0)
+    return candidates;
+  exposure_rank_pending_ = false;
+
+  for (const auto& object : objects_) {
+    vector<pair<double, Vector2d>> boundary;
+    for (const auto& cell : object.cells_) {
+      Eigen::Vector2i idx;
+      sdf_map_->posToIndex(cell, idx);
+      bool external = false;
+      for (const auto& neighbor : fourNeighbors(idx)) {
+        if (!inMap(neighbor) || object_indexs_[toAdr(neighbor)] != object.id_) {
+          external = true;
+          break;
+        }
+      }
+      if (!external)
+        continue;
+      const int address = toAdr(cell);
+      const auto exposure = object.exposure_by_grid_.find(address);
+      const double value = exposure == object.exposure_by_grid_.end() ? 0.0 : exposure->second;
+      boundary.push_back(make_pair(exposure_capacity_ - value, cell));
+    }
+    sort(boundary.begin(), boundary.end(),
+        [](const pair<double, Vector2d>& a, const pair<double, Vector2d>& b) { return a.first > b.first; });
+
+    for (const auto& entry : boundary) {
+      if ((int)candidates.size() >= max_candidates)
+        break;
+      Vector2d outward = entry.second - object.average_;
+      if (outward.norm() < 1e-4)
+        outward = Vector2d(1.0, 0.0);
+      outward.normalize();
+      for (const double distance : {0.50, 0.70, 0.85}) {
+        if ((int)candidates.size() >= max_candidates)
+          break;
+        const Vector2d parking = entry.second + distance * outward;
+        if (!sdf_map_->isInMap(parking) || !checkSafety(parking))
+          continue;
+        ExposureViewCandidate candidate;
+        candidate.context.scene_id = exposure_scene_id_;
+        candidate.context.episode_id = exposure_episode_id_;
+        candidate.context.step_index = exposure_step_index_;
+        candidate.context.cluster_id = object.id_;
+        candidate.context.observed_label = object.best_label_;
+        candidate.context.best_label = object.best_label_;
+        candidate.context.camera_position = exposure_camera_position_;
+        candidate.context.camera_yaw = exposure_camera_yaw_;
+        candidate.context.total_exposure = 0.0;
+        candidate.context.mean_exposure = 0.0;
+        candidate.context.saturation_ratio = 0.0;
+        candidate.position = parking;
+        candidate.yaw = atan2(entry.second.y() - parking.y(), entry.second.x() - parking.x());
+        candidate.gain = max(0.0, entry.first);
+        candidates.push_back(candidate);
+      }
+    }
+  }
+  return candidates;
+}
+
+Eigen::Vector3d ObjectMap2D::exposureColor(int label, double normalized_exposure) const
+{
+  static const Eigen::Vector3d colors[] = {
+      Eigen::Vector3d(0.85, 0.10, 0.10), Eigen::Vector3d(0.10, 0.62, 0.20),
+      Eigen::Vector3d(0.10, 0.32, 0.85), Eigen::Vector3d(0.92, 0.45, 0.08),
+      Eigen::Vector3d(0.55, 0.18, 0.72)};
+  const Eigen::Vector3d base = colors[(label < 0 ? 0 : label) % 5];
+  const double level = max(0.0, min(1.0, normalized_exposure));
+  return (1.0 - level) * Eigen::Vector3d::Ones() + level * base;
+}
+
+void ObjectMap2D::publishExposureHeatmap()
+{
+  if (!exposure_heatmap_enabled_)
+    return;
+  pcl::PointCloud<pcl::PointXYZRGB> cloud;
+  for (const auto& object : objects_) {
+    for (const auto& entry : object.exposure_by_grid_) {
+      Eigen::Vector2i idx;
+      Vector2d pos;
+      idx = sdf_map_->addressToIdx(entry.first);
+      sdf_map_->indexToPos(idx, pos);
+      const Eigen::Vector3d color = exposureColor(object.best_label_, entry.second / exposure_capacity_);
+      pcl::PointXYZRGB point;
+      point.x = pos.x();
+      point.y = pos.y();
+      point.z = 0.12;
+      point.r = static_cast<uint8_t>(255 * color.x());
+      point.g = static_cast<uint8_t>(255 * color.y());
+      point.b = static_cast<uint8_t>(255 * color.z());
+      cloud.points.push_back(point);
+    }
+  }
+  cloud.width = cloud.points.size();
+  cloud.height = 1;
+  cloud.is_dense = true;
+  sensor_msgs::PointCloud2 output;
+  pcl::toROSMsg(cloud, output);
+  output.header.frame_id = "world";
+  output.header.stamp = ros::Time::now();
+  exposure_heatmap_pub_.publish(output);
+  ROS_INFO_THROTTLE(1.0, "[ExposureHeatmap][PUBLISH] topic=/object/exposure_heatmap clusters=%zu points=%zu",
+      objects_.size(), cloud.points.size());
 }
 
 void ObjectMap2D::getObjects(

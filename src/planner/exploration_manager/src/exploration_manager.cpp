@@ -53,6 +53,7 @@ void ExplorationManager::initialize(ros::NodeHandle& nh)
   ray_caster2d_.reset(new RayCaster2D);
   ray_caster2d_->setParams(resolution, origin);
   tsp_client_ = nh.serviceClient<lkh_mtsp_solver::SolveMTSP>("/solve_tsp", true);
+  exposure_event_pub_ = nh.advertise<plan_env::ExposureHeatmapEvent>("/object/exposure_events", 50);
 
   // Initialize KinoAstar and GCopter for real-world trajectory planning
   kinoastar_.reset(new KinoAstar(nh, sdf_map_));
@@ -67,6 +68,7 @@ void ExplorationManager::initialize(ros::NodeHandle& nh)
 int ExplorationManager::planNextBestPoint(const Vector3d& pos, const double& yaw)
 {
   Vector2d pos2d = Vector2d(pos(0), pos(1));
+  publishExposureViewRank(pos2d);
   ros::Time t1 = ros::Time::now();
   auto t2 = t1;
 
@@ -173,6 +175,60 @@ int ExplorationManager::planNextBestPoint(const Vector3d& pos, const double& yaw
   ROS_ERROR_COND(total_time > 0.25, "[Plan NBV] Total time %.2lf s too long!!!", total_time);
 
   return EXPLORATION;
+}
+
+void ExplorationManager::publishExposureViewRank(const Vector2d& current_pos)
+{
+  const auto candidates = object_map2d_->consumeExposureViewCandidates();
+  if (candidates.empty())
+    return;
+
+  const ExposureViewCandidate* best = nullptr;
+  double best_cost = 0.0;
+  double best_score = -1.0;
+  for (const auto& candidate : candidates) {
+    const double cost = computePathCost(current_pos, candidate.position);
+    if (cost >= 10000.0)
+      continue;
+    const double score = candidate.gain / (1.0 + cost);
+    if (score > best_score) {
+      best = &candidate;
+      best_cost = cost;
+      best_score = score;
+    }
+  }
+  const ExposureViewCandidate& context = candidates.front();
+  plan_env::ExposureHeatmapEvent event;
+  event.header.stamp = ros::Time::now();
+  event.header.frame_id = "world";
+  event.event_type = "rank";
+  event.scene_id = context.context.scene_id;
+  event.episode_id = context.context.episode_id;
+  event.step_index = context.context.step_index;
+  event.cluster_id = best ? best->context.cluster_id : context.context.cluster_id;
+  event.observed_label = best ? best->context.observed_label : context.context.observed_label;
+  event.best_label = best ? best->context.best_label : context.context.best_label;
+  event.camera_position.x = context.context.camera_position.x();
+  event.camera_position.y = context.context.camera_position.y();
+  event.camera_position.z = context.context.camera_position.z();
+  event.camera_yaw = context.context.camera_yaw;
+  event.contour_cells = 0;
+  event.candidate_count = candidates.size();
+  event.detail = best ? "a_star_ranked_record_only" : "no_reachable_viewpoint";
+  if (best) {
+    event.best_view_x = best->position.x();
+    event.best_view_y = best->position.y();
+    event.best_view_yaw = best->yaw;
+    event.best_view_gain = best->gain;
+    event.best_view_path_cost = best_cost;
+    event.best_view_score = best_score;
+  }
+  exposure_event_pub_.publish(event);
+  ROS_INFO("[ExposureHeatmap][RANK] scene=%s episode=%s step=%u cluster=%d candidates=%zu "
+           "best=(%.2f,%.2f,%.2f) gain=%.3f astar=%.3f score=%.3f detail=%s",
+      event.scene_id.c_str(), event.episode_id.c_str(), event.step_index, event.cluster_id,
+      candidates.size(), event.best_view_x, event.best_view_y, event.best_view_yaw,
+      event.best_view_gain, event.best_view_path_cost, event.best_view_score, event.detail.c_str());
 }
 
 void ExplorationManager::chooseExplorationPolicy(Vector2d cur_pos, vector<Vector2d> frontiers,

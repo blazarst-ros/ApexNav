@@ -21,6 +21,7 @@
 #include <plan_env/object_map2d.h>
 #include <plan_env/sdf_map2d.h>
 #include <plan_env/value_map2d.h>
+#include <plan_env/ExposureHeatmapEvent.h>
 
 // Path searching
 #include <path_searching/astar2d.h>
@@ -103,6 +104,7 @@ private:
       vector<Vector2d>& next_best_path);
   void findTSPTourPolicy(Vector2d cur_pos, vector<Vector2d> frontiers, Vector2d& next_best_pos,
       vector<Vector2d>& next_best_path);
+  void publishExposureViewRank(const Vector2d& current_pos);
 
   // Path Search Utils
   bool searchObjectPath(const Vector3d& start,
@@ -131,6 +133,7 @@ private:
   vector<Vector2i> allNeighbors(const Eigen::Vector2i& idx, int grid_radius);
 
   ros::ServiceClient tsp_client_;         ///< ROS service client for TSP solver
+  ros::Publisher exposure_event_pub_;
   unique_ptr<RayCaster2D> ray_caster2d_;  ///< Ray casting for collision checking
 };
 

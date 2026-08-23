@@ -14,6 +14,7 @@ find_package(catkin REQUIRED COMPONENTS
   rospy
   std_msgs
   sensor_msgs
+  geometry_msgs
   visualization_msgs
   cv_bridge
   message_filters
@@ -26,18 +27,20 @@ find_package(PCL 1.7 REQUIRED)
 add_message_files(
   FILES
   MultipleMasksWithConfidence.msg
+  ExposureHeatmapEvent.msg
 )
 
 generate_messages(
   DEPENDENCIES
   std_msgs
   sensor_msgs
+  geometry_msgs
 )
 
 catkin_package(
   INCLUDE_DIRS include
   LIBRARIES plan_env
-  CATKIN_DEPENDS roscpp std_msgs message_runtime sensor_msgs
+  CATKIN_DEPENDS roscpp std_msgs message_runtime sensor_msgs geometry_msgs
   #  DEPENDS system_lib
 )
 

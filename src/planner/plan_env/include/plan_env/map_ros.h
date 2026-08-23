@@ -10,6 +10,7 @@
 
 // Custom messages and mapping components
 #include <plan_env/MultipleMasksWithConfidence.h>
+#include <plan_env/ExposureHeatmapEvent.h>
 #include <plan_env/sdf_map2d.h>
 #include <plan_env/object_map2d.h>
 #include <plan_env/value_map2d.h>
@@ -113,6 +114,7 @@ private:
       object_grid_pub_, update_range_pub_, depth_cloud_pub_, filtered_depth_cloud_pub_,
       filtered_object_cloud_pub_, all_object_cloud_pub_, over_depth_object_cloud_pub_,
       value_map_pub_, confidence_map_pub_;
+  ros::Publisher exposure_event_pub_;
 
   // ROS subscribers for sensor data
   ros::Subscriber detected_object_cloud_sub_, itm_score_sub_;

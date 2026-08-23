@@ -22,6 +22,7 @@
 #include <pcl/kdtree/kdtree_flann.h>
 #include <pcl/common/common.h>
 #include <unordered_map>
+#include <string>
 
 using Eigen::Vector2d;
 using Eigen::Vector2i;
@@ -72,6 +73,7 @@ struct ObjectCluster {
   vector<Vector2d> cells_;               ///< All 2D grid cells belonging to this cluster
   unordered_map<int, int> seen_counts_;  ///< Observation count per grid cell
   unordered_map<int, char> visited_;     ///< Visited flag per grid cell
+  unordered_map<int, double> exposure_by_grid_;  ///< Bounded cumulative view exposure per cell
   Vector2d average_;                     ///< Centroid position of all grid cells
   Vector2d box_min2d_, box_max2d_;       ///< 2D bounding box (min/max corners)
   Vector3d box_min3d_, box_max3d_;       ///< 3D bounding box from point clouds
@@ -99,6 +101,30 @@ struct ObjectCluster {
   }
 };
 
+struct ExposureHeatmapUpdate {
+  std::string scene_id;
+  std::string episode_id;
+  uint32_t step_index;
+  int cluster_id;
+  int observed_label;
+  int best_label;
+  Vector3d camera_position;
+  double camera_yaw;
+  vector<uint32_t> grid_addresses;
+  vector<float> exposure_before;
+  vector<float> exposure_after;
+  float total_exposure;
+  float mean_exposure;
+  float saturation_ratio;
+};
+
+struct ExposureViewCandidate {
+  ExposureHeatmapUpdate context;
+  Vector2d position;
+  double yaw;
+  double gain;
+};
+
 class ObjectMap2D {
 public:
   ObjectMap2D(SDFMap2D* sdf_map, ros::NodeHandle& nh);
@@ -109,6 +135,12 @@ public:
       const vector<pcl::shared_ptr<pcl::PointCloud<pcl::PointXYZ>>> observation_clouds,
       const double& itm_score);
   void setConfidenceThreshold(double val);
+  void setExposureObservationContext(const std::string& scene_id, const std::string& episode_id,
+      uint32_t step_index, const Vector3d& camera_position, double camera_yaw);
+  vector<ExposureHeatmapUpdate> consumeExposureUpdates();
+  void publishExposureHeatmap();
+  void clearExposureHeatmap();
+  vector<ExposureViewCandidate> consumeExposureViewCandidates(int max_candidates = 12);
 
   void getAllConfidenceObjectClouds(pcl::shared_ptr<pcl::PointCloud<pcl::PointXYZ>>& object_clouds);
   void getTopConfidenceObjectCloud(
@@ -141,6 +173,9 @@ private:
       const std::vector<Eigen::Vector2d>& cells, const DetectedObject& detected_object);
   void mergeCellsIntoObjectCluster(const int& object_id, const std::vector<Eigen::Vector2d>& cells,
       const DetectedObject& detected_object);
+  void updateExposureHeatmap(
+      int object_id, int observed_label, const vector<Eigen::Vector2d>& observed_cells);
+  Eigen::Vector3d exposureColor(int label, double normalized_exposure) const;
 
   vector<Eigen::Vector2i> fourNeighbors(const Eigen::Vector2i& idx);
   vector<Eigen::Vector2i> allNeighbors(const Eigen::Vector2i& idx);
@@ -164,6 +199,7 @@ private:
 
   // ==================== Data Members ====================
   ros::Publisher object_cloud_pub_;  ///< Publisher for colored object visualization
+  ros::Publisher exposure_heatmap_pub_;  ///< Publisher for exposure heatmap visualization
 
   // Object storage and indexing
   vector<int> object_indexs_;      ///< Grid cell to object ID mapping
@@ -178,6 +214,15 @@ private:
   double min_confidence_;    ///< Minimum confidence threshold for object acceptance
   double resolution_;        ///< Grid resolution in meters
   double leaf_size_;         ///< Voxel size for point cloud downsampling
+  bool exposure_heatmap_enabled_;
+  double exposure_capacity_;
+  double exposure_hfov_rad_;
+  std::string exposure_scene_id_, exposure_episode_id_;
+  uint32_t exposure_step_index_;
+  Vector3d exposure_camera_position_;
+  double exposure_camera_yaw_;
+  vector<ExposureHeatmapUpdate> pending_exposure_updates_;
+  bool exposure_rank_pending_;
 
   // System integration
   SDFMap2D* sdf_map_;

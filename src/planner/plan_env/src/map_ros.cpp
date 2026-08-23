@@ -95,6 +95,7 @@ void MapROS::init()
       node_.advertise<sensor_msgs::PointCloud2>("/grid_map/over_depth_object_cloud", 10);
   value_map_pub_ = node_.advertise<sensor_msgs::PointCloud2>("/grid_map/value_map", 10);
   confidence_map_pub_ = node_.advertise<sensor_msgs::PointCloud2>("/grid_map/confidence_map", 10);
+  exposure_event_pub_ = node_.advertise<plan_env::ExposureHeatmapEvent>("/object/exposure_events", 50);
 
   // Setup subscribers for object detection and ITM scores
   detected_object_cloud_sub_ = node_.subscribe(
@@ -130,6 +131,7 @@ void MapROS::visCallback(const ros::TimerEvent& e)
   publishValueMap();
   // publishConfidenceMap();
   publishESDFMap();
+  map_->object_map2d_->publishExposureHeatmap();
   // publishUpdateRange();
 
   vis_timer_.start();
@@ -251,8 +253,41 @@ void MapROS::detectedObjectCloudCallback(const plan_env::MultipleMasksWithConfid
 
   // Update object map with processed detection results
   *map_->object_map2d_->all_object_clouds_ = *filtered_all_object_cloud;
+  map_->object_map2d_->setExposureObservationContext(msg->scene_id, msg->episode_id,
+      msg->step_index, Eigen::Vector3d(msg->camera_position.x, msg->camera_position.y,
+                           msg->camera_position.z),
+      msg->camera_yaw);
   vector<int> detected_object_cluster_ids;
   map_->inputObjectCloud2D(detected_objects, detected_object_cluster_ids);
+
+  for (const auto& update : map_->object_map2d_->consumeExposureUpdates()) {
+    plan_env::ExposureHeatmapEvent event;
+    event.header.stamp = ros::Time::now();
+    event.header.frame_id = "world";
+    event.event_type = "update";
+    event.scene_id = update.scene_id;
+    event.episode_id = update.episode_id;
+    event.step_index = update.step_index;
+    event.cluster_id = update.cluster_id;
+    event.observed_label = update.observed_label;
+    event.best_label = update.best_label;
+    event.camera_position.x = update.camera_position.x();
+    event.camera_position.y = update.camera_position.y();
+    event.camera_position.z = update.camera_position.z();
+    event.camera_yaw = update.camera_yaw;
+    event.grid_addresses = update.grid_addresses;
+    event.exposure_before = update.exposure_before;
+    event.exposure_after = update.exposure_after;
+    event.total_exposure = update.total_exposure;
+    event.mean_exposure = update.mean_exposure;
+    event.saturation_ratio = update.saturation_ratio;
+    event.contour_cells = 0;
+    event.candidate_count = 0;
+    event.best_view_x = event.best_view_y = event.best_view_yaw = 0.0;
+    event.best_view_gain = event.best_view_path_cost = event.best_view_score = 0.0;
+    event.detail = "accepted_detection";
+    exposure_event_pub_.publish(event);
+  }
 
   // Optional: Log detected object IDs for debugging
   // for (auto object_id : detected_object_cluster_ids)

@@ -35,7 +35,7 @@ from pathlib import Path
 from hydra import initialize, compose
 import numpy as np
 import rospy
-from geometry_msgs.msg import PoseStamped
+from geometry_msgs.msg import PoseStamped, Point
 from omegaconf import DictConfig
 from prettytable import PrettyTable
 from sensor_msgs.msg import PointCloud2
@@ -58,10 +58,11 @@ from habitat.utils.visualizations.utils import (
 )
 
 # ROS message imports
-from plan_env.msg import MultipleMasksWithConfidence
+from plan_env.msg import MultipleMasksWithConfidence, ExposureHeatmapEvent
 
 # Local project imports
 from basic_utils.failure_check.count_files import count_files_in_directory
+from basic_utils.exposure_heatmap_logger import ExposureHeatmapJSONLWriter
 from basic_utils.failure_check.failure_check import check_failure, is_on_same_floor
 from basic_utils.object_point_cloud_utils.object_point_cloud import (
     get_object_point_cloud,
@@ -236,6 +237,9 @@ def main(cfg: DictConfig) -> None:
     # Create directories if they don't exist
     os.makedirs(os.path.dirname(llm_answer_path), exist_ok=True)
     os.makedirs(video_output_path, exist_ok=True)
+    exposure_event_writer = ExposureHeatmapJSONLWriter(
+        os.path.join(video_output_path, "exposure_events.jsonl")
+    )
 
     # Add top_down_map and collisions visualization
     with habitat.config.read_write(cfg):
@@ -310,6 +314,20 @@ def main(cfg: DictConfig) -> None:
     )
     progress_pub = rospy.Publisher("/habitat/progress", Int32MultiArray, queue_size=10)
     record_pub = rospy.Publisher("/habitat/record", Float32MultiArray, queue_size=10)
+
+    def exposure_event_callback(event):
+        exposure_event_writer.write(event)
+        rospy.loginfo(
+            "[ExposureHeatmap][JSONL] type=%s scene=%s episode=%s step=%d cluster=%d file=%s",
+            event.event_type,
+            event.scene_id,
+            event.episode_id,
+            event.step_index,
+            event.cluster_id,
+            exposure_event_writer.output_path,
+        )
+
+    rospy.Subscriber("/object/exposure_events", ExposureHeatmapEvent, exposure_event_callback, queue_size=50)
 
     for epi in range(number_of_episodes - num_total):
         # Publish progress information
@@ -477,6 +495,17 @@ def main(cfg: DictConfig) -> None:
             )
 
             # Publish detection-related information
+            cld_with_score_msg.header.stamp = rospy.Time.now()
+            cld_with_score_msg.header.frame_id = "world"
+            cld_with_score_msg.scene_id = env.current_episode.scene_id
+            cld_with_score_msg.episode_id = str(env.current_episode.episode_id)
+            cld_with_score_msg.step_index = count_steps
+            cld_with_score_msg.camera_position = Point(
+                -observations["gps"][2],
+                -observations["gps"][0],
+                cfg.habitat.simulator.agents.main_agent.sim_sensors.depth_sensor.position[1],
+            )
+            cld_with_score_msg.camera_yaw = observations["compass"][0].item()
             cld_with_score_msg.point_clouds = obj_point_cloud_list
             cld_with_score_msg.confidence_scores = score_list
             cld_with_score_msg.label_indices = label_list
