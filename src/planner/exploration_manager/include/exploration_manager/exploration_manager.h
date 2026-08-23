@@ -12,12 +12,15 @@
 #include <iostream>
 #include <memory>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
+#include <exploration_manager/dynamic_voronoi_allocator.h>
 #include <exploration_manager/exploration_data.h>
 
 // ROS core
 #include <ros/ros.h>
+#include <sensor_msgs/PointCloud2.h>
 
 // Plan environment
 #include <plan_env/frontier_map2d.h>
@@ -65,6 +68,8 @@ public:
 
   void initialize(ros::NodeHandle& nh);
   void resetEpisodeState();
+  void updateVoronoiAllocation(const vector<Vector2d>& agent_positions,
+      const vector<bool>& agent_active, bool frontier_changed);
 
   int planNextBestPoint(const Vector3d& pos, const double& yaw, int agent_idx,
       Eigen::Vector2d& out_next_pos, std::vector<Eigen::Vector2d>& out_next_best_path);
@@ -97,6 +102,17 @@ private:
       vector<Vector2d>& next_best_path, int agent_idx);
   void findTSPTourPolicy(Vector2d cur_pos, vector<Vector2d> frontiers, Vector2d& next_best_pos,
       vector<Vector2d>& next_best_path, int agent_idx);
+  void runVoronoiFrontierPolicy(Vector2d cur_pos, const vector<Vector2d>& frontiers,
+      Vector2d& next_best_pos, vector<Vector2d>& next_best_path, int agent_idx);
+  void chooseVoronoiFrontierPolicy(Vector2d cur_pos, const vector<Vector2d>& frontiers,
+      bool fallback_region, Vector2d& next_best_pos, vector<Vector2d>& next_best_path,
+      int agent_idx);
+  int getVoronoiOwner(const Vector2d& position) const;
+  VoronoiGrid buildVoronoiGrid(const vector<Vector2d>& active_frontiers) const;
+  bool projectFrontierCluster(const vector<Vector2d>& cluster, const Vector2d& average,
+      Vector2i& projected_index) const;
+  void publishVoronoiRegions(const VoronoiGrid& grid, const VoronoiResult& result);
+  size_t frontierSignature() const;
 
   // Path Search Utils
   bool searchObjectPath(const Vector3d& start,
@@ -117,8 +133,8 @@ private:
       std::vector<Eigen::Vector2d>& refined_path, const std::string& debug_msg);
 
   // TSP Optimization Methods
-  void computeATSPTour(
-      const Vector2d& cur_pos, const vector<Vector2d>& frontiers, vector<int>& indices);
+  void computeATSPTour(const Vector2d& cur_pos, const vector<Vector2d>& frontiers,
+      vector<int>& indices, int agent_idx);
   void computeATSPCostMatrix(
       const Vector2d& cur_pos, const vector<Vector2d>& frontiers, Eigen::MatrixXd& cost_matrix);
   double computePathCost(const Vector2d& pos1, const Vector2d& pos2);
@@ -130,8 +146,25 @@ private:
       const Vector2d& target_pos);
 
   ros::ServiceClient tsp_client_;         ///< ROS service client for TSP solver
+  ros::Publisher voronoi_region_pub_;
   unique_ptr<RayCaster2D> ray_caster2d_;  ///< Ray casting for collision checking
   pcl::shared_ptr<pcl::PointCloud<pcl::PointXYZ>> last_over_depth_object_cloud_;
+  unique_ptr<DynamicVoronoiAllocator> voronoi_allocator_;
+  VoronoiConfig voronoi_config_;
+  VoronoiGrid voronoi_grid_;
+  VoronoiResult voronoi_result_;
+  std::unordered_map<int, int> voronoi_frontier_owner_by_address_;
+  bool voronoi_enabled_ = true;
+  bool voronoi_soft_fallback_ = true;
+  bool voronoi_debug_ = false;
+  double voronoi_movement_trigger_ = 1.0;
+  double voronoi_min_repartition_period_ = 1.0;
+  double voronoi_visualization_resolution_ = 0.25;
+  double voronoi_frontier_region_radius_ = 3.0;
+  vector<Vector2d> last_voronoi_agent_positions_;
+  vector<bool> last_voronoi_agent_active_;
+  size_t last_voronoi_frontier_signature_ = 0;
+  ros::Time last_voronoi_update_;
 };
 
 inline bool ExplorationManager::searchFrontierPath(const Vector2d& start, const Vector2d& end,

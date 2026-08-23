@@ -120,6 +120,7 @@ private:
 
   /* Helper functions */
   bool updateFrontierAndObject();
+  void updateVoronoiAgentActivity(bool frontier_changed);
   void transitState(int agent_idx, ROS_STATE new_state, string pos_call);
   void wrapAngle(double& angle);
   void publishRobotMarker(int agent_idx);

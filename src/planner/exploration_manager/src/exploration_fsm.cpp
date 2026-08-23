@@ -170,6 +170,7 @@ void ExplorationFSM::FSMCallback(const ros::TimerEvent& e)
             transitState(agent_idx, ROS_STATE::PUB_ACTION, "FSM");
           else
             transitState(agent_idx, ROS_STATE::FINISH_FAILURE, "Planner Failure");
+          updateVoronoiAgentActivity(false);
         }
         visualize();
         break;
@@ -725,7 +726,23 @@ bool ExplorationFSM::updateFrontierAndObject()
   frt_map->getDormantFrontiers(ed->dormant_frontiers_, ed->dormant_frontier_averages_);
   obj_map->getObjects(ed->objects_, ed->object_averages_, ed->object_labels_);
 
+  updateVoronoiAgentActivity(change_flag);
+
   return change_flag;
+}
+
+void ExplorationFSM::updateVoronoiAgentActivity(bool frontier_changed)
+{
+  vector<Vector2d> agent_positions(NUM_AGENTS, Vector2d::Zero());
+  vector<bool> agent_active(NUM_AGENTS, false);
+  for (int i = 0; i < NUM_AGENTS; ++i) {
+    agent_positions[i] = Vector2d(fd_->agent_[i].odom_pos_(0), fd_->agent_[i].odom_pos_(1));
+    agent_active[i] = frontierAgentActive(fd_->agent_[i].have_odom_,
+        fd_->agent_[i].have_finished_,
+        fd_->agent_[i].final_result_ == FINAL_RESULT::SEARCH_OBJECT,
+        state_[i] == ROS_STATE::FINISH || state_[i] == ROS_STATE::FINISH_FAILURE);
+  }
+  expl_manager_->updateVoronoiAllocation(agent_positions, agent_active, frontier_changed);
 }
 
 // Lightweight episode reset — only resets FSM state and agent data.

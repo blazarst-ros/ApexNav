@@ -66,14 +66,19 @@ void FrontierMap2D::claimFrontier(int frontier_id, int agent_idx)
 
 void FrontierMap2D::claimFrontierByPosition(const Eigen::Vector2d& frontier_avg, int agent_idx)
 {
-  for (auto& ft : frontiers_) {
-    if ((ft.average_ - frontier_avg).norm() < 1e-2) {
-      ft.claimed_by_ = agent_idx;
-      ROS_WARN("Agent %d claimed frontier at (%.2f, %.2f)",
-          agent_idx, ft.average_(0), ft.average_(1));
-      return;
+  auto claim_in = [&](list<Frontier2D>& frontiers) {
+    for (auto& ft : frontiers) {
+      if ((ft.average_ - frontier_avg).norm() < 1e-2) {
+        ft.claimed_by_ = agent_idx;
+        ROS_WARN("Agent %d claimed frontier at (%.2f, %.2f)",
+            agent_idx, ft.average_(0), ft.average_(1));
+        return true;
+      }
     }
-  }
+    return false;
+  };
+  if (!claim_in(frontiers_))
+    claim_in(dormant_frontiers_);
 }
 
 void FrontierMap2D::releaseFrontierClaim(int frontier_id)
@@ -88,13 +93,17 @@ void FrontierMap2D::releaseFrontierClaim(int frontier_id)
 
 void FrontierMap2D::releaseClaimByAgent(int agent_idx)
 {
-  for (auto& ft : frontiers_) {
-    if (ft.claimed_by_ == agent_idx) {
-      ft.claimed_by_ = -1;
-      ROS_WARN("Agent %d released claim on frontier %d at (%.2f, %.2f)",
-          agent_idx, ft.id_, ft.average_(0), ft.average_(1));
+  auto release_in = [&](list<Frontier2D>& frontiers) {
+    for (auto& ft : frontiers) {
+      if (ft.claimed_by_ == agent_idx) {
+        ft.claimed_by_ = -1;
+        ROS_WARN("Agent %d released claim on frontier %d at (%.2f, %.2f)",
+            agent_idx, ft.id_, ft.average_(0), ft.average_(1));
+      }
     }
-  }
+  };
+  release_in(frontiers_);
+  release_in(dormant_frontiers_);
 }
 
 bool FrontierMap2D::isFrontierClaimed(int frontier_id) const
@@ -117,10 +126,17 @@ bool FrontierMap2D::isFrontierClaimedBy(int frontier_id, int agent_idx) const
 
 bool FrontierMap2D::isFrontierClaimedByPosition(const Eigen::Vector2d& frontier_avg, int agent_idx) const
 {
-  for (const auto& ft : frontiers_) {
-    if ((ft.average_ - frontier_avg).norm() < 1e-2)
-      return ft.claimed_by_ == agent_idx;
-  }
+  auto claimed_in = [&](const list<Frontier2D>& frontiers) {
+    for (const auto& ft : frontiers) {
+      if ((ft.average_ - frontier_avg).norm() < 1e-2)
+        return ft.claimed_by_ == agent_idx;
+    }
+    return false;
+  };
+  if (claimed_in(frontiers_))
+    return true;
+  if (claimed_in(dormant_frontiers_))
+    return true;
   return false;
 }
 

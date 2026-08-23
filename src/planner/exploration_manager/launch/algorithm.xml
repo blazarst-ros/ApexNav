@@ -72,6 +72,21 @@
         <param name="exploration/max_to_mean_percentage" value="0.90" type="double"/>
         <param name="exploration/tsp_dir" value="$(find lkh_mtsp_solver)/resource" type="string"/>
 
+        <param name="multi_agent/voronoi/enabled" value="true" type="bool"/>
+        <param name="multi_agent/voronoi/soft_fallback" value="true" type="bool"/>
+        <param name="multi_agent/voronoi/debug" value="true" type="bool"/>
+        <param name="multi_agent/voronoi/semantic_weight" value="1.0" type="double"/>
+        <param name="multi_agent/voronoi/distance_scale" value="10.0" type="double"/>
+        <param name="multi_agent/voronoi/distance_cap" value="20.0" type="double"/>
+        <param name="multi_agent/voronoi/max_bias" value="3.0" type="double"/>
+        <param name="multi_agent/voronoi/owner_hysteresis" value="0.3" type="double"/>
+        <param name="multi_agent/voronoi/balance_gain" value="1.0" type="double"/>
+        <param name="multi_agent/voronoi/max_balance_iterations" value="5" type="int"/>
+        <param name="multi_agent/voronoi/movement_trigger" value="1.0" type="double"/>
+  <param name="multi_agent/voronoi/min_repartition_period" value="1.0" type="double"/>
+  <param name="multi_agent/voronoi/visualization_resolution" value="0.25" type="double"/>
+  <param name="multi_agent/voronoi/frontier_region_radius" value="3.0" type="double"/>
+
         <param name="frontier/cluster_min" value="2" type="int"/>
         <param name="frontier/cluster_size_xy" value="0.65" type="double"/>
         <param name="frontier/min_view_finish_fraction" value="0.2" type="double"/>

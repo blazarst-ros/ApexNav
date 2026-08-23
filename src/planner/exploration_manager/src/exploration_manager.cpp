@@ -16,6 +16,10 @@
 #include <plan_env/map_ros.h>
 #include <path_searching/kino_astar.h>
 #include <trajectory_manager/optimizer.h>
+#include <pcl_conversions/pcl_conversions.h>
+#include <algorithm>
+#include <cstdio>
+#include <limits>
 
 using namespace Eigen;
 
@@ -49,6 +53,28 @@ void ExplorationManager::initialize(ros::NodeHandle& nh)
   nh.param("exploration/max_to_mean_percentage", ep_->max_to_mean_percentage_, 0.95);
   nh.param("exploration/tsp_dir", ep_->tsp_dir_, string("null"));  // TSP 求解器的文件路径
 
+  nh.param("multi_agent/voronoi/enabled", voronoi_enabled_, true);
+  nh.param("multi_agent/voronoi/soft_fallback", voronoi_soft_fallback_, true);
+  nh.param("multi_agent/voronoi/debug", voronoi_debug_, false);
+  nh.param("multi_agent/voronoi/semantic_weight", voronoi_config_.semantic_weight, 1.0);
+  nh.param("multi_agent/voronoi/distance_scale", voronoi_config_.distance_scale_m, 10.0);
+  nh.param("multi_agent/voronoi/distance_cap", voronoi_config_.distance_cap_m, 20.0);
+  nh.param("multi_agent/voronoi/max_bias", voronoi_config_.max_bias_m, 3.0);
+  nh.param("multi_agent/voronoi/owner_hysteresis", voronoi_config_.owner_hysteresis_m, 0.3);
+  nh.param("multi_agent/voronoi/balance_gain", voronoi_config_.balance_gain_m, 1.0);
+  nh.param("multi_agent/voronoi/max_balance_iterations",
+      voronoi_config_.max_balance_iterations, 5);
+  nh.param("multi_agent/voronoi/movement_trigger", voronoi_movement_trigger_, 1.0);
+  nh.param("multi_agent/voronoi/min_repartition_period",
+      voronoi_min_repartition_period_, 1.0);
+  nh.param("multi_agent/voronoi/visualization_resolution",
+      voronoi_visualization_resolution_, 0.25);
+  nh.param("multi_agent/voronoi/frontier_region_radius",
+      voronoi_frontier_region_radius_, 3.0);
+  voronoi_allocator_.reset(new DynamicVoronoiAllocator(voronoi_config_));
+  voronoi_region_pub_ =
+      nh.advertise<sensor_msgs::PointCloud2>("/multi_agent/voronoi_regions", 1, true);
+
   // Get map parameters for ray casting initialization（射线检测，进行碰撞校验）
   double resolution = sdf_map_->getResolution();
   Eigen::Vector2d origin, size;
@@ -75,6 +101,336 @@ void ExplorationManager::initialize(ros::NodeHandle& nh)
 void ExplorationManager::resetEpisodeState()
 {
   last_over_depth_object_cloud_.reset(new pcl::PointCloud<pcl::PointXYZ>);
+  if (voronoi_allocator_)
+    voronoi_allocator_->reset();
+  voronoi_grid_ = VoronoiGrid();
+  voronoi_result_ = VoronoiResult();
+  voronoi_frontier_owner_by_address_.clear();
+  last_voronoi_agent_positions_.clear();
+  last_voronoi_agent_active_.clear();
+  last_voronoi_frontier_signature_ = 0;
+  last_voronoi_update_ = ros::Time();
+}
+
+size_t ExplorationManager::frontierSignature() const
+{
+  size_t signature = ed_->frontier_averages_.size() * 1315423911u +
+                     ed_->dormant_frontier_averages_.size();
+  auto mix = [&](const Vector2d& frontier) {
+    Eigen::Vector2i idx;
+    sdf_map_->posToIndex(frontier, idx);
+    const size_t value = static_cast<size_t>(sdf_map_->toAddress(idx));
+    signature ^= value + 0x9e3779b9 + (signature << 6) + (signature >> 2);
+  };
+  for (const auto& frontier : ed_->frontier_averages_)
+    mix(frontier);
+  for (const auto& frontier : ed_->dormant_frontier_averages_)
+    mix(frontier);
+  return signature;
+}
+
+VoronoiGrid ExplorationManager::buildVoronoiGrid(
+    const vector<Vector2d>& active_frontiers) const
+{
+  VoronoiGrid grid;
+  Vector2d origin, size;
+  sdf_map_->getRegion(origin, size);
+  grid.resolution = sdf_map_->getResolution();
+  const int map_width = std::max(1, static_cast<int>(std::ceil(size.x() / grid.resolution)));
+  const int map_height = std::max(1, static_cast<int>(std::ceil(size.y() / grid.resolution)));
+  const bool use_frontier_region = !active_frontiers.empty();
+  const int region_radius_cells = std::max(
+      0, static_cast<int>(std::ceil(voronoi_frontier_region_radius_ / grid.resolution)));
+  int min_x = use_frontier_region ? map_width : 0;
+  int min_y = use_frontier_region ? map_height : 0;
+  int max_x = use_frontier_region ? -1 : map_width - 1;
+  int max_y = use_frontier_region ? -1 : map_height - 1;
+  if (use_frontier_region) {
+    for (const auto& frontier : active_frontiers) {
+      Vector2i frontier_index;
+      sdf_map_->posToIndex(frontier, frontier_index);
+      min_x = std::min(min_x, std::max(0, frontier_index.x() - region_radius_cells));
+      min_y = std::min(min_y, std::max(0, frontier_index.y() - region_radius_cells));
+      max_x = std::max(max_x, std::min(map_width - 1, frontier_index.x() + region_radius_cells));
+      max_y = std::max(max_y, std::min(map_height - 1, frontier_index.y() + region_radius_cells));
+    }
+  }
+  if (max_x < min_x || max_y < min_y) {
+    grid.width = 1;
+    grid.height = 1;
+    grid.traversable.assign(1, 0);
+    return grid;
+  }
+  grid.offset_x = min_x;
+  grid.offset_y = min_y;
+  grid.width = max_x - min_x + 1;
+  grid.height = max_y - min_y + 1;
+  grid.traversable.assign(grid.width * grid.height, 0);
+  for (int x = 0; x < grid.width; ++x) {
+    for (int y = 0; y < grid.height; ++y) {
+      const Vector2i idx(x + grid.offset_x, y + grid.offset_y);
+      if (sdf_map_->getOccupancy(idx) != SDFMap2D::FREE ||
+          sdf_map_->getInflateOccupancy(idx) == 1)
+        continue;
+      if (!use_frontier_region) {
+        grid.traversable[x * grid.height + y] = 1;
+        continue;
+      }
+      Vector2d position;
+      sdf_map_->indexToPos(idx, position);
+      for (const auto& frontier : active_frontiers) {
+        if ((position - frontier).squaredNorm() <=
+            voronoi_frontier_region_radius_ * voronoi_frontier_region_radius_) {
+          grid.traversable[x * grid.height + y] = 1;
+          break;
+        }
+      }
+    }
+  }
+  return grid;
+}
+
+bool ExplorationManager::projectFrontierCluster(const vector<Vector2d>& cluster,
+    const Vector2d& average, Vector2i& projected_index) const
+{
+  double best_squared_distance = std::numeric_limits<double>::infinity();
+  static const int offsets[8][2] = {
+      {-1, -1}, {-1, 0}, {-1, 1}, {0, -1}, {0, 1}, {1, -1}, {1, 0}, {1, 1}};
+  for (const auto& cell : cluster) {
+    Vector2i frontier_index;
+    sdf_map_->posToIndex(cell, frontier_index);
+    for (const auto& offset : offsets) {
+      const Vector2i candidate = frontier_index + Vector2i(offset[0], offset[1]);
+      if (!sdf_map_->isInMap(candidate) ||
+          sdf_map_->getOccupancy(candidate) != SDFMap2D::FREE ||
+          sdf_map_->getInflateOccupancy(candidate) == 1)
+        continue;
+      Vector2d position;
+      sdf_map_->indexToPos(candidate, position);
+      const double squared_distance = (position - average).squaredNorm();
+      if (squared_distance < best_squared_distance) {
+        best_squared_distance = squared_distance;
+        projected_index = candidate;
+      }
+    }
+  }
+  return std::isfinite(best_squared_distance);
+}
+
+void ExplorationManager::publishVoronoiRegions(
+    const VoronoiGrid& grid, const VoronoiResult& result)
+{
+  pcl::PointCloud<pcl::PointXYZRGB> cloud;
+  const int stride = std::max(
+      1, static_cast<int>(std::ceil(voronoi_visualization_resolution_ / grid.resolution)));
+  cloud.points.reserve(result.owner_by_cell.size() / (stride * stride) + 1);
+  for (int x = 0; x < grid.width; x += stride) {
+    for (int y = 0; y < grid.height; y += stride) {
+      const int adr = x * grid.height + y;
+      if (adr >= static_cast<int>(result.owner_by_cell.size()) || result.owner_by_cell[adr] < 0)
+        continue;
+      Vector2d position;
+      sdf_map_->indexToPos(
+          Vector2i(x + grid.offset_x, y + grid.offset_y), position);
+      pcl::PointXYZRGB point;
+      point.x = position.x();
+      point.y = position.y();
+      point.z = 0.05;
+      const VoronoiDisplayColor color = voronoiDisplayColor(result.owner_by_cell[adr]);
+      point.r = color.r;
+      point.g = color.g;
+      point.b = color.b;
+      cloud.points.push_back(point);
+    }
+  }
+  cloud.width = cloud.points.size();
+  cloud.height = 1;
+  cloud.is_dense = true;
+  sensor_msgs::PointCloud2 message;
+  pcl::toROSMsg(cloud, message);
+  message.header.frame_id = "world";
+  message.header.stamp = ros::Time::now();
+  voronoi_region_pub_.publish(message);
+}
+
+void ExplorationManager::updateVoronoiAllocation(const vector<Vector2d>& agent_positions,
+    const vector<bool>& agent_active, bool frontier_changed)
+{
+  if (!voronoi_enabled_ || !voronoi_allocator_ || agent_positions.size() != agent_active.size())
+    return;
+
+  const size_t signature = frontierSignature();
+  const bool active_changed = agent_active != last_voronoi_agent_active_;
+  bool moved = agent_positions.size() != last_voronoi_agent_positions_.size();
+  if (!moved) {
+    for (int i = 0; i < static_cast<int>(agent_positions.size()); ++i) {
+      if (agent_active[i] &&
+          (agent_positions[i] - last_voronoi_agent_positions_[i]).norm() >=
+              voronoi_movement_trigger_) {
+        moved = true;
+        break;
+      }
+    }
+  }
+  const bool no_previous = voronoi_result_.owner_by_cell.empty();
+  const bool frontier_set_changed = frontier_changed || signature != last_voronoi_frontier_signature_;
+  if (!no_previous && !active_changed && !moved && !frontier_set_changed)
+    return;
+
+  std::string update_reason;
+  const auto append_reason = [&](const std::string& reason) {
+    if (!update_reason.empty())
+      update_reason += "+";
+    update_reason += reason;
+  };
+  if (no_previous)
+    append_reason("initial");
+  if (active_changed)
+    append_reason("activity_changed");
+  if (moved)
+    append_reason("agent_moved");
+  if (frontier_set_changed)
+    append_reason("frontier_changed");
+
+  const ros::Time now = ros::Time::now();
+  if (!no_previous && !active_changed && !last_voronoi_update_.isZero() &&
+      (now - last_voronoi_update_).toSec() < voronoi_min_repartition_period_)
+    return;
+
+  const ros::WallTime begin = ros::WallTime::now();
+  VoronoiGrid grid = buildVoronoiGrid(ed_->frontier_averages_);
+  vector<VoronoiAgent> agents;
+  for (int i = 0; i < static_cast<int>(agent_positions.size()); ++i) {
+    Vector2i idx;
+    sdf_map_->posToIndex(agent_positions[i], idx);
+    agents.push_back(
+        {i, idx.x() - grid.offset_x, idx.y() - grid.offset_y, agent_active[i]});
+  }
+
+  vector<VoronoiFrontier> frontiers;
+  vector<int> frontier_addresses;
+  int frontier_id = 0;
+  auto append_frontiers =
+      [&](const vector<Vector2d>& positions, const vector<vector<Vector2d>>& clusters,
+          bool active) {
+    const int count = static_cast<int>(std::min(positions.size(), clusters.size()));
+    for (int i = 0; i < count; ++i) {
+      Vector2i projected_index;
+      if (!projectFrontierCluster(clusters[i], positions[i], projected_index))
+        continue;
+      Vector2i original_index;
+      sdf_map_->posToIndex(positions[i], original_index);
+      frontiers.push_back({frontier_id++, projected_index.x() - grid.offset_x,
+          projected_index.y() - grid.offset_y, getFrontierSemanticValue(positions[i]), active});
+      frontier_addresses.push_back(sdf_map_->toAddress(original_index));
+    }
+  };
+  append_frontiers(ed_->frontier_averages_, ed_->frontiers_, true);
+  append_frontiers(ed_->dormant_frontier_averages_, ed_->dormant_frontiers_, false);
+
+  VoronoiResult result = voronoi_allocator_->allocate(grid, agents, frontiers);
+  voronoi_frontier_owner_by_address_.clear();
+  for (int i = 0; i < static_cast<int>(frontiers.size()); ++i) {
+    voronoi_frontier_owner_by_address_[frontier_addresses[i]] = result.frontier_owner[i];
+  }
+  voronoi_grid_ = std::move(grid);
+  voronoi_result_ = std::move(result);
+  last_voronoi_agent_positions_ = agent_positions;
+  last_voronoi_agent_active_ = agent_active;
+  last_voronoi_frontier_signature_ = signature;
+  last_voronoi_update_ = now;
+  publishVoronoiRegions(voronoi_grid_, voronoi_result_);
+
+  vector<int> cell_counts(agent_positions.size(), 0);
+  vector<int> frontier_counts(agent_positions.size(), 0);
+  for (const int owner : voronoi_result_.owner_by_cell)
+    if (owner >= 0 && owner < static_cast<int>(cell_counts.size()))
+      ++cell_counts[owner];
+  for (const int owner : voronoi_result_.frontier_owner)
+    if (owner >= 0 && owner < static_cast<int>(frontier_counts.size()))
+      ++frontier_counts[owner];
+  const double elapsed_ms = (ros::WallTime::now() - begin).toSec() * 1000.0;
+  ROS_INFO("[DynamicVoronoi] elapsed_ms=%.2f cells=[%d,%d] frontiers=[%d,%d] "
+           "load=[%.2f,%.2f] bias=[%.2f,%.2f] reassigned_active_frontiers=%d",
+      elapsed_ms, cell_counts.size() > 0 ? cell_counts[0] : 0,
+      cell_counts.size() > 1 ? cell_counts[1] : 0,
+      frontier_counts.size() > 0 ? frontier_counts[0] : 0,
+      frontier_counts.size() > 1 ? frontier_counts[1] : 0,
+      voronoi_result_.loads.size() > 0 ? voronoi_result_.loads[0] : 0.0,
+      voronoi_result_.loads.size() > 1 ? voronoi_result_.loads[1] : 0.0,
+      voronoi_result_.biases.size() > 0 ? voronoi_result_.biases[0] : 0.0,
+      voronoi_result_.biases.size() > 1 ? voronoi_result_.biases[1] : 0.0,
+      voronoi_result_.enforced_frontier_reassignments);
+
+  const int traversable_cells =
+      static_cast<int>(std::count(voronoi_grid_.traversable.begin(),
+          voronoi_grid_.traversable.end(), static_cast<unsigned char>(1)));
+  if (voronoi_debug_) {
+    ROS_INFO("[DynamicVoronoi] reason=%s grid=%dx%d offset=(%d,%d) traversable=%d "
+             "active_frontiers=%zu dormant_frontiers=%zu radius=%.2f",
+        update_reason.c_str(), voronoi_grid_.width, voronoi_grid_.height,
+        voronoi_grid_.offset_x, voronoi_grid_.offset_y, traversable_cells,
+        ed_->frontier_averages_.size(), ed_->dormant_frontier_averages_.size(),
+        voronoi_frontier_region_radius_);
+    for (int i = 0; i < static_cast<int>(agents.size()); ++i) {
+      const int seed_address = i < static_cast<int>(voronoi_result_.seed_addresses.size())
+                                   ? voronoi_result_.seed_addresses[i]
+                                   : -1;
+      const int effective_x = seed_address < 0 ? -1 : seed_address / voronoi_grid_.height;
+      const int effective_y = seed_address < 0 ? -1 : seed_address % voronoi_grid_.height;
+      const bool seed_projected = i < static_cast<int>(voronoi_result_.seed_projected.size()) &&
+                                  voronoi_result_.seed_projected[i];
+      ROS_INFO("[DynamicVoronoi] agent=%d active=%d pos=(%.2f,%.2f) raw_cell=(%d,%d) "
+               "effective_cell=(%d,%d) projected=%d cells=%d frontiers=%d load=%.2f bias=%.2f",
+          agents[i].id, agents[i].active, agent_positions[i].x(), agent_positions[i].y(),
+          agents[i].x + voronoi_grid_.offset_x, agents[i].y + voronoi_grid_.offset_y,
+          effective_x < 0 ? -1 : effective_x + voronoi_grid_.offset_x,
+          effective_y < 0 ? -1 : effective_y + voronoi_grid_.offset_y, seed_projected,
+          i < static_cast<int>(cell_counts.size()) ? cell_counts[i] : 0,
+          i < static_cast<int>(frontier_counts.size()) ? frontier_counts[i] : 0,
+          i < static_cast<int>(voronoi_result_.loads.size()) ? voronoi_result_.loads[i] : 0.0,
+          i < static_cast<int>(voronoi_result_.biases.size()) ? voronoi_result_.biases[i] : 0.0);
+    }
+  }
+  if (traversable_cells == 0)
+    ROS_WARN("[DynamicVoronoi] active frontier region contains no traversable cells");
+  int active_agent_count = 0;
+  for (const auto& agent : agents)
+    if (agent.active)
+      ++active_agent_count;
+  if (active_agent_count >= 2) {
+    for (int i = 0; i < static_cast<int>(agents.size()); ++i) {
+      if (!agents[i].active)
+        continue;
+      if (i >= static_cast<int>(voronoi_result_.seed_addresses.size()) ||
+          voronoi_result_.seed_addresses[i] < 0)
+        ROS_WARN("[DynamicVoronoi] agent %d has no usable seed", agents[i].id);
+      else if (cell_counts[i] == 0)
+        ROS_WARN("[DynamicVoronoi] agent %d owns no active-region cells", agents[i].id);
+      else if (frontier_counts[i] == 0)
+        ROS_WARN("[DynamicVoronoi] agent %d owns no projected frontiers", agents[i].id);
+    }
+  }
+}
+
+int ExplorationManager::getVoronoiOwner(const Vector2d& position) const
+{
+  if (!voronoi_enabled_ || voronoi_result_.owner_by_cell.empty())
+    return -1;
+  Vector2i idx;
+  sdf_map_->posToIndex(position, idx);
+  if (sdf_map_->isInMap(idx)) {
+    const auto frontier_owner =
+        voronoi_frontier_owner_by_address_.find(sdf_map_->toAddress(idx));
+    if (frontier_owner != voronoi_frontier_owner_by_address_.end())
+      return frontier_owner->second;
+  }
+  const int local_x = idx.x() - voronoi_grid_.offset_x;
+  const int local_y = idx.y() - voronoi_grid_.offset_y;
+  if (local_x < 0 || local_x >= voronoi_grid_.width || local_y < 0 ||
+      local_y >= voronoi_grid_.height)
+    return -1;
+  return voronoi_result_.owner_by_cell[local_x * voronoi_grid_.height + local_y];
 }
 
 int ExplorationManager::planNextBestPoint(const Vector3d& pos, const double& yaw, int agent_idx,
@@ -129,7 +485,15 @@ int ExplorationManager::planNextBestPoint(const Vector3d& pos, const double& yaw
   // Apply selected exploration policy to choose next frontier
   Eigen::Vector2d next_best_pos;
   std::vector<Eigen::Vector2d> next_best_path;
-  chooseExplorationPolicy(pos2d, ed_->frontier_averages_, next_best_pos, next_best_path, agent_idx);
+  const bool use_voronoi = voronoi_enabled_ && !voronoi_result_.owner_by_cell.empty();
+  if (use_voronoi) {
+    chooseVoronoiFrontierPolicy(pos2d, ed_->frontier_averages_, false,
+        next_best_pos, next_best_path, agent_idx);
+  }
+  else {
+    chooseExplorationPolicy(
+        pos2d, ed_->frontier_averages_, next_best_pos, next_best_path, agent_idx);
+  }
 
   // Handle case when no passable frontiers are found
   if (next_best_path.empty()) {
@@ -142,10 +506,28 @@ int ExplorationManager::planNextBestPoint(const Vector3d& pos, const double& yaw
           out_next_best_path, out_next_pos);
       return SEARCH_SUSPICIOUS_OBJECT;
     }
-    else
-      // Try dormant frontiers as last resort
+    if (use_voronoi) {
+      // Exhaust this agent's own active and dormant region before borrowing another region.
+      chooseVoronoiFrontierPolicy(pos2d, ed_->dormant_frontier_averages_, false,
+          next_best_pos, next_best_path, agent_idx);
+      if (next_best_path.empty() && voronoi_soft_fallback_) {
+        chooseVoronoiFrontierPolicy(pos2d, ed_->frontier_averages_, true,
+            next_best_pos, next_best_path, agent_idx);
+        if (next_best_path.empty()) {
+          chooseVoronoiFrontierPolicy(pos2d, ed_->dormant_frontier_averages_, true,
+              next_best_pos, next_best_path, agent_idx);
+        }
+        if (!next_best_path.empty()) {
+          ROS_WARN("[DynamicVoronoi] Agent %d temporarily leased a frontier outside its region",
+              agent_idx);
+        }
+      }
+    }
+    else {
+      // Try dormant frontiers as last resort.
       chooseExplorationPolicy(
           pos2d, ed_->dormant_frontier_averages_, next_best_pos, next_best_path, agent_idx);
+    }
 
     // Extreme search mode when all normal options fail
     if (next_best_path.empty()) {
@@ -308,6 +690,56 @@ void ExplorationManager::hybridExplorePolicy(Vector2d cur_pos, vector<Vector2d> 
   }
 }
 
+void ExplorationManager::chooseVoronoiFrontierPolicy(Vector2d cur_pos,
+    const vector<Vector2d>& frontiers, bool fallback_region, Vector2d& next_best_pos,
+    vector<Vector2d>& next_best_path, int agent_idx)
+{
+  vector<int> voronoi_owners;
+  vector<int> claimed_by;
+  voronoi_owners.reserve(frontiers.size());
+  claimed_by.reserve(frontiers.size());
+  for (const auto& frontier : frontiers) {
+    voronoi_owners.push_back(getVoronoiOwner(frontier));
+    int claim_owner = -1;
+    for (int candidate_agent = 0; candidate_agent < NUM_AGENTS; ++candidate_agent) {
+      if (frontier_map2d_->isFrontierClaimedByPosition(frontier, candidate_agent)) {
+        claim_owner = candidate_agent;
+        break;
+      }
+    }
+    claimed_by.push_back(claim_owner);
+  }
+
+  const FrontierPartition partition =
+      partitionFrontierCandidates(voronoi_owners, claimed_by, agent_idx);
+  const vector<int>& selected_indices =
+      fallback_region ? partition.fallback_indices : partition.owned_indices;
+  vector<Vector2d> selected_frontiers;
+  selected_frontiers.reserve(selected_indices.size());
+  for (const int index : selected_indices)
+    selected_frontiers.push_back(frontiers[index]);
+  runVoronoiFrontierPolicy(
+      cur_pos, selected_frontiers, next_best_pos, next_best_path, agent_idx);
+}
+
+void ExplorationManager::runVoronoiFrontierPolicy(Vector2d cur_pos,
+    const vector<Vector2d>& frontiers, Vector2d& next_best_pos,
+    vector<Vector2d>& next_best_path, int agent_idx)
+{
+  next_best_path.clear();
+  if (frontiers.empty())
+    return;
+  if (frontiers.size() == 1) {
+    if (searchFrontierPath(cur_pos, frontiers.front(), next_best_pos, next_best_path)) {
+      setStrategyInfo(agent_idx, "VORONOI_FRONTIER", "FRONTIER",
+          findFrontierIdByPosition(next_best_pos), getFrontierSemanticValue(next_best_pos),
+          next_best_path, next_best_pos);
+    }
+    return;
+  }
+  findTSPTourPolicy(cur_pos, frontiers, next_best_pos, next_best_path, agent_idx);
+}
+
 void ExplorationManager::findHighestSemanticsFrontierPolicy(Vector2d cur_pos,
     vector<Vector2d> frontiers, Vector2d& next_best_pos, vector<Vector2d>& next_best_path, int agent_idx)
 {
@@ -418,7 +850,7 @@ void ExplorationManager::findTSPTourPolicy(Vector2d cur_pos, vector<Vector2d> fr
   }
 
   vector<int> indices;
-  computeATSPTour(cur_pos, filter_frontiers, indices);
+  computeATSPTour(cur_pos, filter_frontiers, indices, agent_idx);
   ed_->tsp_tour_.push_back(cur_pos);
   for (auto idx : indices) ed_->tsp_tour_.push_back(filter_frontiers[idx]);
 
@@ -432,6 +864,12 @@ void ExplorationManager::findTSPTourPolicy(Vector2d cur_pos, vector<Vector2d> fr
         break;
       }
     }
+  }
+  if (next_best_path.empty() && !filter_frontiers.empty()) {
+    ROS_WARN("Agent %d: ATSP unavailable; keeping Voronoi ownership and using closest reachable frontier",
+        agent_idx);
+    findClosestFrontierPolicy(
+        cur_pos, filter_frontiers, next_best_pos, next_best_path, agent_idx);
   }
 }
 
@@ -522,8 +960,8 @@ void ExplorationManager::computeATSPCostMatrix(
   }
 }
 
-void ExplorationManager::computeATSPTour(
-    const Vector2d& cur_pos, const vector<Vector2d>& frontiers, vector<int>& indices)
+void ExplorationManager::computeATSPTour(const Vector2d& cur_pos,
+    const vector<Vector2d>& frontiers, vector<int>& indices, int agent_idx)
 {
   indices.clear();
   if (frontiers.empty()) {
@@ -547,7 +985,15 @@ void ExplorationManager::computeATSPTour(
 
   // Initialize ATSP par file
   // Create problem file
-  ofstream file(ep_->tsp_dir_ + "/atsp_tour.atsp");
+  const string file_stem = agentAtspStem(agent_idx);
+  const string problem_file = ep_->tsp_dir_ + "/" + file_stem + ".atsp";
+  const string parameter_file = ep_->tsp_dir_ + "/" + file_stem + ".par";
+  const string tour_file = ep_->tsp_dir_ + "/" + file_stem + ".tour";
+  ofstream file(problem_file);
+  if (!file.is_open()) {
+    ROS_ERROR("Failed to create ATSP problem file: %s", problem_file.c_str());
+    return;
+  }
   file << "NAME : amtsp\n";
   file << "TYPE : ATSP\n";
   file << "DIMENSION : " + to_string(dimension) + "\n";
@@ -565,27 +1011,32 @@ void ExplorationManager::computeATSPTour(
 
   // Create par file
   const int drone_num = 1;
-  file.open(ep_->tsp_dir_ + "/atsp_tour.par");
+  file.open(parameter_file);
+  if (!file.is_open()) {
+    ROS_ERROR("Failed to create ATSP parameter file: %s", parameter_file.c_str());
+    return;
+  }
   file << "SPECIAL\n";
-  file << "PROBLEM_FILE = " + ep_->tsp_dir_ + "/atsp_tour.atsp\n";
+  file << "PROBLEM_FILE = " + problem_file + "\n";
   file << "SALESMEN = " << to_string(drone_num) << "\n";
   file << "MTSP_OBJECTIVE = MINSUM\n";
   file << "RUNS = 1\n";
   file << "TRACE_LEVEL = 0\n";
-  file << "TOUR_FILE = " + ep_->tsp_dir_ + "/atsp_tour.tour\n";
+  file << "TOUR_FILE = " + tour_file + "\n";
   file.close();
 
-  auto par_dir = ep_->tsp_dir_ + "/atsp_tour.atsp";
+  // Never accept a stale tour when the solver fails to produce a fresh result.
+  std::remove(tour_file.c_str());
 
   lkh_mtsp_solver::SolveMTSP srv;
-  srv.request.prob = 1;
+  srv.request.prob = atspProblemCode(agent_idx);
   if (!tsp_client_.call(srv)) {
     ROS_ERROR("Fail to solve ATSP.");
     return;
   }
 
   // Read optimal tour from the tour section of result file
-  ifstream res_file(ep_->tsp_dir_ + "/atsp_tour.tour");
+  ifstream res_file(tour_file);
   if (!res_file.is_open()) {
     ROS_ERROR("Failed to open ATSP tour result.");
     return;
